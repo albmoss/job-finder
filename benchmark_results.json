@@ -1,0 +1,52 @@
+{
+  "gemini-3.6-flash": {
+    "spearman": 0.7900783719637244,
+    "mae": 1.390566037735849,
+    "returned": 53,
+    "expected": 53,
+    "completeness": 1.0,
+    "elapsed": 46.6245276927948,
+    "in_tokens": 17571,
+    "out_tokens": 5502
+  },
+  "gemini-3.5-flash": {
+    "spearman": 0.7535569099070774,
+    "mae": 1.2207547169811321,
+    "returned": 53,
+    "expected": 53,
+    "completeness": 1.0,
+    "elapsed": 59.07471299171448,
+    "in_tokens": 17571,
+    "out_tokens": 4619
+  },
+  "gemini-3.5-flash-lite": {
+    "spearman": 0.8046978539248947,
+    "mae": 1.028301886792453,
+    "returned": 53,
+    "expected": 53,
+    "completeness": 1.0,
+    "elapsed": 14.592978954315186,
+    "in_tokens": 17571,
+    "out_tokens": 5869
+  },
+  "gemini-3.1-flash-lite": {
+    "spearman": 0.8280337356422253,
+    "mae": 0.9433962264150944,
+    "returned": 53,
+    "expected": 53,
+    "completeness": 1.0,
+    "elapsed": 12.004991292953491,
+    "in_tokens": 17571,
+    "out_tokens": 4307
+  },
+  "gemini-2.5-flash": {
+    "spearman": 0.6641022411083676,
+    "mae": 1.49811320754717,
+    "returned": 53,
+    "expected": 53,
+    "completeness": 1.0,
+    "elapsed": 100.01274847984314,
+    "in_tokens": 17571,
+    "out_tokens": 6590
+  }
+}
