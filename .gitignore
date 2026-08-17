@@ -1,0 +1,61 @@
+# Sekrety - NIGDY do repo
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Logi
+*.log
+
+# Duże pliki generowane (odtwarzalne przez scrapery)
+jobs_database.json
+analyzed_jobs_waterfall.json
+ranked_jobs.json
+jobs_database.json.tmp
+analyzed_jobs_waterfall.json.tmp
+
+# Stan runtime scraperów
+scraper_status.json
+waterfall_state.json
+olx_category_state.json
+
+# DANE OSOBOWE - nigdy do publicznego repo.
+# CV zawiera imię, nazwisko, telefon i adres; pliki ocen pokazują, które
+# konkretnie oferty odrzuciłeś i u jakich pracodawców. Po commicie zostają
+# w historii nawet po usunięciu pliku - dlatego blokada jest tutaj, a nie
+# "pamiętam, żeby ich nie dodawać".
+cv.pdf
+final_cv_text.txt
+user_decisions.json
+rated_archive.json
+preference_profile.json
+user_config.json
+
+# Backupy i katalogi robocze
+backups/
+.streamlit/
+temp_cv/
+cv-am/
+_archive/
+
+# Skrypty jednorazowe z rozgryzania API portali (sniff_*, test_jjit_*, parse_*).
+# Zostają na dysku, bo dokumentują jak rozpracowałem candidate-api - ale w repo
+# byłyby tylko szumem obok właściwego kodu.
+scratch/
+
+# Odhaczona lista zadań z przebudowy UI - notatka robocza, nie dokumentacja.
+streamlit_refinement_checklist.md
+
+# Zrzuty ekranu / artefakty debugowania
+*.png
+
+# UWAGA - zmiana decyzji (17.08.2026):
+# user_decisions.json, preference_profile.json i user_config.json były wcześniej
+# celowo wersjonowane, bo to dane nie do odtworzenia (setki ręcznych ocen).
+# Zostały jednak przeniesione do sekcji "DANE OSOBOWE" powyżej: przy publicznym
+# repo pokazywałyby, u jakich pracodawców i które oferty odrzuciłeś.
+#
+# Nie znaczy to "nie rób im kopii" - znaczy "nie rób jej przez GitHuba".
+# Kopiuj je do backups/ (też ignorowane) albo na dysk zewnętrzny.
+# Gdyby repo miało kiedyś być PRYWATNE, można je stąd zdjąć świadomie.
