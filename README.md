@@ -67,13 +67,12 @@ API keys are read only from `.env`, which never enters the repository. Personal 
 
 Python · Playwright · Gemini API · Streamlit · BeautifulSoup
 
-## A note on how this was built
+## What is mine in this project
 
-I built this with AI tooling (Claude Code). What came from me: the problem, the
-pipeline architecture, the choice of sources, the order of stages, the method for
-evaluating ranking quality, and every decision listed above. I state this openly
-because directing a project like this with AI is part of the craft, not something
-to hide.
+The problem, the architecture of the pipeline, the choice of sources, the order of
+the stages and the method for evaluating ranking quality are my own design. The last
+one was the hardest call to make: it would have been far easier to print confident
+percentages and never check whether they mean anything.
 
 ---
 ---
@@ -147,9 +146,8 @@ Dane osobowe (moje CV, historia moich ocen) też są poza repo — patrz `.gitig
 
 Python · Playwright · Gemini API · Streamlit · BeautifulSoup
 
-## Uwaga o powstaniu projektu
+## Co w tym projekcie jest moje
 
-Projekt budowałem z pomocą narzędzi AI (Claude Code). Ode mnie pochodzą: problem,
-architektura pipeline'u, dobór źródeł, kolejność etapów, sposób oceny jakości
-rankingu i wszystkie decyzje wymienione wyżej. Piszę o tym wprost, bo umiejętność
-prowadzenia takiego projektu z AI uważam za część warsztatu, a nie coś do ukrycia.
+Problem, architektura pipeline'u, dobór źródeł, kolejność etapów i sposób oceny
+jakości rankingu to moje decyzje. Ta ostatnia była najtrudniejsza: dużo łatwiej
+byłoby wypisywać pewne siebie procenty i nigdy nie sprawdzić, czy cokolwiek znaczą.
