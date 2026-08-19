@@ -46,7 +46,7 @@ def main():
     analyzed = load_json_safe(ANALYZED_DB, default=[])
 
     if not analyzed:
-        print("Brak wyników analizy - nic do zrobienia.")
+        print("No analysis results - nothing to do.")
         return 0
 
     current = {canonical_link(j.get("link", "")): (j.get("description") or "") for j in jobs}
@@ -78,32 +78,32 @@ def main():
             keep.append(entry)
 
     print("=" * 64)
-    print(f"Wpisów w analizie:        {len(analyzed)}")
-    print(f"Do unieważnienia:         {len(drop)}")
-    print(f"Zostaje:                  {len(keep)}")
+    print(f"Entries in analysis:      {len(analyzed)}")
+    print(f"To invalidate:            {len(drop)}")
+    print(f"Remaining:                {len(keep)}")
 
     if drop:
         by_source = {}
         for entry, _, _ in drop:
             src = (entry.get("job") or {}).get("source", "?")
             by_source[src] = by_source.get(src, 0) + 1
-        print("\nWedług źródła:")
+        print("\nBy source:")
         for src, n in sorted(by_source.items(), key=lambda x: -x[1]):
             print(f"   {src:<32} {n:>5}")
 
-        print("\nPrzykłady (opis przed -> po):")
+        print("\nExamples (description before -> after):")
         for entry, old_len, new_len in drop[:5]:
             job = entry.get("job") or {}
             print(f"   [{entry.get('match_percentage')}%] {job.get('title', '?')[:44]:<44} "
                   f"{old_len:>5} -> {new_len:<6} zn.")
 
     if args.dry_run:
-        print("\n(dry-run - nic nie zapisano)")
+        print("\n(dry run - nothing was written)")
     elif drop:
         save_json_atomic(ANALYZED_DB, keep, backup=True)
-        print(f"\n✅ Zapisano. Uruchom waterfall_analysis.py, żeby przeliczyć {len(drop)} ofert.")
+        print(f"\nSaved. Run waterfall_analysis.py to rescore {len(drop)} offers.")
     else:
-        print("\nNic do unieważnienia.")
+        print("\nNothing to invalidate.")
 
     print("=" * 64)
     return 0

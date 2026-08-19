@@ -129,7 +129,7 @@ def main():
     scores = load_scores()
 
     if not ratings:
-        print("Brak ręcznych ocen - nie ma czego ewaluować.")
+        print("No manual ratings - nothing to evaluate.")
         return 1
 
     # Wspólny zbiór: oferty ocenione ręcznie ORAZ mające wynik z AI
@@ -138,26 +138,26 @@ def main():
     print("=" * 64)
     print("  EWALUACJA RANKINGU AI")
     print("=" * 64)
-    print(f"Ocen ręcznych w bazie:              {len(ratings)}")
-    print(f"Z nich mających wynik AI:           {len(common)}")
-    print(f"Ocenionych, ale nieprzeanalizowanych: {len(ratings) - len(common)}")
+    print(f"Manual ratings in database:         {len(ratings)}")
+    print(f"Of those, with an AI score:         {len(common)}")
+    print(f"Rated but not analysed:             {len(ratings) - len(common)}")
 
     if len(common) < 10:
-        print("\nZa mało wspólnych rekordów na sensowne metryki.")
+        print("\nNot enough common records for meaningful metrics.")
         return 1
 
     dist = {}
     for _, r in common:
         dist[r] = dist.get(r, 0) + 1
-    print("\nRozkład ocen ręcznych:")
+    print("\nDistribution of manual ratings:")
     for r in sorted(dist, reverse=True):
         print(f"   {r:>2}/10 : {dist[r]:>4}  {'▪' * min(dist[r], 40)}")
 
     positives = sum(1 for _, r in common if r >= args.threshold)
     baseline = positives / len(common)
 
-    print(f"\nTrafienia (ocena >= {args.threshold}): {positives}/{len(common)} = {baseline:.1%}")
-    print(f"To jest BASELINE - tyle trafień dałby losowy wybór.\n")
+    print(f"\nHits (rating >= {args.threshold}): {positives}/{len(common)} = {baseline:.1%}")
+    print(f"This is the BASELINE - the hit rate of a random pick.\n")
 
     # Ranking wg wyniku AI, malejąco
     ranked = sorted(common, key=lambda x: -x[0])
@@ -173,17 +173,17 @@ def main():
         label = f"{k:>5}" if k != len(ranked) else f"{k:>5}*"
         print(f"{label} | {p:>10.1%} | {hits:>4.1f}/{tot:<5} | {lift:>5.2f}x  {bar(p)}")
     print("-" * 64)
-    print("* = cały zbiór (z definicji równy baseline)")
+    print("* = whole set (equal to baseline by definition)")
 
     rho = spearman(common)
     if rho is not None:
         strength = ("brak", "słaba", "umiarkowana", "silna")[
             min(3, int(abs(rho) / 0.25))
         ]
-        print(f"\nKorelacja Spearmana (wynik AI vs ocena): {rho:+.3f}  ({strength})")
+        print(f"\nSpearman correlation (AI score vs rating): {rho:+.3f}  ({strength})")
 
     # Średnia ocena w przedziałach wyniku AI - pokazuje czy skala jest monotoniczna
-    print("\nŚrednia Twoja ocena wg przedziału match_percentage:")
+    print("\nMean manual rating per match_percentage bucket:")
     buckets = {}
     for s, r in common:
         b = min(int(s // 20) * 20, 80)
@@ -192,13 +192,13 @@ def main():
         vals = buckets[b]
         avg = sum(vals) / len(vals)
         hi = sum(1 for v in vals if v >= args.threshold)
-        print(f"   {b:>3}-{b+19:<3}% : średnia {avg:>4.1f}/10  (n={len(vals):>3}, trafień {hi:>2})  {bar(avg / 10, 20)}")
+        print(f"   {b:>3}-{b+19:<3}% : mean {avg:>4.1f}/10  (n={len(vals):>3}, hits {hi:>2})  {bar(avg / 10, 20)}")
 
     print("\n" + "=" * 64)
-    print("JAK CZYTAĆ:")
-    print("  precision@25 znacząco wyższe niż baseline = ranking działa.")
-    print("  Wynik ~= baseline = model nie odróżnia dobrych ofert od złych.")
-    print("  Korelacja < 0.2 = match_percentage jest w praktyce losowy.")
+    print("HOW TO READ:")
+    print("  precision@25 clearly above baseline = the ranking works.")
+    print("  Result ~= baseline = the model cannot tell good offers from bad.")
+    print("  Correlation < 0.2 = match_percentage is effectively random.")
     print("=" * 64)
     return 0
 

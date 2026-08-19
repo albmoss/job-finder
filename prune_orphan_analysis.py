@@ -39,7 +39,7 @@ def main():
     decisions = load_json_safe(DECISIONS, default={})
 
     if not analyzed:
-        print("Brak wyników analizy - nic do zrobienia.")
+        print("No analysis results - nothing to do.")
         return 0
 
     db_links = {canonical_link(j.get("link", "")) for j in jobs}
@@ -54,26 +54,26 @@ def main():
             orphans.append(entry)
 
     print("=" * 60)
-    print(f"Wyników analizy:        {len(analyzed)}")
-    print(f"Ofert w bazie:          {len(jobs)}")
-    print(f"Widmo (do usunięcia):   {len(orphans)}")
-    print(f"Zostaje:                {len(kept)}")
+    print(f"Analysis results:       {len(analyzed)}")
+    print(f"Offers in database:     {len(jobs)}")
+    print(f"Orphans (to remove):    {len(orphans)}")
+    print(f"Remaining:              {len(kept)}")
 
     if orphans:
         by_source = collections.Counter(
             (o.get("job") or {}).get("source", "?") for o in orphans
         )
-        print("\nWedług źródła:")
+        print("\nBy source:")
         for src, n in by_source.most_common():
             print(f"   {src:<32} {n:>5}")
 
     if args.dry_run:
-        print("\n(dry-run - nic nie zapisano)")
+        print("\n(dry run - nothing was written)")
     elif orphans:
         save_json_atomic(ANALYZED_DB, kept, backup=True)
-        print(f"\n✅ Usunięto {len(orphans)} ofert widmo.")
+        print(f"\nRemoved {len(orphans)} orphaned entries.")
     else:
-        print("\nBaza i wyniki analizy są spójne.")
+        print("\nDatabase and analysis results are consistent.")
 
     print("=" * 60)
     return 0

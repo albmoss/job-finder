@@ -112,7 +112,7 @@ class SolidJobsAPIScraper:
 
             all_offers.extend(offers)
             logger.info(
-                f"SOLID.Jobs [{division}]: strona {page} - {len(offers)} ofert "
+                f"SOLID.Jobs [{division}]: page {page} - {len(offers)} offers "
                 f"({len(all_offers)}/{total_count})"
             )
 
@@ -258,7 +258,7 @@ class SolidJobsAPIScraper:
             time.sleep(0.3)  # Be polite even with 300/min limit
 
         logger.info(
-            f"SOLID.Jobs: pobrano {fetched} ofert, odrzucono {skipped} "
-            f"(poziom/lokalizacja) -> {len(all_jobs)} unikalnych"
+            f"SOLID.Jobs: fetched {fetched} offers, dropped {skipped} "
+            f"(level/location) -> {len(all_jobs)} unique"
         )
         return all_jobs

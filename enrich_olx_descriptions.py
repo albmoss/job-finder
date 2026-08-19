@@ -52,10 +52,10 @@ def main():
 
     jobs = load_json_safe(JOBS_DATABASE_PATH, default=[])
     if not jobs:
-        logger.error("Baza pusta lub nieczytelna - przerywam.")
+        logger.error("Database empty or unreadable - aborting.")
         return 1
 
-    logger.info(f"Wczytano {len(jobs)} ofert z bazy.")
+    logger.info(f"Loaded {len(jobs)} offers from the database.")
 
     # Normalizacja linków + deduplikacja (ta sama oferta pod różnymi query stringami)
     seen = {}
@@ -75,7 +75,7 @@ def main():
 
     removed_dupes = len(jobs) - len(deduped)
     if removed_dupes:
-        logger.info(f"Usunięto {removed_dupes} duplikatów po normalizacji linków.")
+        logger.info(f"Removed {removed_dupes} duplicates after link normalisation.")
     jobs = deduped
 
     targets = [j for j in jobs if needs_enrichment(j)]
@@ -83,11 +83,11 @@ def main():
         targets = targets[: args.limit]
 
     if not targets:
-        logger.info("Nic do uzupełnienia.")
+        logger.info("Nothing to enrich.")
         save_json_atomic(JOBS_DATABASE_PATH, jobs, backup=True)
         return 0
 
-    logger.info(f"Do uzupełnienia: {len(targets)} ofert OLX.")
+    logger.info(f"To enrich: {len(targets)} OLX offers.")
 
     session = requests.Session()
     stats = {"ok": 0, "expired": 0, "error": 0}
@@ -114,8 +114,8 @@ def main():
         done[0] += 1
         if done[0] % SAVE_EVERY == 0:
             logger.info(
-                f"Postęp: {done[0]}/{len(targets)} | ok={stats['ok']} "
-                f"wygasłe={stats['expired']} błędy={stats['error']}"
+                f"Progress: {done[0]}/{len(targets)} | ok={stats['ok']} "
+                f"expired={stats['expired']} errors={stats['error']}"
             )
             save_json_atomic(JOBS_DATABASE_PATH, jobs, backup=False)
         return None
@@ -124,20 +124,20 @@ def main():
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             list(ex.map(work, targets))
     except KeyboardInterrupt:
-        logger.warning("Przerwano - zapisuję dotychczasowy postęp...")
+        logger.warning("Interrupted - saving progress so far...")
     finally:
         session.close()
 
     if expired_links and not args.keep_expired:
         before = len(jobs)
         jobs = [j for j in jobs if j.get("link") not in expired_links]
-        logger.info(f"Usunięto {before - len(jobs)} wygasłych ofert z bazy.")
+        logger.info(f"Removed {before - len(jobs)} expired offers from the database.")
 
     save_json_atomic(JOBS_DATABASE_PATH, jobs, backup=True)
 
     logger.info("=" * 60)
-    logger.info(f"GOTOWE. Uzupełnione: {stats['ok']} | Wygasłe: {stats['expired']} | Błędy: {stats['error']}")
-    logger.info(f"Baza liczy teraz {len(jobs)} ofert.")
+    logger.info(f"DONE. Enriched: {stats['ok']} | Expired: {stats['expired']} | Errors: {stats['error']}")
+    logger.info(f"The database now holds {len(jobs)} offers.")
     logger.info("=" * 60)
     return 0
 

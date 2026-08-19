@@ -71,7 +71,7 @@ def _extract_state(html: str) -> dict:
         # Podwójne kodowanie: JSON string, w środku JSON
         return json.loads(json.loads(m.group(1)))
     except Exception as e:
-        logger.debug(f"OLX: nie udało się sparsować PRERENDERED_STATE: {e}")
+        logger.debug(f"OLX: could not parse PRERENDERED_STATE: {e}")
         return {}
 
 

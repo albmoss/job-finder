@@ -24,11 +24,11 @@ def reduce_file(filepath, is_analyzed=False):
         logger.warning(f"File not found: {path}")
         return
 
-    logger.info(f"✂️ Implementing Token Diet for {path}...")
+    logger.info(f"Implementing Token Diet for {path}...")
 
     data = load_json_safe(path, default=[])
     if not data:
-        logger.info(f"{path.name} jest pusty - pomijam.")
+        logger.info(f"{path.name} is empty - skipping.")
         return
 
     initial_chars = 0
@@ -59,13 +59,13 @@ def reduce_file(filepath, is_analyzed=False):
     if initial_chars > 0:
         reduction = ((initial_chars - final_chars) / initial_chars) * 100
         
-    logger.info(f"✅ Diet Complete for {path.name}")
+    logger.info(f"Diet Complete for {path.name}")
     logger.info(f"   Before: {initial_chars:,} chars")
     logger.info(f"   After:  {final_chars:,} chars")
     logger.info(f"   Reduction: {reduction:.1f}%")
 
 def run():
-    logger.info("Starting Token Diet Procedure... 📉")
+    logger.info("Starting Token Diet Procedure...")
     
     # 1. Clean Analyzed Jobs
     reduce_file("analyzed_jobs_waterfall.json", is_analyzed=True)

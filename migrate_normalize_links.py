@@ -44,7 +44,7 @@ def decision_richness(val) -> int:
 def migrate_jobs():
     jobs = load_json_safe(JOBS_DB, default=[])
     if not jobs:
-        print(f"  {JOBS_DB}: pusty, pomijam")
+        print(f"  {JOBS_DB}: empty, skipping")
         return
 
     by_link = {}
@@ -63,7 +63,7 @@ def migrate_jobs():
 def migrate_analyzed():
     data = load_json_safe(ANALYZED_DB, default=[])
     if not data:
-        print(f"  {ANALYZED_DB}: pusty, pomijam")
+        print(f"  {ANALYZED_DB}: empty, skipping")
         return
 
     by_link = {}
@@ -84,7 +84,7 @@ def migrate_analyzed():
 def migrate_decisions():
     decisions = load_json_safe(DECISIONS, default={})
     if not decisions:
-        print(f"  {DECISIONS}: pusty, pomijam")
+        print(f"  {DECISIONS}: empty, skipping")
         return
 
     merged = {}
@@ -102,10 +102,10 @@ def migrate_decisions():
     rated_after = sum(1 for v in merged.values() if isinstance(v, dict) and v.get("rating") is not None)
 
     print(f"  {DECISIONS}: {len(decisions)} -> {len(merged)} (kolizje: {collisions})")
-    print(f"     ręczne oceny zachowane: {rated_before} -> {rated_after}")
+    print(f"     manual ratings preserved: {rated_before} -> {rated_after}")
 
     if rated_after < rated_before:
-        print("     ⚠️  UWAGA: ubyło ręcznych ocen - przerywam zapis dla bezpieczeństwa!")
+        print("     WARNING: manual ratings were lost - aborting the write for safety!")
         return
 
     save_json_atomic(DECISIONS, merged, backup=True)
@@ -113,13 +113,13 @@ def migrate_decisions():
 
 def main():
     print("=" * 60)
-    print("MIGRACJA: normalizacja linków")
+    print("MIGRATION: link normalisation")
     print("=" * 60)
     migrate_jobs()
     migrate_analyzed()
     migrate_decisions()
     print("=" * 60)
-    print("Gotowe. Backupy poprzednich wersji leżą w backups/")
+    print("Done. Backups of the previous versions are in backups/")
     print("=" * 60)
 
 

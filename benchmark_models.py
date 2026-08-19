@@ -124,18 +124,18 @@ def run_model(model_name, api_key, prompt, expected_n):
 def main():
     labeled = build_labeled_set()
     if len(labeled) < 15:
-        print(f"Za mało ocenionych ofert z opisem ({len(labeled)}) - benchmark byłby niemiarodajny.")
+        print(f"Not enough rated offers with a description ({len(labeled)}) - the benchmark would be meaningless.")
         return 1
 
     jobs = [j for j, _ in labeled]
     truth = [r for _, r in labeled]
-    print(f"Zbiór testowy: {len(jobs)} ofert ocenionych ręcznie (z pełnym opisem)")
-    print(f"Ocen >=7: {sum(1 for r in truth if r >= 7)}\n")
+    print(f"Test set: {len(jobs)} manually rated offers (with full description)")
+    print(f"Ratings >=7: {sum(1 for r in truth if r >= 7)}\n")
 
     cv = load_cv()
     context = build_active_learning_context(jobs)
     prompt = create_prompt(cv, jobs, context)
-    print(f"Prompt: {len(prompt):,} znaków\n")
+    print(f"Prompt: {len(prompt):,} characters\n")
 
     results = {}
     for idx, model in enumerate(CANDIDATES):
@@ -145,7 +145,7 @@ def main():
         res = run_model(model, key, prompt, len(jobs))
 
         if not res["ok"]:
-            print(f"   ✗ BŁĄD po {res['elapsed']:.0f}s: {res['error']}\n")
+            print(f"   FAILED after {res['elapsed']:.0f}s: {res['error']}\n")
             results[model] = {"error": res["error"], "elapsed": res["elapsed"]}
             time.sleep(20)
             continue
@@ -172,7 +172,7 @@ def main():
             "out_tokens": res["out_tokens"],
         }
 
-        print(f"   ✓ {res['returned']}/{res['expected']} ofert | {res['elapsed']:.0f}s | "
+        print(f"   ✓ {res['returned']}/{res['expected']} offers | {res['elapsed']:.0f}s | "
               f"Spearman {rho:+.3f} | MAE {mae:.2f}\n" if rho is not None
               else f"   ✓ {res['returned']}/{res['expected']} | {res['elapsed']:.0f}s\n")
 
@@ -180,7 +180,7 @@ def main():
 
     # Podsumowanie
     print("=" * 78)
-    print(f"{'model':<26}{'Spearman':>10}{'MAE':>7}{'kompl.':>9}{'czas':>8}{'out tok':>10}")
+    print(f"{'model':<26}{'Spearman':>10}{'MAE':>7}{'compl.':>9}{'time':>8}{'out tok':>10}")
     print("=" * 78)
 
     ranked = sorted(
@@ -192,7 +192,7 @@ def main():
               f"{r['completeness']:>8.0%}{r['elapsed']:>7.0f}s{str(r['out_tokens']):>10}")
     for model, r in results.items():
         if r.get("spearman") is None:
-            print(f"{model:<26}{'BŁĄD':>10}  {r.get('error', '')[:38]}")
+            print(f"{model:<26}{'FAILED':>10}  {r.get('error', '')[:38]}")
     print("=" * 78)
 
     if ranked:
@@ -200,7 +200,7 @@ def main():
         print(f"\nNajlepsza korelacja: {best[0]} ({best[1]['spearman']:+.3f})")
 
     save_json_atomic(RESULTS_FILE, results)
-    print(f"Szczegóły zapisane w {RESULTS_FILE}")
+    print(f"Details saved to {RESULTS_FILE}")
     return 0
 
 

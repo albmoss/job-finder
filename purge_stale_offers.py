@@ -86,7 +86,7 @@ def main():
     today = datetime.now().date()
     cutoff_date = today - timedelta(days=14)
     
-    print(f"🗑️  PURGE STALE OFFERS (keeping from {cutoff_date.isoformat()} onwards + decided)")
+    print(f"PURGE STALE OFFERS (keeping from {cutoff_date.isoformat()} onwards + decided)")
     print("=" * 60)
 
     # Load data
@@ -98,14 +98,14 @@ def main():
     # Porównujemy na postaci kanonicznej - inaczej ten sam link z parametrem
     # śledzącym nie zostanie rozpoznany jako "oceniony" i oferta zostanie skasowana.
     decided_links = {canonical_link(k) for k in decisions.keys()}
-    print(f"📂 Loaded {len(jobs)} jobs from DB")
-    print(f"✅ {len(decided_links)} jobs have user decisions (protected)")
+    print(f"Loaded {len(jobs)} jobs from DB")
+    print(f"{len(decided_links)} jobs have user decisions (protected)")
 
     # Zarchiwizuj oceniane oferty ZANIM cokolwiek usuniemy
     analyzed_now = load_json(ANALYZED_DB) if os.path.exists(ANALYZED_DB) else []
     archived = archive_rated(jobs, analyzed_now, decisions)
     if archived:
-        print(f"🗄️  Zarchiwizowano {archived} ocenionych ofert -> {RATED_ARCHIVE}")
+        print(f"Archived {archived} rated offers -> {RATED_ARCHIVE}")
 
     # Determine which jobs to keep
     kept_jobs = []
@@ -137,7 +137,7 @@ def main():
         # Otherwise, purge
         removed_count += 1
 
-    print(f"\n📊 Results:")
+    print(f"\nResults:")
     print(f"   Kept (decided):   {kept_decided}")
     print(f"   Kept (last 14d): {kept_recent}")
     print(f"   REMOVED (stale):  {removed_count}")
@@ -145,7 +145,7 @@ def main():
 
     # Save cleaned jobs DB
     save_json(JOBS_DB, kept_jobs)
-    print(f"💾 Saved cleaned {JOBS_DB}")
+    print(f"Saved cleaned {JOBS_DB}")
 
     # Also clean analyzed_jobs_waterfall.json
     if os.path.exists(ANALYZED_DB):
@@ -161,9 +161,9 @@ def main():
         removed_analyzed = original_analyzed - len(kept_analyzed)
 
         save_json(ANALYZED_DB, kept_analyzed)
-        print(f"💾 Cleaned {ANALYZED_DB}: {original_analyzed} → {len(kept_analyzed)} (removed {removed_analyzed})")
+        print(f"Cleaned {ANALYZED_DB}: {original_analyzed} → {len(kept_analyzed)} (removed {removed_analyzed})")
 
-    print("\n✅ Purge complete!")
+    print("\nPurge complete!")
 
 
 if __name__ == "__main__":

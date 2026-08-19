@@ -70,7 +70,7 @@ def main():
             jobs_by_link[link] = job
 
     if len(old_scores) < 10:
-        print(f"Za mało ofert z zapisanym wynikiem AI i oceną ({len(old_scores)}).")
+        print(f"Not enough offers with both a stored AI score and a rating ({len(old_scores)}).")
         return 1
 
     links = list(old_scores)
@@ -78,18 +78,18 @@ def main():
     truth = [ratings[l] for l in links]
 
     print("=" * 66)
-    print(f"PORÓWNANIE PRZED/PO na {len(jobs)} ofertach (ten sam zbiór)")
+    print(f"BEFORE/AFTER COMPARISON on {len(jobs)} offers (same set)")
     print(f"Model: {args.model}")
     print("=" * 66)
 
     before = report("PRZED (zapisane wyniki)", [(old_scores[l], ratings[l]) for l in links], args.threshold)
 
-    print("\nOceniam ponownie aktualnym promptem i profilem...")
+    print("\nRescoring with the current prompt and profile...")
     prompt = create_prompt(load_cv(), jobs, build_active_learning_context(jobs))
     res = run_model(args.model, GEMINI_API_KEYS[0], prompt, len(jobs))
 
     if not res["ok"]:
-        print(f"BŁĄD: {res['error']}")
+        print(f"FAILED: {res['error']}")
         return 1
 
     new_pairs = [
@@ -97,7 +97,7 @@ def main():
         for item in res["items"]
         if isinstance(item.get("id"), int) and 0 <= item["id"] < len(truth)
     ]
-    print(f"Otrzymano {len(new_pairs)}/{len(jobs)} ocen w {res['elapsed']:.0f}s\n")
+    print(f"Received {len(new_pairs)}/{len(jobs)} ratings in {res['elapsed']:.0f}s\n")
 
     after = report("PO (nowy profil + model)", new_pairs, args.threshold)
 
@@ -121,8 +121,8 @@ def main():
         print(f"{name:<16}{fmt.format(b):>12}{fmt.format(a):>12}{mark + ' ' + dtxt:>12}")
     print("-" * 66)
 
-    print("\nUWAGA: zbiór ma tylko {} ofert, więc różnice poniżej ~0.05 w korelacji"
-          "\nmieszczą się w szumie. Im więcej ofert ocenisz, tym pewniejszy pomiar.".format(len(jobs)))
+    print("\nNOTE: the set holds only {} offers, so correlation differences below ~0.05"
+          "\nfall within the noise. The more offers you rate, the firmer the measurement.".format(len(jobs)))
     return 0
 
 

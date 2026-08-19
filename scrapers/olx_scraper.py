@@ -40,7 +40,7 @@ class OLXScraper(BaseScraper):
         # OLX URL structure: /praca/bez-doswiadczenia/warszawa/?search[dist]=15
         url = f"{self.BASE_URL}/praca/{experience}/{location}/?search[dist]={radius}"
         
-        logger.info(f"OLX Praca: bez doświadczenia, {location.capitalize()} +{radius}km")
+        logger.info(f"OLX Praca: no experience required, {location.capitalize()} +{radius}km")
         return url
     
     def scrape_jobs(self) -> List[Job]:
@@ -216,7 +216,7 @@ class OLXScraper(BaseScraper):
         if not jobs:
             return jobs
 
-        logger.info(f"OLX: dociąganie opisów dla {len(jobs)} ofert...")
+        logger.info(f"OLX: fetching descriptions for {len(jobs)} offers...")
         session = requests.Session()
         stats = {"ok": 0, "expired": 0, "error": 0}
 
@@ -245,8 +245,8 @@ class OLXScraper(BaseScraper):
             session.close()
 
         logger.info(
-            f"OLX: opisy pobrane - ok: {stats['ok']}, wygasłe (odrzucone): {stats['expired']}, "
-            f"błędy: {stats['error']}"
+            f"OLX: descriptions fetched - ok: {stats['ok']}, expired (dropped): {stats['expired']}, "
+            f"errors: {stats['error']}"
         )
         return enriched
 

@@ -76,7 +76,7 @@ def load_jobs():
             recovered += 1
 
     if recovered:
-        print(f"   🗄️  Odzyskano {recovered} ocenionych ofert z {RATED_ARCHIVE}")
+        print(f"    Recovered {recovered} rated offers from {RATED_ARCHIVE}")
 
     return jobs
 
@@ -110,7 +110,7 @@ def categorize_decisions_granular(all_jobs):
     """Categorize user decisions into 5 granular tiers + aspirational."""
     decisions = load_user_decisions()
     if not decisions:
-        print("⚠️ No user decisions found. Cannot generate profile.")
+        print("No user decisions found. Cannot generate profile.")
         return None
 
     # Porównanie po postaci kanonicznej - inaczej oceny nie trafiają na oferty
@@ -194,18 +194,18 @@ def categorize_decisions_granular(all_jobs):
 
     total = sum(len(v) for v in tiers.values()) + len(aspirational)
     if total == 0:
-        print("⚠️ No categorizable decisions found.")
+        print("No categorizable decisions found.")
         return None
 
     if orphaned:
-        print(f"⚠️  {orphaned} decyzji pominięto - brak powiązanej oferty "
-              f"(ani w bazie, ani w {RATED_ARCHIVE}).")
+        print(f"{orphaned} decisions skipped - no matching offer "
+              f"(neither in the database nor in {RATED_ARCHIVE}).")
 
-    print(f"📊 Categorized {total} decisions (granular 5-tier):")
+    print(f"Categorized {total} decisions (granular 5-tier):")
     for name, cfg in TIERS.items():
         count = len(tiers[name])
         print(f"   {cfg['label']}: {count}")
-    print(f"   🌟 ASPIRACYJNE: {len(aspirational)}")
+    print(f"   ASPIRACYJNE: {len(aspirational)}")
     if legacy_rejects:
         print(f"   (including {len(legacy_rejects)} legacy rejects merged into hard_no)")
 
@@ -411,7 +411,7 @@ def generate_profile(categories, cv_text):
         for key_idx, api_key in enumerate(API_KEYS):
             try:
                 masked = api_key[:4] + "..." + api_key[-4:]
-                print(f"   🚀 Trying Model: {model_name} | Key[{key_idx}] {masked}")
+                print(f"   Trying Model: {model_name} | Key[{key_idx}] {masked}")
 
                 client = genai.Client(api_key=api_key)
                 response = client.models.generate_content(
@@ -429,54 +429,54 @@ def generate_profile(categories, cv_text):
                 # Validate expected fields (core + new)
                 required = ["preferred_role_types", "preferred_industries", "red_flags", "summary"]
                 if all(k in profile for k in required):
-                    print(f"   ✅ Profile generated successfully!")
+                    print(f"   Profile generated successfully!")
                     
                     # Check for new enriched fields (v2 + v3)
                     new_fields = ["deal_breakers", "deal_makers", "borderline_signals", "rating_calibration",
                                   "scoring_weights", "negative_patterns", "location_preferences", "salary_preferences"]
                     found_new = [f for f in new_fields if f in profile]
-                    print(f"   📊 Enriched fields present: {len(found_new)}/{len(new_fields)} ({', '.join(found_new)})")
+                    print(f"   Enriched fields present: {len(found_new)}/{len(new_fields)} ({', '.join(found_new)})")
                     
                     # Validate scoring_weights sum to ~1.0 if present
                     if "scoring_weights" in profile:
                         weights_sum = sum(profile["scoring_weights"].values())
                         if abs(weights_sum - 1.0) > 0.05:
-                            print(f"   ⚠️ scoring_weights sum to {weights_sum:.2f}, normalizing to 1.0...")
+                            print(f"   scoring_weights sum to {weights_sum:.2f}, normalizing to 1.0...")
                             factor = 1.0 / weights_sum
                             profile["scoring_weights"] = {k: round(v * factor, 2) for k, v in profile["scoring_weights"].items()}
                     
                     return profile
                 else:
                     missing = [k for k in required if k not in profile]
-                    print(f"   ⚠️ Missing required fields: {missing}. Retrying...")
+                    print(f"   Missing required fields: {missing}. Retrying...")
 
             except Exception as e:
                 err = str(e)
-                print(f"   ❌ Error: {err[:120]}")
+                print(f"   Error: {err[:120]}")
                 if "429" in err or "ResourceExhausted" in err:
                     import time
                     print("   ⏳ Rate limited. Waiting 30s...")
                     time.sleep(30)
 
-    print("❌ CRITICAL: Failed to generate profile with all models/keys.")
+    print("CRITICAL: Failed to generate profile with all models/keys.")
     return None
 
 
 def main():
     print("=" * 60)
-    print("🧬 PREFERENCE PROFILE GENERATOR v2 (Granular 5-Tier)")
+    print("PREFERENCE PROFILE GENERATOR v2 (Granular 5-Tier)")
     print("=" * 60)
 
     all_jobs = load_jobs()
     cv_text = load_cv()
-    print(f"📂 Loaded {len(all_jobs)} jobs from database.")
+    print(f"Loaded {len(all_jobs)} jobs from database.")
 
     categories = categorize_decisions_granular(all_jobs)
     if not categories:
-        print("❌ Aborting: No decisions to analyze.")
+        print("Aborting: No decisions to analyze.")
         sys.exit(1)
 
-    print("\n🧠 Sending granular meta-analysis request to Gemini...")
+    print("\nSending granular meta-analysis request to Gemini...")
     profile = generate_profile(categories, cv_text)
 
     if profile:
@@ -504,31 +504,31 @@ def main():
         except Exception as e:
             print(f"Error saving profile: {e}")
 
-        print(f"\n✅ Profile saved to {OUTPUT_FILE}")
-        print(f"\n📋 SUMMARY:")
+        print(f"\nProfile saved to {OUTPUT_FILE}")
+        print(f"\nSUMMARY:")
         print(f"   {profile.get('summary', 'N/A')}")
-        print(f"\n🎯 Preferred roles: {', '.join(profile.get('preferred_role_types', []))}")
-        print(f"🏢 Preferred industries: {', '.join(profile.get('preferred_industries', []))}")
-        print(f"🚩 Red flags: {', '.join(profile.get('red_flags', []))}")
-        print(f"🌱 Growth directions: {', '.join(profile.get('growth_directions', []))}")
+        print(f"\nPreferred roles: {', '.join(profile.get('preferred_role_types', []))}")
+        print(f"Preferred industries: {', '.join(profile.get('preferred_industries', []))}")
+        print(f"Red flags: {', '.join(profile.get('red_flags', []))}")
+        print(f"Growth directions: {', '.join(profile.get('growth_directions', []))}")
         
         # Print new fields
         if "deal_breakers" in profile:
-            print(f"⛔ Deal breakers: {', '.join(profile.get('deal_breakers', []))}")
+            print(f"Deal breakers: {', '.join(profile.get('deal_breakers', []))}")
         if "deal_makers" in profile:
-            print(f"✨ Deal makers: {', '.join(profile.get('deal_makers', []))}")
+            print(f"Deal makers: {', '.join(profile.get('deal_makers', []))}")
         if "rating_calibration" in profile:
             cal = profile["rating_calibration"]
-            print(f"\n📐 Rating Calibration:")
+            print(f"\nRating Calibration:")
             for key in ["what_9_10_means", "what_7_8_means", "what_5_6_means", "what_3_4_means", "what_1_2_means"]:
                 if key in cal:
                     print(f"   {key}: {cal[key][:120]}...")
         if "scoring_weights" in profile:
-            print(f"\n⚖️ Scoring Weights: {profile['scoring_weights']}")
+            print(f"\nScoring Weights: {profile['scoring_weights']}")
         if "negative_patterns" in profile:
-            print(f"🚫 Negative patterns: {len(profile['negative_patterns'])} identified")
+            print(f"Negative patterns: {len(profile['negative_patterns'])} identified")
     else:
-        print("❌ Profile generation failed.")
+        print("Profile generation failed.")
         sys.exit(1)
 
 
