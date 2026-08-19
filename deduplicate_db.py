@@ -214,7 +214,7 @@ def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: 
 
     data = load_json_safe(path, default=[])
     if not data:
-        logger.info(f"{path.name} jest pusty - pomijam.")
+        logger.info(f"{path.name} is empty - skipping.")
         return
 
     def job_of(item):
@@ -242,16 +242,16 @@ def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: 
     after = sum(1 for i in final if canonical_link(job_of(i).get("link", "")) in decided)
     if after < before:
         logger.error(
-            f"❌ Deduplikacja usunęłaby {before - after} ocenionych ofert "
-            f"- przerywam zapis {path.name}."
+            f"Deduplication would remove {before - after} rated offers "
+            f"- aborting the write to {path.name}."
         )
         return
 
     if nan_fixed:
-        logger.info(f"   {path.name}: naprawiono {nan_fixed} pól z NaN (niepoprawny JSON) -> null")
+        logger.info(f"   {path.name}: fixed {nan_fixed} NaN fields (invalid JSON) -> null")
 
     save_json_atomic(path, final, backup=True)
-    logger.info(f"✅ {path.name}: {initial} -> {len(final)} (usunięto {initial - len(final)})")
+    logger.info(f"{path.name}: {initial} -> {len(final)} (removed {initial - len(final)})")
 
 
 def deduplicate_file(filepath, is_analyzed=False):
@@ -304,14 +304,14 @@ def run():
 
     keep, provenance, stats = _plan(all_jobs, decided)
     logger.info(
-        f"🛡️ Plan na {len(all_jobs)} unikalnych ofertach: zostaje {len(keep)}, "
-        f"scalone {stats['dropped']} w {stats['groups']} grupach "
-        f"({stats['cross']} międzyportalowych)"
+        f"Plan for {len(all_jobs)} unique offers: keeping {len(keep)}, "
+        f"merged {stats['dropped']} in {stats['groups']} groups "
+        f"({stats['cross']} across boards)"
     )
     if stats["extra_decided"]:
         logger.info(
-            f"   zachowano {stats['extra_decided']} dodatkowych rekordów z Twoją decyzją "
-            f"(duplikaty, ale scalenie osierociłoby ocenę)"
+            f"   kept {stats['extra_decided']} extra records carrying a decision "
+            f"(duplicates, but merging would orphan the rating)"
         )
 
     for path, is_analyzed in files:

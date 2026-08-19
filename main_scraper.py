@@ -100,8 +100,8 @@ def refresh_sources(source_names):
 
     if removed or removed_analyzed:
         logger.info(
-            f"🔄 Odświeżanie: usunięto {removed} ofert z bazy i {removed_analyzed} "
-            f"wyników analizy ({protected} z decyzją zachowano)"
+            f"Refresh: removed {removed} offers and {removed_analyzed} "
+            f"analysis results ({protected} carrying a decision were kept)"
         )
     return removed
 
@@ -146,9 +146,9 @@ def run_all_scrapers(only=None, force=False, refresh=False):
     for scraper_cls, required_keys in optional_scrapers:
         if all(scraper_config.get(k) for k in required_keys):
             api_scrapers.append(scraper_cls(scraper_config))
-            logger.info(f"➕ Włączono opcjonalny scraper: {scraper_cls.__name__}")
+            logger.info(f"Enabled optional scraper: {scraper_cls.__name__}")
         else:
-            logger.debug(f"Pominięto {scraper_cls.__name__} - brak kluczy: {', '.join(required_keys)}")
+            logger.debug(f"Skipped {scraper_cls.__name__} - missing keys: {', '.join(required_keys)}")
 
     # === Phase 2: Browser scrapers (slower, need Playwright) ===
     browser_scrapers = [
@@ -171,9 +171,9 @@ def run_all_scrapers(only=None, force=False, refresh=False):
         selected = [s.get_source_name() for s in api_scrapers + browser_scrapers]
 
         if not selected:
-            logger.error(f"Żaden scraper nie pasuje do: {only}")
+            logger.error(f"No scraper matches: {only}")
             return []
-        logger.info(f"🎯 Ograniczono do: {', '.join(selected)}")
+        logger.info(f"Ograniczono do: {', '.join(selected)}")
 
     all_scrapers = api_scrapers + browser_scrapers
 
@@ -240,7 +240,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
             }
 
     # === Phase 1: Run API scrapers in parallel (safe, no browser conflicts) ===
-    logger.info(f"\n🌐 Phase 1: Running {len(api_scrapers)} API/HTTP scrapers in parallel...")
+    logger.info(f"\nPhase 1: Running {len(api_scrapers)} API/HTTP scrapers in parallel...")
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         future_to_scraper = {executor.submit(_scrape_source, s): s for s in api_scrapers}
@@ -274,14 +274,14 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 # Incremental Save
                 if new_jobs:
                     saved = db.append_jobs(new_jobs)
-                    logger.info(f"💾 {source}: Saved {saved} new jobs to DB.")
+                    logger.info(f"{source}: Saved {saved} new jobs to DB.")
 
                 # Oferty, których szczegółów nie pobierano (są już w bazie) też
                 # trzeba odnotować - inaczej sygnał "wisi od X dni" nigdy nie ruszy.
                 seen_again = getattr(scraper, "seen_again_links", None)
                 if seen_again:
                     touched = db.touch_seen(seen_again)
-                    logger.info(f"👁️ {source}: odnotowano {touched} ofert wciąż wiszących")
+                    logger.info(f"{source}: {touched} offers still listed")
             else:
                  scraper_results[source] = {
                     'success': False,
@@ -290,7 +290,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 }
 
     # === Phase 2: Run browser scrapers (limited parallelism to avoid Playwright conflicts) ===
-    logger.info(f"\n🖥️ Phase 2: Running {len(browser_scrapers)} browser scrapers (max 2 parallel)...")
+    logger.info(f"\nPhase 2: Running {len(browser_scrapers)} browser scrapers (max 2 parallel)...")
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         future_to_scraper = {executor.submit(_scrape_source, s): s for s in browser_scrapers}
@@ -323,7 +323,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 
                 if new_jobs:
                     saved = db.append_jobs(new_jobs)
-                    logger.info(f"💾 {source}: Saved {saved} new jobs to DB.")
+                    logger.info(f"{source}: Saved {saved} new jobs to DB.")
             else:
                  scraper_results[source] = {
                     'success': False,
@@ -380,7 +380,7 @@ if __name__ == "__main__":
         logger.info("\n✓ Scraping completed successfully!")
         sys.exit(0)
     except KeyboardInterrupt:
-        logger.warning("\n⚠ Scraping interrupted by user")
+        logger.warning("\nScraping interrupted by user")
         sys.exit(1)
     except Exception as e:
         logger.error(f"\n✗ Scraping failed with error: {e}")

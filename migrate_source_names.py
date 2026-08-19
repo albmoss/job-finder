@@ -39,7 +39,7 @@ FILES = [
 def migrate_file(filename: str, nested: bool) -> int:
     path = Path(__file__).parent / filename
     if not path.exists():
-        logger.info(f"{filename}: brak pliku - pomijam")
+        logger.info(f"{filename}: file missing - skipping")
         return 0
 
     data = load_json_safe(path, default=[])
@@ -58,16 +58,16 @@ def migrate_file(filename: str, nested: bool) -> int:
 
     if changed:
         save_json_atomic(path, data, backup=True)
-        logger.info(f"✅ {filename}: zmieniono {changed} rekordów")
+        logger.info(f"{filename}: changed {changed} records")
     else:
         logger.info(f"{filename}: nic do zmiany")
     return changed
 
 
 def main():
-    logger.info("Ujednolicanie nazw źródeł...")
+    logger.info("Unifying source names...")
     total = sum(migrate_file(name, nested) for name, nested in FILES)
-    logger.info(f"Gotowe. Łącznie zmienionych rekordów: {total}")
+    logger.info(f"Done. Total records changed: {total}")
 
 
 if __name__ == "__main__":

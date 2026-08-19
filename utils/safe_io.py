@@ -38,7 +38,7 @@ def rotate_backup(filepath, keep: int = DEFAULT_KEEP):
     try:
         shutil.copy2(filepath, target)
     except Exception as e:
-        logger.warning(f"Nie udało się zrobić backupu {filepath.name}: {e}")
+        logger.warning(f"Could not back up {filepath.name}: {e}")
         return
 
     # Rotacja - usuń najstarsze
@@ -47,7 +47,7 @@ def rotate_backup(filepath, keep: int = DEFAULT_KEEP):
         for old in existing[:-keep]:
             old.unlink()
     except Exception as e:
-        logger.debug(f"Rotacja backupów nie powiodła się: {e}")
+        logger.debug(f"Backup rotation failed: {e}")
 
 
 def save_json_atomic(filepath, data, backup: bool = False, keep: int = DEFAULT_KEEP, indent: int = 2):
@@ -71,7 +71,7 @@ def save_json_atomic(filepath, data, backup: bool = False, keep: int = DEFAULT_K
         os.replace(tmp, filepath)
         return True
     except Exception as e:
-        logger.error(f"Atomowy zapis {filepath.name} nie powiódł się: {e}")
+        logger.error(f"Atomic write of {filepath.name} failed: {e}")
         if tmp.exists():
             try:
                 tmp.unlink()
@@ -95,7 +95,7 @@ def load_json_safe(filepath, default=None):
     except FileNotFoundError:
         return default
     except Exception as e:
-        logger.error(f"{filepath.name} uszkodzony ({e}) - próbuję backupu...")
+        logger.error(f"{filepath.name} corrupt ({e}) - trying backup...")
 
     bdir = filepath.parent / BACKUP_DIR_NAME
     if bdir.exists():
@@ -108,5 +108,5 @@ def load_json_safe(filepath, default=None):
             except Exception:
                 continue
 
-    logger.error(f"Brak sprawnego backupu dla {filepath.name} - zwracam wartość domyślną")
+    logger.error(f"No usable backup for {filepath.name} - returning default")
     return default

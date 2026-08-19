@@ -66,7 +66,7 @@ class NoFluffScraper(BaseScraper):
 
             all_postings.extend(postings)
             total = data.get("totalCount", data.get("total", 0))
-            logger.info(f"NFJ API [{label}]: strona {page} - {len(postings)} ofert (razem: {total})")
+            logger.info(f"NFJ API [{label}]: page {page} - {len(postings)} offers (total: {total})")
 
             if len(all_postings) >= total or len(postings) < page_size:
                 break
@@ -118,7 +118,7 @@ class NoFluffScraper(BaseScraper):
                 unique[key] = posting
 
         logger.info(
-            f"NFJ API: {len(postings)} ofert w PL -> {len(unique)} pasujących "
+            f"NFJ API: {len(postings)} offers in PL -> {len(unique)} matching "
             f"({target_city} lub zdalne)"
         )
         return list(unique.values())

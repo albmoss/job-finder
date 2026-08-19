@@ -98,7 +98,7 @@ class IndeedScraper:
         try:
             data = json.loads(m.group(1))
         except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Indeed: nie udało się sparsować mosaic JSON: {e}")
+            logger.warning(f"Indeed: could not parse mosaic JSON: {e}")
             return []
         return (
             data.get("metaData", {})
@@ -166,14 +166,14 @@ class IndeedScraper:
         try:
             links = page.query_selector_all(_CARD_SELECTOR)
         except Exception as e:
-            logger.warning(f"Indeed: nie udało się odczytać kart z DOM: {e}")
+            logger.warning(f"Indeed: could not read cards from the DOM: {e}")
             return descriptions
 
         usable = min(len(links), len(cards), self.max_offers_per_keyword)
         if len(links) != len(cards):
             logger.info(
-                f"Indeed: {len(links)} kart w DOM vs {len(cards)} w JSON - "
-                f"biorę {usable} pierwszych"
+                f"Indeed: {len(links)} cards in the DOM vs {len(cards)} in JSON - "
+                f"taking the first {usable}"
             )
 
         for i in range(usable):
@@ -186,8 +186,8 @@ class IndeedScraper:
 
                 if self._is_blocked(page.title()):
                     logger.warning(
-                        f"Indeed: sesja przerwana przez zabezpieczenie po {len(descriptions)} "
-                        f"opisach - zostawiam resztę bez pełnego opisu"
+                        f"Indeed: session cut short by bot protection after {len(descriptions)} "
+                        f"descriptions - the rest stay without a full description"
                     )
                     break
 
@@ -226,16 +226,16 @@ class IndeedScraper:
 
             if status >= 400 or self._is_blocked(title):
                 logger.warning(
-                    f"Indeed [{keyword}]: zablokowane (HTTP {status}, tytuł: {title[:50]}) - "
-                    f"pomijam. Zwiększ pause_between_keywords, jeśli powtarza się co przebieg."
+                    f"Indeed [{keyword}]: blocked (HTTP {status}, title: {title[:50]}) - "
+                    f"skipping. Raise pause_between_keywords if this repeats every run."
                 )
                 return []
 
             cards = self._extract_cards(page.content())
             if not cards:
                 logger.warning(
-                    f"Indeed [{keyword}]: strona wczytana, ale zero ofert w mosaic JSON - "
-                    f"Indeed mógł zmienić strukturę listingu"
+                    f"Indeed [{keyword}]: page loaded but zero offers in the mosaic JSON - "
+                    f"Indeed may have changed its listing structure"
                 )
                 return []
 
@@ -251,8 +251,8 @@ class IndeedScraper:
                     jobs.append(job)
 
             logger.info(
-                f"Indeed [{keyword}]: {len(jobs)} ofert, "
-                f"{len(descriptions)}/{len(cards)} z pełnym opisem"
+                f"Indeed [{keyword}]: {len(jobs)} offers, "
+                f"{len(descriptions)}/{len(cards)} with a full description"
             )
             return jobs
 
@@ -268,8 +268,8 @@ class IndeedScraper:
         from playwright.sync_api import sync_playwright
 
         logger.info(
-            f"Indeed: start (lokalizacja: {self.location}, "
-            f"słowa kluczowe: {', '.join(self.keywords)})"
+            f"Indeed: start (location: {self.location}, "
+            f"keywords: {', '.join(self.keywords)})"
         )
 
         all_jobs, seen = [], set()
@@ -294,11 +294,11 @@ class IndeedScraper:
 
         with_desc = sum(1 for j in all_jobs if len(j.description) >= 150)
         logger.info(
-            f"Indeed: {len(all_jobs)} unikalnych ofert, {with_desc} z opisem >=150 znaków"
+            f"Indeed: {len(all_jobs)} unique offers, {with_desc} with a description >=150 chars"
         )
         if all_jobs and with_desc / len(all_jobs) < 0.5:
             logger.warning(
-                f"Indeed: tylko {with_desc}/{len(all_jobs)} ofert ma pełny opis - "
-                f"reszta dostanie w analizie sufit 55%"
+                f"Indeed: only {with_desc}/{len(all_jobs)} offers have a full description - "
+                f"the rest are capped at 55% during analysis"
             )
         return all_jobs

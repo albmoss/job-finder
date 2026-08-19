@@ -152,7 +152,7 @@ class LdJsonPortalScraper:
                 return resp.text
             except requests.RequestException as e:
                 logger.warning(
-                    f"{self.SOURCE_NAME}: próba {attempt}/{attempts} nieudana "
+                    f"{self.SOURCE_NAME}: attempt {attempt}/{attempts} failed "
                     f"({url[:70]}): {type(e).__name__}"
                 )
                 if attempt < attempts:
@@ -284,7 +284,7 @@ class LdJsonPortalScraper:
         for page in range(1, self.max_pages + 1):
             html = self._fetch(self.build_listing_url(page))
             if not html:
-                logger.info(f"{self.SOURCE_NAME}: strona {page} pusta - koniec paginacji")
+                logger.info(f"{self.SOURCE_NAME}: page {page} empty - end of pagination")
                 break
 
             # Ta sama oferta pojawia się na stronie wielokrotnie (logo, tytuł, "aplikuj"):
@@ -300,8 +300,8 @@ class LdJsonPortalScraper:
                     new.append(u)
 
             logger.info(
-                f"{self.SOURCE_NAME}: strona {page} - {len(found)} linków, "
-                f"{len(new)} nowych (razem {len(ordered)})"
+                f"{self.SOURCE_NAME}: page {page} - {len(found)} links, "
+                f"{len(new)} new (total {len(ordered)})"
             )
 
             # Portale przy przekroczeniu ostatniej strony oddają ponownie stronę 1.
@@ -309,13 +309,13 @@ class LdJsonPortalScraper:
             if not new:
                 empty_streak += 1
                 if empty_streak >= 2:
-                    logger.info(f"{self.SOURCE_NAME}: brak nowych linków - kończę paginację")
+                    logger.info(f"{self.SOURCE_NAME}: no new links - stopping pagination")
                     break
             else:
                 empty_streak = 0
 
             if len(ordered) >= self.max_offers:
-                logger.info(f"{self.SOURCE_NAME}: osiągnięto limit {self.max_offers} ofert")
+                logger.info(f"{self.SOURCE_NAME}: reached the limit of {self.max_offers} offers")
                 break
 
         return ordered[: self.max_offers]
@@ -353,8 +353,8 @@ class LdJsonPortalScraper:
                     links.add(link)
         except Exception as e:
             logger.warning(
-                f"{self.SOURCE_NAME}: nie udało się wczytać znanych linków ({e}) - "
-                f"pobieram szczegóły wszystkich ofert"
+                f"{self.SOURCE_NAME}: could not load the known links ({e}) - "
+                f"fetching details for every offer"
             )
 
         self._known_cache = links
@@ -365,8 +365,8 @@ class LdJsonPortalScraper:
 
         links = self._collect_links()
         if not links:
-            logger.warning(f"{self.SOURCE_NAME}: nie znaleziono żadnych linków ofert - "
-                           f"portal mógł zmienić strukturę listingu")
+            logger.warning(f"{self.SOURCE_NAME}: no offer links found - "
+                           f"the board may have changed its listing structure")
             return []
 
         if self.skip_known_details:
@@ -375,8 +375,8 @@ class LdJsonPortalScraper:
             # Zapamiętane do odnotowania przez main_scraper (last_seen/times_seen)
             self.seen_again_links = [l for l in links if l in known]
             logger.info(
-                f"{self.SOURCE_NAME}: {len(links)} linków, {len(fresh)} nowych do pobrania, "
-                f"{len(self.seen_again_links)} już w bazie (pomijam ich strony)"
+                f"{self.SOURCE_NAME}: {len(links)} links, {len(fresh)} new to fetch, "
+                f"{len(self.seen_again_links)} already in the database (their pages are skipped)"
             )
             links = fresh
             if not links:
@@ -396,13 +396,13 @@ class LdJsonPortalScraper:
 
         # Liczby wejścia i wyjścia na INFO - cicha porażka to najgorszy rodzaj błędu
         logger.info(
-            f"{self.SOURCE_NAME}: pobrano {len(links) - no_ldjson}/{len(links)} opisów, "
-            f"odrzucono {out_of_scope} (poza zakresem) -> {len(jobs)} ofert"
+            f"{self.SOURCE_NAME}: fetched {len(links) - no_ldjson}/{len(links)} descriptions, "
+            f"dropped {out_of_scope} (out of scope) -> {len(jobs)} offers"
         )
         if links and (len(links) - no_ldjson) / len(links) < 0.5:
             logger.warning(
-                f"{self.SOURCE_NAME}: tylko {len(links) - no_ldjson}/{len(links)} stron miało "
-                f"JobPosting w ld+json - sprawdź, czy portal nie zmienił struktury"
+                f"{self.SOURCE_NAME}: only {len(links) - no_ldjson}/{len(links)} pages carried "
+                f"JobPosting in ld+json - check whether the board changed its structure"
             )
 
         return jobs

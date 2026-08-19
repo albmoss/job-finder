@@ -243,10 +243,10 @@ INSTRUKCJA OCENIANIA:
 6. Oferty w kierunkach rozwoju (entry-level!) = traktuj łagodniej
 ==============
 """
-            print("   📋 Using pre-generated Preference Profile (v3 enriched) for Active Learning.")
+            print("   Using pre-generated Preference Profile (v3 enriched) for Active Learning.")
             return context
         except Exception as e:
-            print(f"   ⚠️ Error loading preference profile: {e}. Falling back to raw decisions.")
+            print(f"   Error loading preference profile: {e}. Falling back to raw decisions.")
     
     # FALLBACK: Build raw hit/kit list from decisions
     decisions = load_user_decisions()
@@ -388,7 +388,7 @@ UWAGA:
 
 
 def main():
-    print("🌊 Starting WATERFALL Analysis (RESUME MODE)...")
+    print("Starting WATERFALL Analysis (RESUME MODE)...")
     
     cv_text = load_cv()
     all_jobs = load_jobs()
@@ -399,7 +399,7 @@ def main():
     print(f"Loaded {len(existing_results)} existing matched jobs.")
 
     current_profile_version = profile_version()
-    print(f"🧬 Wersja profilu preferencji: {current_profile_version}")
+    print(f"Preference profile version: {current_profile_version}")
 
     # Mapa link -> istniejący wynik (na postaci kanonicznej linku)
     jobs_by_link = {canonical_link(j['link']): j for j in all_jobs}
@@ -416,7 +416,7 @@ def main():
         if link in jobs_by_link and is_stale(item, jobs_by_link[link], current_profile_version)
     }
     if stale_links:
-        print(f"♻️  {len(stale_links)} wyników nieaktualnych (zmieniony opis lub profil) - do przeliczenia.")
+        print(f"{len(stale_links)} results are stale (description or profile changed) - rescoring.")
         existing_results = [
             item for item in existing_results
             if canonical_link((item.get('job') or {}).get('link', '')) not in stale_links
@@ -434,15 +434,15 @@ def main():
     remaining_jobs = [j for j in remaining_jobs if canonical_link(j['link']) not in decided_links]
     skipped = before_filter - len(remaining_jobs)
     if skipped > 0:
-        print(f"⏭️  Skipped {skipped} already-decided jobs (rejected/saved/aspirational).")
+        print(f"⏭ Skipped {skipped} already-decided jobs (rejected/saved/aspirational).")
     print(f"Remaining jobs to process: {len(remaining_jobs)}")
     
     if not remaining_jobs:
-        print("✅ Nothing left to do! All jobs analyzed.")
+        print("Nothing left to do! All jobs analyzed.")
         return
 
     current_key_val, current_model_idx = load_api_state()
-    print(f"💾 Loaded API State: Model[{current_model_idx}] Key[{current_key_val}]")
+    print(f"Loaded API State: Model[{current_model_idx}] Key[{current_key_val}]")
     
     results = existing_results # Start with existing data
     
@@ -456,7 +456,7 @@ def main():
     while job_queue:
         batch = job_queue[:current_batch_size]
         b_idx += 1
-        print(f"\n📦 Batch {b_idx} (Processing {len(batch)} jobs, {len(job_queue)} remaining in queue)...")
+        print(f"\nBatch {b_idx} (Processing {len(batch)} jobs, {len(job_queue)} remaining in queue)...")
         batch_success = False
         fatal_json_error = False
         
@@ -476,7 +476,7 @@ def main():
                 
                 for attempt in range(1, 3): 
                     try:
-                        print(f"   🚀 Model: {model_name} | Key[{key_idx}] {masked_key} | Try: {attempt}")
+                        print(f"   Model: {model_name} | Key[{key_idx}] {masked_key} | Try: {attempt}")
                         
                         if attempt > 1: time.sleep(15) 
                         else: time.sleep(5)
@@ -521,55 +521,55 @@ def main():
                                     results.append(result_entry)
                                     
                             if not processed_ids:
-                                print("      ⚠️ JSON parsed, but zero matching IDs found. Retrying...")
+                                print("      JSON parsed, but zero matching IDs found. Retrying...")
                                 if attempt == 2: raise ValueError("No valid IDs")
                                 continue 
                                 
-                            print(f"      ✅ Success! Processed {len(processed_ids)} out of {len(batch)} requested jobs.")
+                            print(f"      Success! Processed {len(processed_ids)} out of {len(batch)} requested jobs.")
                             
                             unprocessed = [job for i, job in enumerate(batch) if i not in processed_ids]
                             job_queue = unprocessed + job_queue[len(batch):]
                             
                             if len(unprocessed) > 0:
-                                print(f"      👀 LLM Laziness detected: {len(unprocessed)} jobs skipped. Re-queuing them...")
+                                print(f"      LLM Laziness detected: {len(unprocessed)} jobs skipped. Re-queuing them...")
                                 
                             batch_success = True
                             save_results(results) 
                             
                             current_model_idx = MODELS.index(model_name)
                             current_key_val = key_idx
-                            print(f"      📌 Locked into Model '{model_name}' on Key {key_idx}.")
+                            print(f"      Locked into Model '{model_name}' on Key {key_idx}.")
                             save_api_state(current_key_val, current_model_idx)
                             break
                         else:
-                            print("      ⚠️ Invalid JSON received.")
+                            print("      Invalid JSON received.")
                             if attempt == 2: raise ValueError("JSON parsing failed repeatedly")
                             
                     except json.JSONDecodeError as e:
-                        print(f"      ☠️ JSON Syntax Error (Toxic Batch). Failing fast to resize: {e}")
+                        print(f"      JSON Syntax Error (Toxic Batch). Failing fast to resize: {e}")
                         fatal_json_error = True
                         break
                     except Exception as e:
                         err = str(e)
                         if "429" in err or "403" in err or "ResourceExhausted" in err:
-                            print(f"      ❌ API Error: {err[:100]}...")
+                            print(f"      API Error: {err[:100]}...")
                             if attempt < 2:
                                 print("      ⏳ Rate Limit Hit. Sleeping 70s before final try on this key...")
                                 time.sleep(70)
                             else:
-                                print("      ❌ Key exhaustion. Moving to next key...")
+                                print("      Key exhaustion. Moving to next key...")
                         elif "Expecting" in err or "Unterminated" in err or "JSON Validate Err" in err:
-                            print(f"      ☠️ JSON Truncation Error (Toxic Batch). Failing fast to resize: {err[:80]}...")
+                            print(f"      JSON Truncation Error (Toxic Batch). Failing fast to resize: {err[:80]}...")
                             fatal_json_error = True
                             break
                         else:
-                            print(f"      ❌ General Error: {err[:100]}...")
+                            print(f"      General Error: {err[:100]}...")
                             pass
                             
             if batch_success or fatal_json_error: break
             if not batch_success and not fatal_json_error:
                  next_model_idx = (MODELS.index(model_name) + 1) % len(MODELS)
-                 print(f"   ⚠️ Exhausted ALL keys for model {model_name}. Downgrading to {MODELS[next_model_idx]}...")
+                 print(f"   Exhausted ALL keys for model {model_name}. Downgrading to {MODELS[next_model_idx]}...")
                  current_model_idx = next_model_idx
                  current_key_val = 0 
                  save_api_state(current_key_val, current_model_idx)
@@ -580,21 +580,21 @@ def main():
              if fatal_json_error:
                   if current_batch_size > 5:
                        new_size = current_batch_size // 2
-                       print(f"📉 Halving batch size from {current_batch_size} to {new_size} due to JSON truncation.")
+                       print(f"Halving batch size from {current_batch_size} to {new_size} due to JSON truncation.")
                        current_batch_size = new_size
                   else:
-                       print("☠️ Micro-batch is fundamentally broken. Discarding 1 job to save pipeline.")
+                       print("Micro-batch is fundamentally broken. Discarding 1 job to save pipeline.")
                        job_queue = job_queue[1:]
                        current_batch_size = BATCH_SIZE
              else:
-                  print("❌ CRITICAL: Failed to process batch even after trying ALL keys on ALL models.")
+                  print("CRITICAL: Failed to process batch even after trying ALL keys on ALL models.")
                   print("   Waiting 5 minutes before retrying (rate limits may reset)...")
                   time.sleep(300)
                   current_model_idx = 0
                   current_key_val = 0
                   save_api_state(current_key_val, current_model_idx)
 
-    print(f"\n🎉 DONE. Queue empty! Processed {b_idx} batches total.")
+    print(f"\nDONE. Queue empty! Processed {b_idx} batches total.")
 
 def save_results(data):
     save_json_atomic(OUTPUT_FILE, data)

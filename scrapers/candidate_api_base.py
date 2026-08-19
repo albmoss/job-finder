@@ -107,7 +107,7 @@ class CandidateAPIScraper(BaseScraper):
             total = meta.get("totalItems", 0)
             next_cursor = (meta.get("next") or {}).get("cursor")
 
-            logger.info(f"{self.SOURCE_NAME}: cursor {cursor} -> +{len(page)} ofert ({len(offers)}/{total})")
+            logger.info(f"{self.SOURCE_NAME}: cursor {cursor} -> +{len(page)} offers ({len(offers)}/{total})")
 
             # Zabezpieczenie przed pętlą nieskończoną gdy API zwróci ten sam kursor
             if next_cursor is None or next_cursor in seen_cursors or len(offers) >= total:
@@ -116,7 +116,7 @@ class CandidateAPIScraper(BaseScraper):
             cursor = next_cursor
             time.sleep(0.3 + random.random() * 0.3)
 
-        logger.info(f"{self.SOURCE_NAME}: pobrano {len(offers)} ofert z listy")
+        logger.info(f"{self.SOURCE_NAME}: fetched {len(offers)} offers from the listing")
         return offers
 
     def _matches_location(self, offer: dict, target_city: str) -> bool:
@@ -257,7 +257,7 @@ class CandidateAPIScraper(BaseScraper):
 
     def run(self) -> List[Job]:
         """Wejście - HTTP zamiast przeglądarki."""
-        logger.info(f"{self.SOURCE_NAME}: start (candidate-api, bez przeglądarki)")
+        logger.info(f"{self.SOURCE_NAME}: start (candidate-api, no browser)")
         jobs = []
         session = requests.Session()
 
@@ -273,11 +273,11 @@ class CandidateAPIScraper(BaseScraper):
             before = len(offers)
             offers = [o for o in offers if self._matches_location(o, target_city)]
             if before != len(offers):
-                logger.info(f"{self.SOURCE_NAME}: odfiltrowano {before - len(offers)} ofert spoza {target_city}")
+                logger.info(f"{self.SOURCE_NAME}: filtered out {before - len(offers)} offers outside {target_city}")
 
             # Szczegóły równolegle, ale delikatnie - to najwolniejsza faza.
             to_detail = [o for o in offers if o.get("slug")][: self.MAX_DETAIL_FETCH]
-            logger.info(f"{self.SOURCE_NAME}: dociąganie opisów dla {len(to_detail)} ofert...")
+            logger.info(f"{self.SOURCE_NAME}: fetching descriptions for {len(to_detail)} offers...")
 
             details = {}
 
@@ -299,7 +299,7 @@ class CandidateAPIScraper(BaseScraper):
                 msg += f" | limit portalu: {self._throttled}x"
             if rate < 0.8:
                 # Widoczne ostrzeżenie - wcześniej porażki szły do debug i ginęły
-                logger.warning(msg + " ⚠️ niska skuteczność - oferty zostaną bez treści ogłoszenia")
+                logger.warning(msg + " low success rate - offers will be left without a description")
             else:
                 logger.info(msg)
 
@@ -314,5 +314,5 @@ class CandidateAPIScraper(BaseScraper):
         finally:
             session.close()
 
-        logger.info(f"{self.SOURCE_NAME}: łącznie {len(jobs)} ofert")
+        logger.info(f"{self.SOURCE_NAME}: {len(jobs)} offers total")
         return jobs

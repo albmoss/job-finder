@@ -116,7 +116,7 @@ class PracujOptimizedScraper:
                         wait = (5 * (2 ** attempt)) + random.random() * 2
 
                     wait = min(wait, 120)
-                    logger.warning(f"Page {page_num}: HTTP 429 - cooldown {wait:.0f}s (próba {attempt+1}/{max_attempts})")
+                    logger.warning(f"Page {page_num}: HTTP 429 - cooldown {wait:.0f}s (attempt {attempt+1}/{max_attempts})")
                     self._trigger_cooldown(wait)
                     continue
 
@@ -195,7 +195,7 @@ class PracujOptimizedScraper:
                 locations = offer.get('displayWorkplaces', [])
                 location = locations[0] if locations else "Warszawa"
                 
-                # 🔥 THE SECRET SAUCE: Getting the description WITHOUT hitting the subpage
+                # THE SECRET SAUCE: Getting the description WITHOUT hitting the subpage
                 description = "Brak opisu"
                 if offer.get('aiSummary'):
                     # The aiSummary is usually HTML bullets

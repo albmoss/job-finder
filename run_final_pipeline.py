@@ -39,7 +39,7 @@ def _phase(name, fn, critical=False):
         fn()
         return True
     except Exception as e:
-        logger.error(f"{name} nie powiodło się: {e}")
+        logger.error(f"{name} failed: {e}")
         if critical:
             raise
         return False
@@ -47,29 +47,29 @@ def _phase(name, fn, critical=False):
 
 def run_pipeline(skip_scraping=False):
     print("\n" + "=" * 60)
-    print("🚀 PIPELINE: scraping → analiza → ewaluacja")
+    print("PIPELINE: scraping -> analysis -> evaluation")
     print("=" * 60)
 
     # 0. Archiwizuj oceny i usuń przeterminowane oferty
-    _phase("FAZA 0: Archiwizacja ocen + usuwanie ofert >14 dni", purge_stale_offers.main)
+    _phase("PHASE 0: Archive ratings + drop offers older than 14 days", purge_stale_offers.main)
 
     # 1. Scraping
     if skip_scraping:
-        logger.info("── FAZA 1: pominięta (--skip-scraping)")
+        logger.info("PHASE 1: skipped (--skip-scraping)")
     else:
-        _phase("FAZA 1: Scraping źródeł", run_all_scrapers, critical=True)
+        _phase("PHASE 1: Scrape sources", run_all_scrapers, critical=True)
 
     # 1.5 Normalizacja linków (musi poprzedzać deduplikację)
-    _phase("FAZA 1.5: Normalizacja linków", migrate_normalize_links.main)
+    _phase("PHASE 1.5: Link normalisation", migrate_normalize_links.main)
 
     # 2. Deduplikacja i czyszczenie
-    _phase("FAZA 2: Deduplikacja bazy", deduplicate_db.run)
-    _phase("FAZA 2.5: Czyszczenie opisów (token diet)", clean_db.run)
+    _phase("PHASE 2: Database deduplication", deduplicate_db.run)
+    _phase("PHASE 2.5: Description cleanup (token diet)", clean_db.run)
 
     jobs = JobDatabase(str(JOBS_DATABASE_PATH)).load_jobs()
-    logger.info(f"Baza liczy {len(jobs)} ofert.")
+    logger.info(f"The database holds {len(jobs)} offers.")
     if not jobs:
-        logger.error("Baza pusta - przerywam przed analizą AI.")
+        logger.error("Database empty - aborting before AI analysis.")
         return
 
     # 3. Analiza AI
@@ -77,17 +77,17 @@ def run_pipeline(skip_scraping=False):
         import waterfall_analysis
         waterfall_analysis.main()
 
-    _phase("FAZA 3: Analiza AI (waterfall)", _analyze)
+    _phase("PHASE 3: AI analysis (waterfall)", _analyze)
 
     # 4. Ewaluacja - czy ranking faktycznie działa?
     def _eval():
         import eval_ranking
         eval_ranking.main()
 
-    _phase("FAZA 4: Ewaluacja rankingu", _eval)
+    _phase("PHASE 4: Ranking evaluation", _eval)
 
     print("\n" + "=" * 60)
-    print("✅ PIPELINE ZAKOŃCZONY")
+    print("PIPELINE COMPLETE")
     print("=" * 60)
 
 
