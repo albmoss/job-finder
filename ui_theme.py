@@ -19,7 +19,7 @@ from pathlib import Path
 
 # --- wybór aktywnego wariantu -------------------------------------------
 ACTIVE_SCHEME = "grafit"
-ACTIVE_FONTS = "archivo"
+ACTIVE_FONTS = "redakcja"
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,48 @@ STATES = {
 }
 
 
+# Barwa portalu. Kulka przy nazwie źródła jest w aplikacji wszędzie ta sama:
+# w wierszu oferty, w szczegółach, na karcie i w logu pobrań - dzięki temu
+# "skąd to jest" czyta się jednym rzutem oka, bez czytania nazwy.
+#
+# Dobór barw ma dwa ograniczenia. Po pierwsze: żadnego żółtego. Po drugie:
+# odcienie muszą trzymać się z dala od barw decyzji (STATES), bo obie rodziny
+# kropek bywają w jednym wierszu - dlatego portale dostają barwy jaśniejsze
+# i bardziej nasycone, a kulka portalu jest mniejsza od kropki decyzji.
+SOURCES = {
+    "pracuj.pl":    "#D9764A",   # pomarańcz
+    "aplikuj.pl":   "#5CAE86",   # zieleń
+    "olx praca":    "#35AFA6",   # morski
+    "praca.pl":     "#6E7FD4",   # indygo
+    "gowork.pl":    "#A472CE",   # fiolet
+    "rocketjobs":   "#D95C86",   # róż
+    "justjoinit":   "#D9564F",   # koral
+    "linkedin":     "#3E92D0",   # błękit
+    "solid.jobs":   "#C566BE",   # magenta
+    "indeed":       "#3FA9C4",   # cyjan
+    "nofluffjobs":  "#7C93A8",   # stal
+}
+
+# Wpisy dodane ręcznie nie pochodzą z żadnego portalu - dostają barwę
+# neutralną, żeby nie udawały dwunastego źródła.
+SOURCE_FALLBACK = "#8A8F98"
+
+
+def source_color(name) -> str:
+    """
+    Barwa kulki dla nazwy źródła.
+
+    Normalizacja jest konieczna, bo ta sama nazwa przychodzi w kilku
+    postaciach: baza ofert ma "Pracuj.pl", log pobrań "Pracuj.pl (Optimized
+    APIs)", a lista `also_on` bywa bez ogonka. Ścinamy nawias i wielkość
+    liter, a czego nie znamy - dostaje szarość, nie losowy kolor.
+    """
+    if not name:
+        return SOURCE_FALLBACK
+    key = str(name).split("(")[0].strip().lower()
+    return SOURCES.get(key, SOURCE_FALLBACK)
+
+
 SCHEMES = {
     # Bez akcentu barwnego. Dopasowanie idzie jasnością, nie kolorem, więc
     # jedynymi barwnymi punktami na ekranie zostają ikony decyzji.
@@ -108,6 +150,25 @@ SCHEMES = {
 
 
 FONTS = {
+    # Zestaw domyślny. Poprzedni (archivo) miał jeden problem: Archivo jest
+    # grotestkiem o kwadratowych światłach, a rozciągnięcie go do wdth 112%
+    # dokwadratowiało go jeszcze bardziej. Do tego IBM Plex Mono szedł na
+    # wszystko - markę, zakładki, tytuły paneli, etykiety - więc cały układ
+    # mówił jednym, technicznym głosem i hierarchia się nie budowała.
+    #
+    # Tutaj każdy krój ma jedną roboto:
+    #   Fraunces  - marka, tytuły paneli i liczby. Szeryf o miękkich łukach,
+    #               osobny ton, którego nie da się pomylić z resztą.
+    #   Manrope   - interfejs i treść. Ciepła, okrągła geometria.
+    #   Fira Mono - WYŁĄCZNIE dane: znaczniki czasu, liczniki, procenty.
+    "redakcja": FontSet(
+        label="Fraunces + Manrope - szeryfowy ton na nagłówkach, mono tylko na danych",
+        heading="Fraunces", body="Manrope", mono="Fira Mono",
+        heading_stretch="100%",
+        heading_url="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400..700&display=swap",
+        body_url="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap",
+        mono_url="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;500;700&display=swap",
+    ),
     "archivo": FontSet(
         label="Archivo + IBM Plex - wąskie, techniczne nagłówki",
         heading="Archivo", body="IBM Plex Sans", mono="IBM Plex Mono",
@@ -198,8 +259,8 @@ yellowColor = "{STATES['amber']}"
 redColor    = "{STATES['clay']}"
 grayColor   = "{s.muted}"
 
-baseRadius       = "0.375rem"
-buttonRadius     = "0.3rem"
+baseRadius       = "0.6rem"
+buttonRadius     = "0.45rem"
 showWidgetBorder = true
 baseFontSize     = 15
 

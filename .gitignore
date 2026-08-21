@@ -41,5 +41,6 @@ scratch/
 # Notatki robocze
 streamlit_refinement_checklist.md
 
-# Zrzuty ekranu i artefakty debugowania
+# Zrzuty ekranu i artefakty debugowania (poza tymi z README)
 *.png
+!docs/*.png
