@@ -49,7 +49,8 @@ PAGE_SIZE = UI_CONFIG.get('page_size', 25)
 st.set_page_config(
     page_title="Job Search Analytics — AI Matcher",
     page_icon="💼",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 def inject_custom_css():
@@ -95,16 +96,31 @@ def inject_custom_css():
 
         [data-testid="stHeading"] { font-stretch: var(--head-stretch); }
 
-        /* Chrome Streamlita: chowamy menu i deploy, ale nigdy przycisku
-           rozwijania panelu bocznego. */
+        /* Chrome Streamlita: chowamy menu i deploy. Uchwytow panelu bocznego
+           nie przywracamy - panelu nie ma, nawigacja siedzi u gory ekranu
+           (patrz inject_workspace_css). */
         #MainMenu,
         [data-testid="stStatusWidget"],
         header [data-testid="stAppDeployButton"] { display: none; }
 
-        [data-testid="stSidebarCollapseButton"],
-        [data-testid="stExpandSidebarButton"] { display: inline-flex !important; }
+        /* Po wyłączeniu menu, deploya, statusu i uchwytów panelu bocznego
+           w pasku nagłówka nie zostało już nic - a sam pasek dalej zajmował
+           56 px u góry ekranu i kładł się przezroczystą płytą na treści.
+           Zaszłość po układzie z panelem bocznym; usuwamy cały pasek, nie
+           samo tło. */
+        [data-testid="stHeader"] { display: none; }
 
-        [data-testid="stHeader"] { background: transparent; }
+        /* Arkusze stylów idą przez st.markdown, więc każdy z nich dostaje
+           własny kontener elementu. Kontenery mają zerową wysokość, ale są
+           pełnoprawnymi dziećmi flexa i każdy dokładał swoje 15 px przerwy -
+           trzy arkusze to 45 px pustki nad paskiem z marką, których nie dało
+           się znaleźć w żadnym marginesie. display:none wyjmuje je z układu;
+           reguły w <style> działają niezależnie od tego, czy rodzic jest
+           rysowany. */
+        [data-testid="stElementContainer"]:has(> [data-testid="stMarkdown"] style),
+        [data-testid="stElementContainer"]:has(> div > [data-testid="stMarkdown"] style) {
+            display: none;
+        }
 
         [data-testid="stMainBlockContainer"] {
             padding-top: 2.6rem;
@@ -186,7 +202,7 @@ def inject_custom_css():
             position: relative;
             background: var(--raised);
             border: 1px solid var(--line);
-            border-radius: 8px;
+            border-radius: 11px;
             padding: 0.95rem 1.15rem 0.75rem 1.35rem;
             margin-bottom: 0.75rem;
             transition: background 0.13s ease, border-color 0.13s ease;
@@ -630,69 +646,23 @@ def inject_custom_css():
             color: var(--faint) !important;
         }
 
-        /* ---------- nawigacja w panelu bocznym ---------- */
-        .sidebar-sec-header {
-            font-family: var(--font-mono);
-            font-size: 0.65rem;
-            font-weight: 500;
-            letter-spacing: 0.15em;
-            color: var(--faint);
-            text-transform: uppercase;
-            margin: 1.15rem 0 0.4rem 0;
+        /* ---------- kulka portalu ----------
+           Znacznik źródła oferty. Stoi zawsze bezpośrednio przy nazwie
+           portalu - w wierszu listy, w szczegółach, na karcie i w logu
+           pobrań - więc czyta się jako etykieta tej nazwy, a nie jako
+           kolejny stan wiersza. Świadomie mniejsza od kropki decyzji
+           (.wr-dot / .jc-dot) i zawsze w parze z tekstem: obie rodziny
+           kropek bywają w jednym wierszu i nie mogą się mylić. */
+        .src-dot {
+            display: inline-block;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            margin-right: 0.34rem;
+            vertical-align: 0.05em;
+            flex: 0 0 auto;
         }
-        .sidebar-brand {
-            font-family: var(--font-head);
-            font-stretch: var(--head-stretch);
-            font-size: 1.12rem;
-            font-weight: 600;
-            letter-spacing: -0.01em;
-            color: var(--text);
-            padding-bottom: 0.2rem;
-        }
-
-        section[data-testid="stSidebar"] [role="radiogroup"] { gap: 0.05rem; }
-        section[data-testid="stSidebar"] [role="radiogroup"] label {
-            padding: 0.34rem 0.5rem;
-            border-radius: 4px;
-            border-left: 2px solid transparent;
-            transition: background 0.12s ease, border-color 0.12s ease;
-        }
-        section[data-testid="stSidebar"] [role="radiogroup"] label:hover {
-            background: var(--raised);
-        }
-        section[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
-            background: var(--raised);
-            border-left-color: var(--accent);
-        }
-        /* Kółko radia jest zbędne - zaznaczenie niesie już tło i złota
-           krawędź. Etykieta sama ma data-baseweb="radio", stąd ten selektor. */
-        section[data-testid="stSidebar"] [role="radiogroup"] label[data-baseweb="radio"] > div:first-child {
-            display: none;
-        }
-        section[data-testid="stSidebar"] [role="radiogroup"] label p { font-size: 0.86rem; }
-
-        /* Nazwa pliku CV czytelnie, katalog cicho pod spodem. */
-        .cv-name {
-            font-family: var(--font-mono);
-            font-size: 0.82rem;
-            color: var(--text);
-        }
-        .cv-dir {
-            font-size: 0.68rem;
-            color: var(--faint);
-            word-break: break-all;
-            line-height: 1.35;
-            margin-top: 0.15rem;
-            margin-bottom: 0.6rem;
-        }
-        /* Jednozdaniowe wyjaśnienie pod przyciskiem - dymek pomocy widzi
-           tylko ten, kto najedzie myszą, a to musi być widoczne od razu. */
-        .sidebar-hint {
-            font-size: 0.68rem;
-            color: var(--faint);
-            line-height: 1.4;
-            margin: 0.35rem 0 0.2rem 0;
-        }
+        .src-name { white-space: nowrap; }
 
         /* ---------- kanban ---------- */
         .kb-head {
@@ -738,11 +708,13 @@ def inject_custom_css():
             outline: 2px solid var(--accent);
             outline-offset: 2px;
         }
-        @media (prefers-reduced-motion: reduce) {
-            * { transition: none !important; animation: none !important; }
-        }
+        /* Swiadomie bez @media (prefers-reduced-motion: reduce).
+           Ta regula kasowala wszystkie animacje i przejscia gwiazdka, a
+           Windows z wylaczonymi efektami (MinAnimate=0) zglasza wlasnie
+           "reduce" - przez co zamowiony wjazd wierszy nie odpalal sie w ogole.
+           Ruch w tym ukladzie jest czescia projektu, nie ozdobnikiem. */
         @media (max-width: 900px) {
-            .jc-head { flex-direction: column; gap: 0.5rem; }
+            .jc-top { flex-direction: column; gap: 0.5rem; }
             .jc-score { text-align: left; }
             .rail-item { border-right: none; padding-left: 0; }
         }
@@ -788,6 +760,26 @@ def company_mark(name: str):
     initials = "".join(w[0] for w in (meaningful or words)[:2]).upper()[:2] or "?"
     hue = int(hashlib.md5(clean.lower().encode()).hexdigest()[:6], 16) % 360
     return initials, hue
+
+
+def src_dot(name, label=True) -> str:
+    """
+    Kulka barwna oznaczająca portal, z którego pochodzi oferta.
+
+    Jedna funkcja na całą aplikację, bo kulka ma wyglądać tak samo i stać
+    w tym samym miejscu wszędzie: w wierszu listy, w szczegółach oferty,
+    na karcie i w logu pobrań. Kulka trzyma się nazwy źródła - nie kolumny,
+    nie krawędzi wiersza - więc niezależnie od układu czyta się jako
+    "to jest znacznik tego portalu".
+
+    Barwa siedzi w ui_theme.source_color(), razem z resztą palety.
+    """
+    if not name:
+        return ""
+    color = ui_theme.source_color(name)
+    dot = (f'<span class="src-dot" style="background:{color}" '
+           f'title="{_esc(name)}"></span>')
+    return f'{dot}<span class="src-name">{_esc(name)}</span>' if label else dot
 
 
 def fmt_n(value) -> str:
@@ -945,7 +937,8 @@ def update_decision(link, status, rating, stage=None):
     existing_stage = old_val.get('stage') if isinstance(old_val, dict) else None
     new_stage = stage if stage else (existing_stage or status)
 
-    decision_data = {"status": status, "rating": rating, "stage": new_stage}
+    decision_data = {"status": status, "rating": rating, "stage": new_stage,
+                     "decided_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
     if status == "apply" or new_stage == "apply":
         decision_data["applied_at"] = old_val.get("applied_at") if isinstance(old_val, dict) and old_val.get("applied_at") else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
@@ -984,6 +977,10 @@ def init_session_state():
     
     # Job lookup dict (built once on data load)
     if 'job_lookup' not in st.session_state: st.session_state.job_lookup = {}
+
+    # Pulpit: ktora zakladka i ktora oferta jest otwarta w lewym panelu
+    if 'ws_view' not in st.session_state: st.session_state.ws_view = "Dopasowane"
+    if 'ws_selected' not in st.session_state: st.session_state.ws_selected = None
 
 def load_data():
     """Loads both Raw DB and Analyzed Jobs into session state"""
@@ -1152,9 +1149,11 @@ def render_job_card(job, key_prefix, status=None, rating=None, match=None, show_
         # --- meta: firma, miejsce, tryb, portal ---
         work_mode = detect_work_mode(job.location or "", job.description or "", job.title or "")
         meta_bits = [f'<span class="jc-org">{_esc(job.company)}</span>']
-        for value in (job.location or "Warszawa", work_mode["label"], job.source):
+        for value in (job.location or "Warszawa", work_mode["label"]):
             if value:
                 meta_bits.append(f'<span>{_esc(value)}</span>')
+        if job.source:
+            meta_bits.append(f'<span class="jc-src">{src_dot(job.source)}</span>')
         # Ta sama oferta bywa na kilku portalach - deduplikacja zostawia jeden
         # rekord, ale zapisuje pozostałe linki w `also_on`. Pokazujemy je, bo
         # bywa, że drugi portal ma pełniejszy opis albo działający formularz.
@@ -2307,12 +2306,1963 @@ def render_add_manual_view():
                        st.rerun()
 
 # =============================================================================
-# NAWIGACJA
+# PULPIT: WARSTWA WIZUALNA
 # =============================================================================
 
-# Jedno zrodlo prawdy: kolejnosc pozycji w panelu bocznym i mapowanie na
-# funkcje widoku. Wczesniej byly to dwie osobne listy, ktore trzeba bylo
-# recznie trzymac w zgodzie.
+def inject_workspace_css():
+    """
+    Warstwa wizualna pulpitu. Trzymana osobno od inject_custom_css, bo dotyczy
+    wyłącznie nowego układu - kartę oferty z listy zostawiamy w spokoju.
+
+    Zasady te same co wyżej: zero JavaScriptu, zawężanie klasą st-key-*,
+    !important tylko przy stylach inline Streamlita.
+
+    Rytm pionowy: odstępy między blokami panelu ustawia CSS, nie Streamlit.
+    Dlatego treść panelu idzie jednym st.markdown - gdy szła kilkoma, do moich
+    marginesów dokładały się domyślne przerwy między elementami i odstępy
+    wychodziły 44 / 42 / 16 / 13 px zamiast jednej skali.
+    """
+    st.markdown("""
+        <style>
+        /* ---------- panel boczny nie istnieje: nawigacja jest u góry ----------
+           Sam collapse nie wystarczy - zostaje wąski uchwyt ze strzałkami,
+           który wygląda jak niedokończona nawigacja. Chowamy panel i uchwyt. */
+        [data-testid="stSidebar"],
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="stExpandSidebarButton"],
+        [data-testid="collapsedControl"] { display: none !important; }
+
+        [data-testid="stMainBlockContainer"] {
+            padding-top: 1.5rem;
+            padding-bottom: 2.5rem;
+            max-width: 1680px;
+        }
+
+        /* ---------- pasek u góry ----------
+           Marka i liczby w jednym bloku HTML, nie w kolumnach Streamlita:
+           kolumny mierzyły własną wysokość inaczej niż treść i włosowa kreska
+           przechodziła przez cyfry zamiast pod nimi. */
+        .wt-bar {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 2rem;
+            flex-wrap: wrap;
+            padding-bottom: 0.7rem;
+            border-bottom: 1px solid var(--line-soft);
+        }
+        /* Marka: szeryf, małe litery, bez rozstrzelenia. Wcześniej szła
+           tym samym mono-wersalikiem co zakładki, etykiety i log - czyli
+           niczym się nie różniła od podpisu kolumny. */
+        .wt-brand {
+            font-family: var(--font-head);
+            font-size: 1.3rem;
+            font-weight: 600;
+            letter-spacing: -0.015em;
+            line-height: 1;
+            color: var(--text-bright);
+            white-space: nowrap;
+        }
+        .wt-brand span { color: var(--faint); font-weight: 400; }
+        .wt-rail { display: flex; gap: 2.2rem; flex-wrap: wrap; }
+
+        /* Liczba nad podpisem, nie obok. Wcześniej obie części szły w jednej
+           linii tym samym mono-wersalikiem i cały róg czytał się jak jeden
+           ciąg znaków - trzeba go było rozszyfrowywać zamiast rzucić okiem.
+           Teraz liczba jest szeryfowa i duża, podpis drobny i cichy: dwa
+           różne tony zamiast jednego. */
+        .wt-item {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 0.1rem;
+            line-height: 1;
+        }
+        .wt-item b {
+            font-family: var(--font-head);
+            font-size: 1.34rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+            color: var(--text-bright);
+        }
+        .wt-item span {
+            font-family: var(--font-body);
+            font-size: 0.67rem;
+            font-weight: 500;
+            letter-spacing: 0.01em;
+            color: var(--faint);
+        }
+
+        /* ---------- zakładki ---------- */
+        [class*="st-key-wstabs"] { margin: 0.5rem 0 0.15rem; }
+        [class*="st-key-wstabs"] [data-baseweb="button-group"] { gap: 0.1rem; }
+        [class*="st-key-wstabs"] button {
+            border: 0 !important;
+            background: transparent !important;
+            border-radius: 0 !important;
+            border-bottom: 2px solid transparent !important;
+            padding: 0.34rem 0.7rem !important;
+            font-family: var(--font-body) !important;
+            font-size: 0.84rem !important;
+            font-weight: 500 !important;
+            letter-spacing: 0 !important;
+            text-transform: none !important;
+            color: var(--muted) !important;
+            transition: color .18s ease, border-color .18s ease;
+        }
+        [class*="st-key-wstabs"] button:hover { color: var(--text) !important; }
+        [class*="st-key-wstabs"] button[aria-checked="true"],
+        [class*="st-key-wstabs"] button[kind="segmented_controlActive"] {
+            color: var(--text-bright) !important;
+            font-weight: 600 !important;
+            border-bottom-color: var(--accent) !important;
+        }
+
+        .wp-hint-top {
+            font-size: 0.73rem;
+            color: var(--faint);
+            margin: 0.55rem 0 0;
+        }
+
+        /* ---------- panele ---------- */
+        [class*="st-key-wscols"] { margin-top: 1.1rem; }
+        [class*="st-key-wsleft"],
+        [class*="st-key-wsright"] {
+            background: var(--raised);
+            border: 1px solid var(--line-soft);
+            border-radius: 0.8rem;
+            padding: 0.95rem 1.1rem 1.15rem;
+            min-height: 62vh;
+        }
+        /* Jedna skala odstępów w obu panelach - reszta rytmu siedzi
+           w marginesach bloków HTML, nie w domyślnych przerwach Streamlita. */
+        [class*="st-key-wsleft"] > [data-testid="stVerticalBlock"],
+        [class*="st-key-wsright"] > [data-testid="stVerticalBlock"] {
+            gap: 0.7rem;
+        }
+
+        /* Nagłówek panelu ma stałą wysokość po obu stronach, żeby pierwsza
+           włosowa kreska w lewym i prawym panelu leżała na tej samej linii -
+           także wtedy, gdy po jednej stronie siedzą przyciski, a po drugiej
+           sam napis. */
+        .wp-head,
+        [class*="st-key-wshead"] {
+            min-height: 2.6rem;
+            border-bottom: 1px solid var(--line-soft);
+        }
+        .wp-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.8rem;
+            padding-bottom: 0.55rem;
+        }
+        [class*="st-key-wshead"] {
+            align-items: center !important;
+            padding-bottom: 0.45rem;
+        }
+        .wp-head.is-mid { margin-top: 0.55rem; }
+        /* Tytuł panelu. Wcześniej był mikro-wersalikiem w mono - czyli
+           dokładnie tym samym kształtem co etykieta operacji w logu i co
+           podpis liczby w rogu. Trzy różne rzeczy wyglądały identycznie
+           i nagłówki ginęły. Teraz to jedyne szeryfowe napisy w panelu:
+           większe, zwykłą wielkością liter, w kolorze tekstu.
+           Zdania w kodzie są pisane małą literą, więc wielką dokłada CSS -
+           dzięki temu nie trzeba pamiętać o niej w każdym wywołaniu. */
+        .wp-label {
+            font-family: var(--font-head);
+            font-size: 1.03rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--text);
+            line-height: 1.35;
+        }
+        .wp-label::first-letter { text-transform: uppercase; }
+
+        .wp-count {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--faint);
+            font-variant-numeric: tabular-nums;
+        }
+        .wp-empty {
+            padding: 1.4rem 0;
+            font-size: 0.8rem;
+            color: var(--faint);
+        }
+        .wp-foot {
+            padding-top: 0.8rem;
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            letter-spacing: 0.02em;
+            color: var(--faint);
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .wp-hint {
+            margin-top: 1.3rem;
+            padding-top: 0.85rem;
+            border-top: 1px solid var(--line-soft);
+            font-size: 0.73rem;
+            line-height: 1.55;
+            color: var(--faint);
+        }
+        .wp-note {
+            font-size: 0.78rem;
+            line-height: 1.55;
+            color: var(--muted);
+            padding: 0.7rem 0.9rem;
+            border-left: 2px solid var(--line);
+            background: rgba(255, 255, 255, 0.018);
+            border-radius: 0 0.4rem 0.4rem 0;
+        }
+        .wp-note.is-ok { border-left-color: var(--accent); }
+        .wp-note.is-warn { border-left-color: var(--amber); }
+        .wp-note em { color: var(--text); font-style: normal; }
+
+        [class*="st-key-wslisthead"] [data-testid="stTextInput"] input {
+            font-size: 0.79rem;
+        }
+        [class*="st-key-wslisthead"] > [data-testid="stVerticalBlock"] { gap: 0.55rem; }
+
+        /* ---------- wiersz oferty ---------- */
+        [class*="st-key-wsrow_"],
+        [class*="st-key-wsdec_"] {
+            position: relative;
+            border-bottom: 1px solid var(--line-soft);
+            transition: background-color .16s ease;
+        }
+        [class*="st-key-wsrow_"]:hover,
+        [class*="st-key-wsdec_"]:hover { background: rgba(255, 255, 255, 0.028); }
+        [class*="st-key-wsrow_"] [data-testid="stVerticalBlock"],
+        [class*="st-key-wsdec_"] [data-testid="stVerticalBlock"] { gap: 0 !important; }
+        [class*="st-key-wsrow_"] [data-testid="stElementContainer"],
+        [class*="st-key-wsdec_"] [data-testid="stElementContainer"] { margin: 0 !important; }
+        /* Klucz przycisku ląduje na kontenerze elementu, nie na samym
+           przycisku - i to ten kontener ma zerową wysokość. Rozciągamy go
+           na cały wiersz, dzięki czemu klikalne jest całe pole, a nie
+           piętnastopikselowy pasek. */
+        [class*="st-key-btn_wsrow_"],
+        [class*="st-key-btn_wsdec_"] {
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            margin: 0 !important;
+            z-index: 4;
+        }
+        [class*="st-key-btn_wsrow_"] .stButton,
+        [class*="st-key-btn_wsrow_"] .stButton > button,
+        [class*="st-key-btn_wsdec_"] .stButton,
+        [class*="st-key-btn_wsdec_"] .stButton > button {
+            width: 100% !important;
+            height: 100% !important;
+            min-height: 0 !important;
+            padding: 0 !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            cursor: pointer;
+        }
+        [class*="st-key-btn_wsrow_"] .stButton > button,
+        [class*="st-key-btn_wsdec_"] .stButton > button { opacity: 0; }
+
+        .wr-row {
+            display: grid;
+            grid-template-columns: 1.6rem minmax(0, 1fr) 3.2rem;
+            grid-template-rows: auto auto auto;
+            align-items: center;
+            column-gap: 0.75rem;
+            padding: 0.62rem 0.15rem 0.58rem;
+        }
+        .wr-rank {
+            grid-row: 1 / span 2;
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+            color: var(--faint);
+        }
+        .wr-main { grid-column: 2; min-width: 0; }
+        .wr-title {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.91rem;
+            font-weight: 500;
+            line-height: 1.3;
+            color: var(--text-bright);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .wr-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+        .wr-meta {
+            margin-top: 0.2rem;
+            font-size: 0.69rem;
+            line-height: 1.3;
+            color: var(--faint);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .wr-org { color: var(--muted); }
+        /* Nazwa portalu idzie krojem otoczenia, nie mono. W mono świeciła
+           mocniej niż nazwa firmy stojąca obok, a to firma jest ważniejsza -
+           hierarchia stawała na głowie. Rozpoznanie portalu niesie teraz
+           kulka, więc sam napis może być cichy. */
+        .wr-src { color: var(--muted); }
+        .wr-sep { margin: 0 0.35rem; opacity: 0.45; }
+        .wr-score {
+            grid-column: 3;
+            grid-row: 1 / span 2;
+            text-align: right;
+            font-family: var(--font-mono);
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+        .wr-score small { font-size: 0.58rem; margin-left: 0.06rem; opacity: 0.7; }
+        .wr-score.is-none { color: var(--faint); font-weight: 400; }
+        .wr-bar {
+            grid-column: 2 / span 2;
+            grid-row: 3;
+            height: 2px;
+            margin-top: 0.5rem;
+            background: var(--line-soft);
+        }
+        .wr-bar i {
+            display: block;
+            height: 2px;
+            opacity: 0.42;
+            transform-origin: left center;
+        }
+        [class*="st-key-wsrow_"]:hover .wr-bar i,
+        .wr-row.is-active .wr-bar i { opacity: 0.85; }
+        .wr-row.is-active {
+            background: var(--accent-soft);
+            box-shadow: inset 2px 0 0 var(--accent);
+        }
+        .wr-stage {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            margin: 1.1rem 0 0;
+            padding-bottom: 0.35rem;
+            border-bottom: 1px solid var(--line-soft);
+            font-family: var(--font-body);
+            font-size: 0.64rem;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--faint);
+        }
+
+        /* ---------- log po lewej ---------- */
+        .wl-block { display: flex; flex-direction: column; }
+        .wl-line {
+            display: grid;
+            grid-template-columns: 9.6rem 6.2rem minmax(0, 1fr) auto;
+            align-items: baseline;
+            gap: 0.7rem;
+            padding: 0.4rem 0.15rem;
+            font-size: 0.75rem;
+            min-width: 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        }
+        .wl-time {
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+            color: var(--faint);
+            white-space: nowrap;
+        }
+        /* Rodzaj operacji to etykieta, nie dana - stąd krój interfejsu
+           i mocno ścięte rozstrzelenie. Ma być najcichszą warstwą wiersza. */
+        .wl-op {
+            font-family: var(--font-body);
+            font-size: 0.63rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--faint);
+            white-space: nowrap;
+        }
+        .wl-op.is-bad { color: var(--clay); }
+        .wl-what {
+            font-family: var(--font-mono);
+            font-size: 0.71rem;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .wl-detail {
+            color: var(--faint);
+            font-size: 0.7rem;
+            white-space: nowrap;
+            text-align: right;
+        }
+        .wl-dec {
+            display: grid;
+            grid-template-columns: 5.6rem minmax(0, 1fr) auto;
+            align-items: baseline;
+            gap: 0.7rem;
+            padding: 0.46rem 0.15rem;
+            min-width: 0;
+        }
+        .wl-badge {
+            justify-self: start;
+            padding: 0.06rem 0.4rem;
+            border: 1px solid;
+            border-radius: 0.3rem;
+            font-family: var(--font-body);
+            font-size: 0.6rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+        }
+        .wl-title {
+            color: var(--text);
+            font-size: 0.77rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+        }
+        .wl-org {
+            color: var(--faint);
+            font-size: 0.7rem;
+            white-space: nowrap;
+            text-align: right;
+        }
+
+        /* ---------- szczegóły oferty ----------
+           Cały blok idzie jednym markdownem, więc te marginesy są jedynym,
+           co rozdziela sekcje. Skala: 1.05rem między blokami, 0.85rem wewnątrz. */
+        .wd-state {
+            display: inline-block;
+            margin-bottom: 0.6rem;
+            padding: 0.1rem 0.45rem;
+            border: 1px solid;
+            border-radius: 0.3rem;
+            font-family: var(--font-mono);
+            font-size: 0.6rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .wd-title {
+            font-family: var(--font-head);
+            font-stretch: var(--head-stretch);
+            font-size: 1.45rem;
+            line-height: 1.18;
+            letter-spacing: -0.018em;
+            color: var(--text-bright);
+            text-wrap: balance;
+        }
+        .wd-meta {
+            margin-top: 0.4rem;
+            font-size: 0.74rem;
+            line-height: 1.5;
+            color: var(--faint);
+        }
+        .wd-sep { margin: 0 0.4rem; opacity: 0.45; }
+
+        /* Ocena dostaje własny pas: liczba, podpis i szyna, która pokazuje
+           ją jeszcze raz - oko łapie proporcję szybciej niż cyfrę. */
+        .wd-gauge {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            align-items: center;
+            column-gap: 1.1rem;
+            margin-top: 1.05rem;
+            padding: 0.8rem 0;
+            border-top: 1px solid var(--line-soft);
+            border-bottom: 1px solid var(--line-soft);
+        }
+        .wd-score {
+            font-family: var(--font-mono);
+            font-size: 2.15rem;
+            font-weight: 600;
+            line-height: 1;
+            letter-spacing: -0.03em;
+        }
+        .wd-score small { font-size: 0.8rem; margin-left: 0.08rem; opacity: 0.65; }
+        .wd-gauge-lbl {
+            font-family: var(--font-body);
+            font-size: 0.63rem;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--faint);
+        }
+        .wd-rail {
+            margin-top: 0.5rem;
+            height: 3px;
+            background: var(--line-soft);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .wd-rail i {
+            display: block;
+            height: 3px;
+            border-radius: 2px;
+            transform-origin: left center;
+        }
+        .wd-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            margin-top: 1.05rem;
+        }
+        .wd-reason {
+            margin-top: 1.05rem;
+            padding: 0.65rem 0.9rem;
+            border-left: 2px solid var(--accent);
+            background: var(--accent-soft);
+            border-radius: 0 0.4rem 0.4rem 0;
+            font-size: 0.79rem;
+            line-height: 1.55;
+            color: var(--text);
+        }
+
+        /* Opis: własne pole przewijania z wygaszeniem u dołu, żeby ucięcie
+           tekstu wyglądało na zamierzone, a nie na przypadkowe. */
+        .wd-descwrap { position: relative; margin-top: 1.05rem; }
+        .wd-descwrap::after {
+            content: "";
+            position: absolute;
+            left: 0; right: 0; bottom: 0;
+            height: 2.6rem;
+            pointer-events: none;
+            background: linear-gradient(to bottom,
+                        rgba(0, 0, 0, 0), var(--raised) 88%);
+        }
+        .wd-desc {
+            max-height: 15.5rem;
+            overflow-y: auto;
+            padding: 0 1rem 1.8rem 0;
+            font-size: 0.8rem;
+            line-height: 1.62;
+            color: var(--muted);
+        }
+        .wd-desc::-webkit-scrollbar { width: 5px; }
+        .wd-desc::-webkit-scrollbar-track { background: transparent; }
+        .wd-desc::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+        .wd-p { margin: 0 0 0.7rem; }
+        .wd-lead {
+            margin: 0.85rem 0 0.4rem;
+            color: var(--text);
+            font-size: 0.77rem;
+        }
+        .wd-list { margin: 0 0 0.8rem; padding: 0; list-style: none; }
+        .wd-list li {
+            position: relative;
+            padding-left: 0.95rem;
+            margin-bottom: 0.3rem;
+        }
+        .wd-list li::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0.62em;
+            width: 5px;
+            height: 1px;
+            background: var(--accent);
+            opacity: 0.6;
+        }
+
+        /* ---------- przyciski ----------
+           Bez wersalików i bez rozstrzelenia. Wcześniej dwa słowa zajmowały
+           181 px i krzyczały mocniej niż tytuł oferty; teraz przycisk jest
+           tak szeroki, jak jego napis. */
+        [class*="st-key-wsactions"] button,
+        [class*="st-key-wsactions"] a[kind],
+        [class*="st-key-wshead"] button,
+        [class*="st-key-wshead"] a[kind],
+        [class*="st-key-wstool"] button,
+        [class*="st-key-wstool"] a[kind] {
+            background: transparent !important;
+            border: 1px solid var(--line) !important;
+            border-radius: 0.4rem !important;
+            color: var(--muted) !important;
+            font-family: var(--font-body) !important;
+            font-size: 0.76rem !important;
+            font-weight: 400 !important;
+            letter-spacing: 0 !important;
+            text-transform: none !important;
+            padding: 0.3rem 0.6rem !important;
+            min-height: 0 !important;
+            line-height: 1.45 !important;
+            box-shadow: none !important;
+            transition: color .16s ease, border-color .16s ease,
+                        background-color .16s ease;
+        }
+        [class*="st-key-wsactions"] button:hover,
+        [class*="st-key-wsactions"] a[kind]:hover,
+        [class*="st-key-wshead"] button:hover,
+        [class*="st-key-wshead"] a[kind]:hover,
+        [class*="st-key-wstool"] button:hover,
+        [class*="st-key-wstool"] a[kind]:hover {
+            color: var(--text-bright) !important;
+            border-color: var(--accent-edge) !important;
+            background: var(--accent-soft) !important;
+        }
+        [class*="st-key-wsactions"] button:disabled,
+        [class*="st-key-wstool"] button:disabled {
+            opacity: 0.35 !important;
+            background: transparent !important;
+            border-color: var(--line-soft) !important;
+        }
+        [class*="st-key-wsactions"] button [data-testid="stIconMaterial"],
+        [class*="st-key-wshead"] button [data-testid="stIconMaterial"],
+        [class*="st-key-wshead"] a [data-testid="stIconMaterial"],
+        [class*="st-key-wstool"] button [data-testid="stIconMaterial"] {
+            font-size: 0.95rem !important;
+            opacity: 0.75;
+        }
+
+        /* Odrzucenie i usunięcie mają barwę konsekwencji, nie akcentu. */
+        [class*="st-key-ws_rej_"] button:hover,
+        [class*="st-key-ws_del_"] button:hover,
+        [class*="st-key-ws_delyes_"] button,
+        [class*="st-key-wstool_recalc"] button:hover {
+            color: var(--clay) !important;
+            border-color: color-mix(in srgb, var(--clay) 45%, transparent) !important;
+            background: color-mix(in srgb, var(--clay) 10%, transparent) !important;
+        }
+        [class*="st-key-ws_conf_"] button {
+            color: var(--accent) !important;
+            border-color: var(--accent-edge) !important;
+        }
+        /* Kroki pipeline'u to jedyne przyciski na pełną szerokość - są
+           głównym działaniem swojej sekcji, nie jednym z czterech. */
+        [class*="st-key-wstool_steps"] button { padding: 0.42rem 0.7rem !important; }
+
+        /* Rząd drugoplanowy (Przywróć / Usuń) oddziela włosowa linia
+           własnego kontenera - pusty .wp-head robił za separator, a po
+           ujednoliceniu wysokości nagłówków urósł do 2,45rem. */
+        [class*="st-key-wssecond"] {
+            border-top: 1px solid var(--line-soft);
+            padding-top: 0.65rem;
+            margin-top: 0.35rem;
+        }
+        .wd-ratelbl {
+            font-family: var(--font-body);
+            font-size: 0.63rem;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--faint);
+            white-space: nowrap;
+        }
+        [class*="st-key-wsactions"] [data-testid="stSliderTickBarMin"],
+        [class*="st-key-wsactions"] [data-testid="stSliderTickBarMax"] { display: none; }
+        [class*="st-key-wsactions"] [data-testid="stSlider"] { padding-top: 0; }
+        [class*="st-key-wsactions"] [data-testid="stThumbValue"] {
+            font-family: var(--font-mono);
+            font-size: 0.66rem;
+            color: var(--accent);
+        }
+        [class*="st-key-wsactions"] > [data-testid="stVerticalBlock"] { gap: 0.5rem; }
+
+        /* ---------- widoki narzędziowe w tym samym fasonie ---------- */
+        .wx-step {
+            padding: 0.95rem 0 0.55rem;
+            border-top: 1px solid var(--line-soft);
+        }
+        .wx-step.is-first { border-top: 0; padding-top: 0.15rem; }
+        .wx-num {
+            font-family: var(--font-mono);
+            font-size: 0.64rem;
+            letter-spacing: 0.1em;
+            color: var(--accent);
+            font-variant-numeric: tabular-nums;
+        }
+        .wx-title {
+            margin-top: 0.2rem;
+            font-family: var(--font-head);
+            font-stretch: var(--head-stretch);
+            font-size: 1.08rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--text-bright);
+        }
+        .wx-desc {
+            margin-top: 0.35rem;
+            font-size: 0.77rem;
+            line-height: 1.55;
+            color: var(--muted);
+        }
+        .wx-meta {
+            margin-top: 0.45rem;
+            font-family: var(--font-mono);
+            font-size: 0.63rem;
+            line-height: 1.55;
+            color: var(--faint);
+        }
+        .wx-stat {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: baseline;
+            gap: 0.7rem;
+            padding: 0.44rem 0.15rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        }
+        .wx-stat-lbl { font-size: 0.75rem; color: var(--muted); }
+        .wx-stat-val {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-bright);
+        }
+        .wx-stat-val.is-on { color: var(--accent); }
+        .wx-stat-val.is-off { color: var(--clay); }
+        .wx-file {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            color: var(--text);
+            word-break: break-all;
+        }
+        .wx-path {
+            margin-top: 0.15rem;
+            font-family: var(--font-mono);
+            font-size: 0.62rem;
+            color: var(--faint);
+            word-break: break-all;
+        }
+
+        /* ---------- wejście: rozciąganie i wjazd ----------
+           Świadomie bez @media (prefers-reduced-motion) - ten ruch jest
+           zamówioną częścią układu, a nie ozdobnikiem. */
+        @keyframes ws-row-in {
+            from { opacity: 0; transform: translateX(14px); }
+            to   { opacity: 1; transform: none; }
+        }
+        @keyframes ws-bar-grow {
+            from { transform: scaleX(0); }
+            to   { transform: scaleX(1); }
+        }
+        @keyframes ws-fade-in {
+            from { opacity: 0; transform: translateY(7px); }
+            to   { opacity: 1; transform: none; }
+        }
+        .wr-row.is-fresh,
+        .wl-line.is-fresh,
+        .wl-dec.is-fresh,
+        .wx-step.is-fresh {
+            opacity: 0;
+            animation: ws-row-in .44s cubic-bezier(.16, 1, .3, 1) forwards;
+            animation-delay: calc(var(--i, 0) * 34ms);
+        }
+        .wr-row.is-fresh .wr-bar i {
+            animation: ws-bar-grow .8s cubic-bezier(.16, 1, .3, 1) forwards;
+            animation-delay: calc(var(--i, 0) * 34ms + 130ms);
+        }
+        .wd-part {
+            opacity: 0;
+            animation: ws-fade-in .42s cubic-bezier(.16, 1, .3, 1) forwards;
+            animation-delay: calc(var(--i, 0) * 55ms);
+        }
+        .wd-rail i {
+            animation: ws-bar-grow .85s cubic-bezier(.16, 1, .3, 1) forwards;
+            animation-delay: 240ms;
+        }
+
+        /* ---------- węższe okna ---------- */
+        @media (max-width: 1100px) {
+            [class*="st-key-wscols"] [data-testid="stHorizontalBlock"] {
+                flex-direction: column;
+            }
+            [class*="st-key-wscols"] [data-testid="stColumn"] {
+                width: 100% !important;
+                flex: 1 1 100% !important;
+            }
+            [class*="st-key-wsleft"],
+            [class*="st-key-wsright"] { min-height: 0; }
+            [class*="st-key-wsleft"] { margin-bottom: 0.8rem; }
+        }
+        @media (max-width: 820px) {
+            .wl-line { grid-template-columns: minmax(0, 1fr) auto; }
+            .wl-time, .wl-op { grid-column: 1 / -1; }
+        }
+        @media (max-width: 640px) {
+            .wt-rail { gap: 1.1rem; }
+            .wr-row { grid-template-columns: 1.3rem minmax(0, 1fr) 2.8rem; }
+            .wd-score { font-size: 1.75rem; }
+            .wd-title { font-size: 1.18rem; }
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+# =============================================================================
+# PULPIT: NAWIGACJA U GORY + DWA PANELE
+# =============================================================================
+
+WS_TABS = ["Dopasowane", "Wszystkie", "Ocenione", "Zapisane", "Aspiracyjne", "Odrzucone"]
+WS_TOOLS = ["Tablica", "Dodaj z linku", "Panel sterowania"]
+WS_ALL = WS_TABS + WS_TOOLS
+
+WS_TAB_HINT = {
+    "Dopasowane": "ocenione przez AI, jeszcze nietknięte przez Ciebie",
+    "Wszystkie":  "cała baza prosto ze skraperów",
+    "Ocenione":   "wystawiłeś ocenę i zostawiłeś na później",
+    "Zapisane":   "zapisane oraz te, gdzie aplikacja już poszła",
+    "Aspiracyjne": "za wysoko na teraz, ale w tę stronę celujesz",
+    "Odrzucone":  "odrzucone - profil uczy się, czego nie chcesz",
+    "Tablica":    "oferty, w których coś się dzieje - po lewej etap i decyzje",
+    "Dodaj z linku": "wklej adres oferty; po lewej podgląd tego, co wpadnie do bazy",
+    "Panel sterowania": "po lewej stan danych, po prawej to, co go zmienia",
+}
+
+WS_STAGE_NAMES = {
+    "save":      "Zapisane",
+    "apply":     "Wysłane",
+    "interview": "Rozmowa",
+    "offer":     "Oferta",
+    "archive":   "Archiwum",
+}
+# Stare zapisy używały innych nazw etapu
+WS_STAGE_LEGACY = {"saved": "save", "reject": "archive", "rejected": "archive"}
+
+
+def _ws_touch():
+    """
+    Podbija licznik zmian danych.
+
+    Lista ofert dla zakładki jest pamiętana między przebiegami - bez tego
+    każde kliknięcie przeliczało piętnaście tysięcy ofert od nowa. Licznik
+    jest jedynym sygnałem, że pamięć trzeba wyrzucić.
+    """
+    st.session_state["_ws_rev"] = st.session_state.get("_ws_rev", 0) + 1
+
+
+def _ws_fingerprint():
+    return (len(st.session_state.raw_jobs),
+            len(st.session_state.analyzed_matches),
+            len(st.session_state.user_decisions),
+            st.session_state.get("_ws_rev", 0))
+
+
+def _ws_status_dot(status):
+    if status in DECISION_STYLE:
+        color, label = DECISION_STYLE[status]
+        return color, label
+    return None, None
+
+
+def ws_collect(tab, search):
+    """
+    Zwraca listę krotek (job, match, status, rating) dla zakładki.
+
+    Jedno miejsce, w którym zakładka zamienia się w zbiór ofert - dzięki temu
+    prawy panel nie wie nic o tym, skąd dane pochodzą, a dołożenie zakładki
+    to dopisanie jednej gałęzi tutaj.
+    """
+    matches_by_link = {m.job.link: m for m in st.session_state.analyzed_matches}
+    out = []
+
+    def add(job, match):
+        status, rating = get_decision(job.link)
+        out.append((job, match, status, rating))
+
+    if tab == "Dopasowane":
+        for m in st.session_state.analyzed_matches:
+            status, _ = get_decision(m.job.link)
+            if status in ('reject', 'save', 'apply', 'rated', 'aspirational'):
+                continue
+            add(m.job, m)
+        out.sort(key=lambda t: t[1].match_percentage if t[1] else -1, reverse=True)
+
+    elif tab == "Wszystkie":
+        for j in st.session_state.raw_jobs:
+            add(j, matches_by_link.get(j.link))
+        out.sort(key=lambda t: (t[1].match_percentage if t[1] else -1,
+                                getattr(t[0], "scraped_at", "") or ""), reverse=True)
+
+    else:
+        wanted = {
+            "Ocenione": ('rated',),
+            "Zapisane": ('save', 'apply'),
+            "Aspiracyjne": ('aspirational',),
+            "Odrzucone": ('reject',),
+        }[tab]
+        # Kolejność w user_decisions jest chronologiczna - update_decision
+        # przenosi wpis na koniec. Odwracamy, żeby najświeższe były u góry.
+        for link in reversed(list(st.session_state.user_decisions.keys())):
+            status, rating = get_decision(link)
+            if status not in wanted:
+                continue
+            job = find_job_obj(link)
+            if job is None:
+                continue
+            out.append((job, matches_by_link.get(link), status, rating))
+
+    if search:
+        q = search.lower()
+        out = [t for t in out
+               if q in (t[0].title or "").lower() or q in (t[0].company or "").lower()]
+    return out
+
+
+def ws_collect_cached(tab, search):
+    """ws_collect z pamięcią na czas życia sesji - patrz _ws_touch."""
+    sig = (tab, search) + _ws_fingerprint()
+    cache = st.session_state.setdefault("_ws_cache", {})
+    if cache.get("sig") != sig:
+        cache["sig"] = sig
+        cache["items"] = ws_collect(tab, search)
+    return cache["items"]
+
+
+def ws_panel_head(label, right="", mid=False):
+    cls = "wp-head is-mid" if mid else "wp-head"
+    right_html = f'<div class="wp-count">{_esc(right)}</div>' if right != "" else ''
+    st.markdown(f'<div class="{cls}"><div class="wp-label">{_esc(label)}</div>'
+                f'{right_html}</div>', unsafe_allow_html=True)
+
+
+def _wd_body_html(paragraphs):
+    """
+    Opis oferty jako czytelny blok, a nie ciąg osieroconych linijek.
+
+    Scrapery gubią znaczniki listy: wymagania przychodzą jako osobne akapity
+    bez kropek, przez co panel wyglądał na rozsypany. Krótki fragment bez
+    kropki na końcu (albo dowolny fragment po linii kończącej się dwukropkiem)
+    wraca na swoje miejsce jako punkt listy.
+    """
+    parts, bullets = [], []
+
+    def flush():
+        if bullets:
+            parts.append('<ul class="wd-list">'
+                         + "".join(f'<li>{_esc(b)}</li>' for b in bullets)
+                         + '</ul>')
+            bullets.clear()
+
+    listing = False
+    for raw in paragraphs:
+        text = (raw or "").strip()
+        if not text:
+            continue
+        short = len(text) <= 140
+        if short and text.endswith(":"):
+            flush()
+            listing = True
+            parts.append(f'<p class="wd-lead">{_esc(text)}</p>')
+            continue
+        if short and (listing or not text.endswith((".", "!", "?"))):
+            listing = True
+            bullets.append(text)
+            continue
+        flush()
+        listing = False
+        parts.append(f'<p class="wd-p">{_esc(text)}</p>')
+    flush()
+    return "".join(parts)
+
+
+def ws_render_rows(page_items, fresh, selected, rank=True):
+    """Prawy panel: lista ofert w rytmie wiersza, nie kafla."""
+    for idx, (job, match, status, rating) in page_items:
+        pct = int(match.match_percentage) if match else None
+        color = score_color(pct) if pct is not None else "var(--faint)"
+
+        dot_color, dot_label = _ws_status_dot(status)
+        dot_html = (f'<span class="wr-dot" style="background:{dot_color}" '
+                    f'title="{_esc(dot_label)}"></span>') if dot_color else ''
+
+        score_html = (f'<div class="wr-score" style="color:{color}">{pct}'
+                      f'<small>%</small></div>') if pct is not None else \
+                     '<div class="wr-score is-none">—</div>'
+
+        bar_html = (f'<div class="wr-bar"><i style="width:{pct}%;background:{color}"></i>'
+                    f'</div>') if pct is not None else '<div class="wr-bar"></div>'
+
+        source = getattr(job, "source", "") or "—"
+        location = getattr(job, "location", "") or "Warszawa"
+
+        meta = (f'<span class="wr-org">{_esc(job.company)}</span>'
+                f'<span class="wr-sep">·</span>'
+                f'<span class="wr-src">{src_dot(source)}</span>'
+                f'<span class="wr-sep">·</span>'
+                f'<span>{_esc(location)}</span>')
+
+        cls = "wr-row"
+        if fresh:
+            cls += " is-fresh"
+        if selected == job.link:
+            cls += " is-active"
+
+        rank_html = f'<div class="wr-rank">{idx + 1:02d}</div>' if rank else \
+                    '<div class="wr-rank"></div>'
+
+        row_key = f"wsrow_{hashlib.md5(job.link.encode()).hexdigest()[:12]}"
+        with st.container(key=row_key):
+            st.markdown(
+                f'<div class="{cls}" style="--i:{min(idx, 24)}">'
+                f'{rank_html}'
+                f'<div class="wr-main">'
+                f'<div class="wr-title">{dot_html}{_esc(job.title)}</div>'
+                f'<div class="wr-meta">{meta}</div>'
+                f'</div>'
+                f'{score_html}'
+                f'{bar_html}'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+            if st.button("Pokaż szczegóły", key=f"btn_{row_key}"):
+                st.session_state.ws_selected = job.link
+                st.rerun(scope="fragment")
+
+
+def ws_render_list_panel(tab):
+    """Prawy panel w całości: pasek narzędzi, wiersze, stronicowanie."""
+    search = st.session_state.get("ws_search", "") or ""
+    items = ws_collect_cached(tab, search)
+
+    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE)) if items else 1
+    page_key = f"ws_page_{tab}"
+    if st.session_state.get(page_key, 1) > total_pages:
+        st.session_state[page_key] = total_pages
+
+    with st.container(key="wslisthead"):
+        ws_panel_head("oferty", fmt_n(len(items)))
+        c1, c2 = st.columns([3, 1], vertical_alignment="center")
+        with c1:
+            st.text_input("Szukaj", key="ws_search", placeholder="Stanowisko lub firma…",
+                          label_visibility="collapsed")
+        with c2:
+            page = st.number_input("Strona", min_value=1, max_value=total_pages,
+                                   value=min(st.session_state.get(page_key, 1), total_pages),
+                                   key=page_key, label_visibility="collapsed")
+
+    if not items:
+        st.markdown('<div class="wp-empty">Nic tu nie ma. '
+                    'Zmień zakładkę albo wyczyść szukanie.</div>',
+                    unsafe_allow_html=True)
+        return
+
+    sig = f"{tab}|{search}|{page}|{len(items)}"
+    fresh = st.session_state.get("_ws_sig") != sig
+    st.session_state["_ws_sig"] = sig
+
+    start = (page - 1) * PAGE_SIZE
+    page_items = list(enumerate(items))[start:start + PAGE_SIZE]
+    ws_render_rows(page_items, fresh, st.session_state.get("ws_selected"))
+
+    if total_pages > 1:
+        st.markdown(f'<div class="wp-foot">strona {page} z {total_pages}</div>',
+                    unsafe_allow_html=True)
+
+
+# --- lewy panel: log -------------------------------------------------------
+
+def ws_activity_rows(limit=9):
+    """
+    Co się ostatnio działo, zebrane z tego, co faktycznie leży na dysku.
+
+    Każdy wpis niesie prawdziwy znacznik czasu, a nie gotowy napis - inaczej
+    sortowanie porównuje teksty i "08.17" lądowało przed "17.08". Do tego
+    nazwa operacji, bo sama nazwa portalu nie mówi, czy to było pobieranie,
+    czy ocenianie.
+    """
+    rows = []
+
+    runs = load_json_safe(Path("scraper_status.json"), default={}) or {}
+    for source, info in runs.items():
+        if not isinstance(info, dict):
+            continue
+        raw = info.get("timestamp") or info.get("last_run_date") or ""
+        try:
+            when = datetime.fromisoformat(str(raw))
+        except ValueError:
+            continue
+        count = info.get("jobs_count")
+        ok = info.get("status") == "success"
+        detail = (f"{fmt_n(count)} ofert" if isinstance(count, int)
+                  else str(info.get("status", "")))
+        rows.append((when, "pobieranie", source, detail, not ok))
+
+    analyzed_path = Path("analyzed_jobs_waterfall.json")
+    if analyzed_path.exists():
+        rows.append((datetime.fromtimestamp(analyzed_path.stat().st_mtime),
+                     "ocena AI", "waterfall_analysis.py",
+                     f"{fmt_n(len(st.session_state.analyzed_matches))} ocen", False))
+
+    profile_path = Path("preference_profile.json")
+    if profile_path.exists():
+        profile = load_json_safe(profile_path, default={}) or {}
+        built = profile.get("_metadata", {}).get("total_decisions_analyzed", 0) or 0
+        rows.append((datetime.fromtimestamp(profile_path.stat().st_mtime),
+                     "profil", "generate_preference_profile.py",
+                     f"z {fmt_n(built)} decyzji", False))
+
+    rows.sort(key=lambda r: r[0], reverse=True)
+    return rows[:limit]
+
+
+def ws_render_activity():
+    """Lewy panel, gdy nic nie jest wybrane: log i ostatnie decyzje."""
+    ws_panel_head("co się ostatnio działo")
+
+    rows = ws_activity_rows()
+    if not rows:
+        st.markdown('<div class="wp-empty">Pusto - nic jeszcze nie chodziło. '
+                    'Zajrzyj do „Panel sterowania”.</div>', unsafe_allow_html=True)
+    else:
+        out = ['<div class="wl-block">']
+        for i, (when, op, what, detail, bad) in enumerate(rows):
+            out.append(
+                f'<div class="wl-line is-fresh" style="--i:{i}">'
+                f'<span class="wl-time">{when.strftime("%Y-%m-%d %H:%M:%S")}</span>'
+                f'<span class="wl-op{" is-bad" if bad else ""}">{_esc(op)}</span>'
+                f'<span class="wl-what">'
+                f'{src_dot(what) if op == "pobieranie" else _esc(what)}</span>'
+                f'<span class="wl-detail">{_esc(detail)}</span>'
+                f'</div>'
+            )
+        out.append('</div>')
+        st.markdown("".join(out), unsafe_allow_html=True)
+
+    ws_panel_head("ostatnie decyzje", mid=True)
+
+    shown = 0
+    for link in reversed(list(st.session_state.user_decisions.keys())):
+        if shown >= 9:
+            break
+        status, rating = get_decision(link)
+        color, label = _ws_status_dot(status)
+        if not color:
+            continue
+        job = find_job_obj(link)
+        if job is None:
+            continue
+        if status == 'rated' and rating:
+            label = f"ocena {rating}/10"
+
+        raw = st.session_state.user_decisions.get(link)
+        stamp = raw.get("decided_at") or raw.get("applied_at") if isinstance(raw, dict) else None
+        right = _esc(stamp) if stamp else _esc(getattr(job, "company", "") or "")
+
+        row_key = f"wsdec_{hashlib.md5(link.encode()).hexdigest()[:12]}"
+        with st.container(key=row_key):
+            st.markdown(
+                f'<div class="wl-dec is-fresh" style="--i:{shown}">'
+                f'<span class="wl-badge" style="color:{color};border-color:{color}44">'
+                f'{_esc(label)}</span>'
+                f'<span class="wl-title">{_esc(job.title)}</span>'
+                f'<span class="wl-org">{right}</span>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+            if st.button("Otwórz ofertę", key=f"btn_{row_key}"):
+                st.session_state.ws_selected = link
+                st.rerun(scope="fragment")
+        shown += 1
+
+    if shown == 0:
+        st.markdown('<div class="wp-empty">Jeszcze nic nie oceniłeś.</div>',
+                    unsafe_allow_html=True)
+
+    st.markdown('<div class="wp-hint">Kliknij ofertę - z listy obok albo '
+                'z decyzji wyżej - żeby zobaczyć szczegóły i ocenić ją tutaj.</div>',
+                unsafe_allow_html=True)
+
+
+# --- lewy panel: szczegoly oferty ------------------------------------------
+
+def ws_render_detail(link, stage_ctl=False):
+    """
+    Lewy panel, gdy oferta jest wybrana: pełne dane i wszystkie decyzje.
+
+    Treść idzie jednym blokiem HTML - rytm pionowy jest wtedy w całości
+    w CSS, zamiast sumować moje marginesy z domyślnymi przerwami Streamlita.
+    """
+    job = find_job_obj(link)
+    if job is None:
+        st.session_state.ws_selected = None
+        st.markdown('<div class="wp-empty">Tej oferty nie ma już w bazie.</div>',
+                    unsafe_allow_html=True)
+        return
+
+    match = next((m for m in st.session_state.analyzed_matches if m.job.link == link), None)
+    status, rating = get_decision(link)
+
+    # Nagłówek: podpis po lewej, dwa drobne przyciski po prawej, wszystko na
+    # jednej linii środka. Kontener ma własną włosową kreskę, tej samej
+    # wysokości co nagłówek prawego panelu.
+    with st.container(key="wshead", horizontal=True, vertical_alignment="center",
+                      gap="small"):
+        st.markdown('<div class="wp-label">szczegóły oferty</div>',
+                    unsafe_allow_html=True, width="stretch")
+        st.link_button("Otwórz", job.link, icon=":material/open_in_new:",
+                       help="Otwiera ofertę na portalu, w nowej karcie")
+        if st.button("Zamknij", icon=":material/close:", key="ws_close",
+                     help="Wraca do logu ostatnich zdarzeń"):
+            st.session_state.ws_selected = None
+            st.rerun(scope="fragment")
+
+    pct = int(match.match_percentage) if match else None
+    color = score_color(pct) if pct is not None else "var(--faint)"
+
+    state_html = ''
+    if status in DECISION_STYLE:
+        dot_color, state_label = DECISION_STYLE[status]
+        if status == 'rated' and rating:
+            state_label = f"ocena {rating}/10"
+        state_html = (f'<div class="wd-state" style="color:{dot_color};'
+                      f'border-color:{dot_color}44">{_esc(state_label)}</div>')
+
+    work_mode = detect_work_mode(job.location or "", job.description or "", job.title or "")
+    meta_bits = [_esc(getattr(job, "company", "") or "—"),
+                 _esc(getattr(job, "location", "") or "Warszawa"),
+                 _esc(work_mode["label"])]
+    # Portal idzie osobno, bo niesie kulkę - jego tekst jest już zescapowany.
+    if getattr(job, "source", ""):
+        meta_bits.append(f'<span class="wd-src">{src_dot(job.source)}</span>')
+    meta_html = '<span class="wd-sep">·</span>'.join(
+        f'<span>{b}</span>' for b in meta_bits if b)
+
+    blocks = [f'<div class="wd-part" style="--i:0">{state_html}'
+              f'<div class="wd-title">{_esc(job.title)}</div>'
+              f'<div class="wd-meta">{meta_html}</div></div>']
+
+    if pct is not None:
+        blocks.append(
+            f'<div class="wd-gauge wd-part" style="--i:1">'
+            f'<div class="wd-score" style="color:{color}">{pct}<small>%</small></div>'
+            f'<div><div class="wd-gauge-lbl">dopasowanie do Twojego CV</div>'
+            f'<div class="wd-rail"><i style="width:{pct}%;background:{color}"></i></div>'
+            f'</div></div>')
+
+    chips = []
+    if match:
+        if getattr(match, "industry", None):
+            chips.append(f'<span class="jc-chip">{_esc(match.industry)}</span>')
+        if match.is_entry_level:
+            chips.append('<span class="jc-chip is-good">junior / staż</span>')
+        if match.learnable_in_month:
+            chips.append('<span class="jc-chip is-good">nauka ≤ 1 mc</span>')
+        for skill in (getattr(match, "missing_skills", None) or [])[:5]:
+            chips.append(f'<span class="jc-chip is-gap">brak: {_esc(skill)}</span>')
+    if chips:
+        blocks.append(f'<div class="wd-chips wd-part" style="--i:2">'
+                      f'{"".join(chips)}</div>')
+
+    if match and getattr(match, "reason", None):
+        blocks.append(f'<div class="wd-reason wd-part" style="--i:3">'
+                      f'{_esc(match.reason)}</div>')
+
+    paragraphs = format_description(job.description, drop_prefix=job.title)
+    if paragraphs:
+        blocks.append(f'<div class="wd-descwrap wd-part" style="--i:4">'
+                      f'<div class="wd-desc">{_wd_body_html(paragraphs)}</div></div>')
+
+    st.markdown("".join(blocks), unsafe_allow_html=True)
+
+    if stage_ctl and status:
+        ws_panel_head("etap rekrutacji", mid=True)
+        with st.container(key="wstool_stage"):
+            raw = st.session_state.user_decisions.get(canonical_link(link), {})
+            current = raw.get("stage") if isinstance(raw, dict) else None
+            current = WS_STAGE_LEGACY.get(current, current)
+            if current not in WS_STAGE_NAMES:
+                current = status if status in WS_STAGE_NAMES else "save"
+            keys = list(WS_STAGE_NAMES)
+            new_stage = st.selectbox("Etap", options=keys,
+                                     index=keys.index(current),
+                                     format_func=lambda x: WS_STAGE_NAMES[x],
+                                     key=get_key("ws_stage", link),
+                                     label_visibility="collapsed")
+            if new_stage != current:
+                update_decision(link, status, rating or 5, stage=new_stage)
+                _ws_touch()
+                st.rerun(scope="fragment")
+
+    ws_panel_head("decyzja", mid=True)
+
+    with st.container(key="wsactions"):
+        with st.container(horizontal=True, vertical_alignment="center", gap="medium"):
+            st.markdown('<div class="wd-ratelbl">ocena</div>',
+                        unsafe_allow_html=True, width="content")
+            rating_val = st.slider("Ocena", 1, 10, rating if rating else 5,
+                                   key=get_key("ws_slider", link),
+                                   label_visibility="collapsed", width="stretch")
+            if st.button("Oceń", key=get_key("ws_conf", link),
+                         help="Zapisuje samą ocenę - oferta zostaje na liście"):
+                update_decision(link, "rated", rating_val)
+                _ws_touch()
+                st.rerun(scope="fragment")
+
+        with st.container(horizontal=True, gap="small"):
+            if st.button("Zapisz", icon=":material/bookmark:",
+                         key=get_key("ws_save", link),
+                         help="Trafi do zakładki Zapisane"):
+                update_decision(link, "save", rating_val)
+                _ws_touch()
+                st.rerun(scope="fragment")
+            if st.button("Wysłane", icon=":material/send:",
+                         key=get_key("ws_app", link),
+                         help="Aplikacja poszła - zapisuje dzisiejszą datę"):
+                update_decision(link, "apply", rating_val)
+                _ws_touch()
+                st.rerun(scope="fragment")
+            if st.button("Aspiruję", icon=":material/trending_up:",
+                         key=get_key("ws_asp", link),
+                         help="Za wysoko na teraz, ale w tę stronę celujesz"):
+                update_decision(link, "aspirational", rating_val)
+                _ws_touch()
+                st.rerun(scope="fragment")
+            if st.button("Odrzuć", icon=":material/close:",
+                         key=get_key("ws_rej", link),
+                         help="Do kosza - profil uczy się, czego nie chcesz"):
+                update_decision(link, "reject", min(rating_val, 3))
+                _ws_touch()
+                st.rerun(scope="fragment")
+
+        with st.container(key="wssecond", horizontal=True, gap="small"):
+            if status:
+                if st.button("Przywróć", icon=":material/undo:",
+                             key=get_key("ws_rest", link),
+                             help="Wraca do bazy jako nieoceniona"):
+                    st.session_state.user_decisions.pop(link, None)
+                    st.session_state.user_decisions.pop(canonical_link(link), None)
+                    save_user_decisions(st.session_state.user_decisions)
+                    _ws_touch()
+                    st.rerun(scope="fragment")
+
+            confirm_key = f"ws_confirm_{hashlib.md5(link.encode()).hexdigest()[:10]}"
+            if st.session_state.get(confirm_key):
+                if st.button("Na pewno usunąć?", icon=":material/delete_forever:",
+                             key=get_key("ws_delyes", link),
+                             help="Kliknij, żeby usunąć bezpowrotnie"):
+                    st.session_state.pop(confirm_key, None)
+                    _delete_job_permanent(link)
+                    st.session_state.ws_selected = None
+                    _ws_touch()
+                    st.toast("Oferta usunięta z bazy.")
+                    st.rerun(scope="fragment")
+            else:
+                if st.button("Usuń", icon=":material/delete:",
+                             key=get_key("ws_del", link),
+                             help="Usuwa z bazy, z wyników AI i z Twoich decyzji"):
+                    st.session_state[confirm_key] = True
+                    st.rerun(scope="fragment")
+
+
+# --- widoki narzedziowe: ten sam fason, ten sam uklad dwoch paneli ---------
+
+def ws_board_stages():
+    """Oferty rozłożone na etapy rekrutacji. Zwraca (etap -> lista krotek)."""
+    stages = {key: [] for key in WS_STAGE_NAMES}
+
+    for link, ddata in st.session_state.user_decisions.items():
+        if isinstance(ddata, dict):
+            status, stage = ddata.get("status"), ddata.get("stage")
+        else:
+            status, stage = ddata, None
+
+        stage = WS_STAGE_LEGACY.get(stage, stage)
+        # Na tablicy ląduje tylko to, w czym coś się dzieje. Odrzucenie przy
+        # przeglądaniu listy nie jest etapem rekrutacji - takich ofert były
+        # setki i zalewały "Archiwum", przez co tablica nic nie pokazywała.
+        if stage in stages:
+            target = stage
+        elif status in ("save", "apply"):
+            target = status
+        else:
+            continue
+
+        job = find_job_obj(link)
+        if job is None:
+            continue
+        match = next((m for m in st.session_state.analyzed_matches
+                      if m.job.link == job.link), None)
+        rating = ddata.get("rating") if isinstance(ddata, dict) else None
+        stages[target].append((job, match, status, rating))
+
+    return stages
+
+
+def ws_tool_board(left, right):
+    stages = ws_board_stages()
+    total = sum(len(v) for v in stages.values())
+    selected = st.session_state.get("ws_selected")
+
+    with right:
+        with st.container(key="wsright"):
+            ws_panel_head("tablica", fmt_n(total))
+            if total == 0:
+                st.markdown(
+                    '<div class="wp-note">Tablica jest pusta. Trafiają tu oferty '
+                    'oznaczone jako <em>Zapisz</em> albo <em>Wysłane</em> - a potem '
+                    'przesuwasz je między etapami, gdy dostaniesz odpowiedź. '
+                    'Odrzucone przy przeglądaniu tu nie wchodzą, mają własną '
+                    'zakładkę.</div>', unsafe_allow_html=True)
+            else:
+                sig = f"tablica|{total}"
+                fresh = st.session_state.get("_ws_sig") != sig
+                st.session_state["_ws_sig"] = sig
+                i = 0
+                for key, label in WS_STAGE_NAMES.items():
+                    items = stages[key]
+                    if not items:
+                        continue
+                    st.markdown(f'<div class="wr-stage"><span>{_esc(label)}</span>'
+                                f'<span>{len(items)}</span></div>',
+                                unsafe_allow_html=True)
+                    ws_render_rows(list(enumerate(items, start=i)), fresh, selected,
+                                   rank=False)
+                    i += len(items)
+
+    with left:
+        with st.container(key="wsleft"):
+            on_board = any(job.link == selected
+                           for items in stages.values() for job, *_ in items)
+            if selected and on_board:
+                ws_render_detail(selected, stage_ctl=True)
+            else:
+                ws_panel_head("etapy")
+                for key, label in WS_STAGE_NAMES.items():
+                    n = len(stages[key])
+                    st.markdown(
+                        f'<div class="wx-stat"><span class="wx-stat-lbl">{_esc(label)}'
+                        f'</span><span class="wx-stat-val'
+                        f'{" is-off" if n == 0 else ""}">{n}</span></div>',
+                        unsafe_allow_html=True)
+                st.markdown('<div class="wp-hint">Kliknij ofertę z tablicy, żeby '
+                            'zobaczyć szczegóły i przestawić jej etap.</div>',
+                            unsafe_allow_html=True)
+
+
+def ws_tool_add(left, right):
+    if 'manual_job_data' not in st.session_state:
+        st.session_state.manual_job_data = None
+    if 'manual_job_url' not in st.session_state:
+        st.session_state.manual_job_url = ""
+
+    data = st.session_state.manual_job_data
+
+    with right:
+        with st.container(key="wsright"):
+            ws_panel_head("dodaj z linku")
+            with st.container(key="wstool_add"):
+                url_input = st.text_input(
+                    "URL oferty", value=st.session_state.manual_job_url,
+                    placeholder="https://…", label_visibility="collapsed")
+
+                with st.container(horizontal=True, gap="small"):
+                    fetch = st.button("Pobierz dane", icon=":material/download:",
+                                      key="wstool_fetch")
+                    if data and st.button("Wyczyść", icon=":material/backspace:",
+                                          key="wstool_clear"):
+                        st.session_state.manual_job_data = None
+                        st.session_state.manual_job_url = ""
+                        st.rerun(scope="fragment")
+
+                if fetch and url_input:
+                    with st.spinner("Czytam stronę oferty…"):
+                        from utils.link_fetcher import extract_job_info_from_url
+                        fetched = extract_job_info_from_url(url_input)
+                        fetched['link'] = url_input
+                        st.session_state.manual_job_data = fetched
+                        st.session_state.manual_job_url = url_input
+                        st.rerun(scope="fragment")
+
+                if data:
+                    ws_panel_head("sprawdź przed zapisem", mid=True)
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        title = st.text_input("Tytuł stanowiska",
+                                              value=data.get('title', ''))
+                    with c2:
+                        company = st.text_input("Firma", value=data.get('company', ''))
+                    c3, c4 = st.columns(2)
+                    with c3:
+                        location = st.text_input("Lokalizacja",
+                                                 value=data.get('location', ''))
+                    with c4:
+                        source = st.text_input("Portal", value=data.get('source', ''))
+                    description = st.text_area("Opis", value=data.get('description', ''),
+                                               height=140)
+
+                    data.update({'title': title, 'company': company,
+                                 'location': location, 'source': source,
+                                 'description': description})
+
+                    exists = data['link'] in st.session_state.job_lookup
+                    if st.button("Zapisz w bazie" if not exists else "Nadpisz w bazie",
+                                 icon=":material/save:", key="wstool_save",
+                                 disabled=not (title and company)):
+                        ws_save_manual_job(data)
+                        st.session_state.ws_selected = data['link']
+                        _ws_touch()
+                        st.toast("Oferta zapisana w bazie.")
+                        st.rerun(scope="fragment")
+                    if not (title and company):
+                        st.markdown('<div class="wp-note is-warn">Tytuł i firma są '
+                                    'wymagane - bez nich oferta nie da się odnaleźć '
+                                    'na liście.</div>', unsafe_allow_html=True)
+
+    with left:
+        with st.container(key="wsleft"):
+            selected = st.session_state.get("ws_selected")
+            if selected and selected in st.session_state.job_lookup:
+                ws_render_detail(selected)
+            elif data:
+                ws_panel_head("podgląd")
+                meta = '<span class="wd-sep">·</span>'.join(
+                    f'<span>{_esc(b)}</span>' for b in
+                    [data.get('company') or "—", data.get('location') or "—",
+                     data.get('source') or "—"] if b)
+                st.markdown(
+                    f'<div class="wd-part" style="--i:0">'
+                    f'<div class="wd-title">{_esc(data.get("title") or "Bez tytułu")}'
+                    f'</div><div class="wd-meta">{meta}</div></div>',
+                    unsafe_allow_html=True)
+                paragraphs = format_description(data.get('description', ''),
+                                                drop_prefix=data.get('title', ''))
+                if paragraphs:
+                    st.markdown(
+                        f'<div class="wd-descwrap wd-part" style="--i:1">'
+                        f'<div class="wd-desc">{_wd_body_html(paragraphs)}</div></div>',
+                        unsafe_allow_html=True)
+                st.markdown('<div class="wp-hint">Tak oferta wejdzie do bazy. '
+                            'Popraw pola po prawej, jeśli portal coś przekręcił.</div>',
+                            unsafe_allow_html=True)
+            else:
+                ws_panel_head("po co to")
+                st.markdown(
+                    '<div class="wp-note">Skrapery nie sięgają wszędzie. Jeśli '
+                    'trafisz na ofertę poza nimi - z LinkedIna kogoś znajomego, '
+                    'ze strony firmy - wklej adres po prawej. Aplikacja przeczyta '
+                    'stronę, wypełni pola, a Ty je poprawisz przed zapisem.</div>',
+                    unsafe_allow_html=True)
+                st.markdown('<div class="wp-hint">Oferta dodana ręcznie zachowuje '
+                            'się jak każda inna: można ją ocenić, zapisać i '
+                            'odrzucić.</div>', unsafe_allow_html=True)
+
+
+def ws_save_manual_job(data):
+    """
+    Zapis ręcznie dodanej oferty - do sesji i na dysk.
+
+    Wcześniej działo się to przy samym rysowaniu podglądu, więc oferta lądowała
+    w bazie, zanim ktokolwiek nacisnął cokolwiek. Teraz zapisuje wyłącznie
+    przycisk.
+    """
+    job = Job(title=data['title'], company=data['company'], link=data['link'],
+              description=data.get('description', ''), source=data.get('source', ''),
+              location=data.get('location', ''))
+
+    existing = st.session_state.job_lookup.get(job.link)
+    if existing is not None:
+        for field in ("title", "company", "location", "source", "description"):
+            setattr(existing, field, getattr(job, field))
+    else:
+        st.session_state.raw_jobs.append(job)
+        st.session_state.job_lookup[job.link] = job
+
+    try:
+        db = JobDatabase(str(JOBS_DATABASE_PATH))
+        jobs = [j for j in db.load_jobs() if j.link != job.link]
+        jobs.append(job)
+        db.save_jobs(jobs)
+    except Exception as e:
+        logger.warning(f"Nie udało się dopisać oferty do bazy: {e}")
+        st.error(f"Oferta jest w sesji, ale zapis do pliku nie wyszedł: {e}")
+
+
+def ws_tool_pipeline(left, right):
+    base = Path(__file__).parent
+    db_path = base / "jobs_database.json"
+    analyzed_path = base / "analyzed_jobs_waterfall.json"
+    profile_path = base / "preference_profile.json"
+    decisions_path = base / "user_decisions.json"
+
+    # Liczymy na ZBIORACH linków, nie na długościach list. Poprzednia wersja
+    # robiła `baza - oceny_AI - decyzje`, a decyzje dotyczą ofert, które już
+    # mają ocenę AI - ta sama oferta była odejmowana dwa razy i "czeka na ocenę"
+    # potrafiło pokazać 0 przy tysiącach nieprzeanalizowanych ofert.
+    db_links = _read_links(db_path)
+    analyzed_links = _read_links(analyzed_path, nested=True)
+    decided_links = set()
+    if decisions_path.exists():
+        try:
+            with open(decisions_path, "r", encoding="utf-8") as f:
+                decided_links = set(json.load(f).keys())
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Nie udało się odczytać decyzji: {e}")
+
+    db_count = len(db_links)
+    analyzed_count = len(analyzed_links)
+    decisions_count = len(decided_links)
+    pending = len(db_links - analyzed_links)
+
+    profile = load_json_safe(profile_path, default={}) or {}
+    profile_exists = bool(profile)
+    profile_built_from = profile.get("_metadata", {}).get("total_decisions_analyzed", 0) or 0
+    new_decisions = max(0, decisions_count - profile_built_from)
+
+    if db_count == 0:
+        next_up = ("Zacznij od kroku 01 - baza jest pusta, więc nie ma czego "
+                   "oceniać. Pobranie ofert niczego nie kasuje.")
+    elif pending > 0:
+        next_up = (f"Przejdź do kroku 03 - {fmt_n(pending)} ofert czeka na ocenę AI. "
+                   f"Bez tego nie pojawią się w „Dopasowane”.")
+    elif not profile_exists and decisions_count >= 10:
+        next_up = (f"Przejdź do kroku 02 - masz {decisions_count} ocen, z których "
+                   f"da się zbudować profil i trafniej oceniać kolejne oferty.")
+    elif new_decisions >= 25:
+        next_up = (f"Warto odświeżyć krok 02 - od zbudowania profilu doszło "
+                   f"{new_decisions} nowych decyzji.")
+    else:
+        next_up = ("Wszystko policzone. Wróć do „Dopasowane” i oceniaj oferty - "
+                   "każda Twoja ocena poprawia kolejne.")
+
+    # ---------------- lewy panel: stan i historia ----------------
+    with left:
+        with st.container(key="wsleft"):
+            ws_panel_head("stan danych")
+            stats = [
+                ("ofert w bazie", fmt_n(db_count), ""),
+                ("z oceną AI", fmt_n(analyzed_count), ""),
+                ("czeka na ocenę", fmt_n(pending), "is-off" if pending else "is-on"),
+                ("Twoich decyzji", fmt_n(decisions_count), ""),
+                ("profil preferencji", "gotowy" if profile_exists else "brak",
+                 "is-on" if profile_exists else "is-off"),
+            ]
+            for label, val, cls in stats:
+                st.markdown(
+                    f'<div class="wx-stat"><span class="wx-stat-lbl">{_esc(label)}'
+                    f'</span><span class="wx-stat-val {cls}">{_esc(val)}</span></div>',
+                    unsafe_allow_html=True)
+
+            st.markdown(f'<div class="wp-note is-ok" style="margin-top:0.9rem">'
+                        f'{_esc(next_up)}</div>', unsafe_allow_html=True)
+
+            ws_panel_head("co się ostatnio działo", mid=True)
+            rows = ws_activity_rows(limit=8)
+            if not rows:
+                st.markdown('<div class="wp-empty">Nic jeszcze nie chodziło.</div>',
+                            unsafe_allow_html=True)
+            else:
+                out = ['<div class="wl-block">']
+                for i, (when, op, what, detail, bad) in enumerate(rows):
+                    out.append(
+                        f'<div class="wl-line is-fresh" style="--i:{i}">'
+                        f'<span class="wl-time">{when.strftime("%Y-%m-%d %H:%M:%S")}</span>'
+                        f'<span class="wl-op{" is-bad" if bad else ""}">{_esc(op)}</span>'
+                        f'<span class="wl-what">'
+                        f'{src_dot(what) if op == "pobieranie" else _esc(what)}</span>'
+                        f'<span class="wl-detail">{_esc(detail)}</span></div>')
+                out.append('</div>')
+                st.markdown("".join(out), unsafe_allow_html=True)
+
+            ws_panel_head("aplikacja", mid=True)
+            cv_path = Path(st.session_state.current_cv_path)
+            st.markdown(
+                f'<div class="wx-file">{_esc(cv_path.name)}</div>'
+                f'<div class="wx-path">{_esc(str(cv_path.absolute().parent))}</div>',
+                unsafe_allow_html=True)
+            with st.container(key="wstool_cv", horizontal=True, gap="small"):
+                if st.button("Otwórz CV", icon=":material/description:",
+                             key="wstool_cv_open"):
+                    if cv_path.exists():
+                        try:
+                            os.startfile(str(cv_path))
+                            st.toast("Otwieram CV…")
+                        except OSError as e:
+                            st.error(f"Nie udało się otworzyć pliku: {e}")
+                    else:
+                        st.error("Nie znaleziono pliku")
+                if st.button("Zmień CV", icon=":material/edit:",
+                             key="wstool_cv_pick"):
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.wm_attributes('-topmost', 1)
+                    picked = filedialog.askopenfilename(
+                        title="Wybierz plik CV",
+                        filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")])
+                    root.destroy()
+                    if picked:
+                        st.session_state.current_cv_path = picked
+                        st.session_state.cv_text = None
+                        st.rerun(scope="app")
+                if st.button("Odśwież", icon=":material/refresh:",
+                             key="wstool_reload",
+                             help="Czyta pliki z dysku od nowa. Nic nie pobiera "
+                                  "z internetu i niczego nie usuwa."):
+                    st.session_state.data_loaded = False
+                    _ws_touch()
+                    st.toast("Wczytano dane z dysku od nowa.")
+                    st.rerun(scope="app")
+
+    # ---------------- prawy panel: to, co zmienia stan ----------------
+    with right:
+        with st.container(key="wsright"):
+            ws_panel_head("pipeline", "3 kroki")
+            with st.container(key="wstool_steps"):
+                st.markdown(
+                    '<div class="wx-step is-first is-fresh" style="--i:0">'
+                    '<div class="wx-num">01</div>'
+                    '<div class="wx-title">Pobierz oferty z portali</div>'
+                    '<div class="wx-desc">Odwiedza wszystkie portale i dopisuje do '
+                    'bazy oferty, których jeszcze nie masz. Istniejących ofert ani '
+                    'Twoich ocen nie rusza.</div>'
+                    '<div class="wx-meta">Pracuj.pl · OLX · aplikuj.pl · GoWork.pl · '
+                    'praca.pl · NoFluffJobs · JustJoin.it · RocketJobs · SOLID.Jobs · '
+                    'LinkedIn · Indeed<br>od kilku minut do ok. 45 min, zależnie od '
+                    'liczby nowych ofert</div></div>',
+                    unsafe_allow_html=True)
+                if st.button("Pobierz oferty", icon=":material/download:",
+                             width="stretch", key="run_scrapers_btn"):
+                    if _run_step(["main_scraper.py"], "Pobieram oferty z portali…",
+                                 "Pobieranie zakończone"):
+                        _run_step(["deduplicate_db.py"], "Scalam duplikaty…",
+                                  "Duplikaty scalone", tail=6)
+                        _run_step(["clean_db.py"], "Skracam opisy…",
+                                  "Opisy skrócone", tail=4)
+                        st.session_state.data_loaded = False
+                        _ws_touch()
+                        st.rerun(scope="app")
+
+                st.markdown(
+                    '<div class="wx-step is-fresh" style="--i:1">'
+                    '<div class="wx-num">02</div>'
+                    '<div class="wx-title">Przebuduj profil preferencji</div>'
+                    '<div class="wx-desc">Czyta Twoje oceny i wyciąga z nich wzorzec: '
+                    'jakie role i branże Ci pasują, a co odrzucasz. Profil trafia do '
+                    'polecenia dla AI, więc kolejne oferty są oceniane trafniej.</div>'
+                    '<div class="wx-meta">uruchom po każdej większej porcji ocen<br>'
+                    'trwa poniżej minuty</div></div>',
+                    unsafe_allow_html=True)
+
+                if profile_exists:
+                    gen_at = profile.get("_metadata", {}).get("generated_at", "")
+                    when = gen_at[:16].replace("T", ", ") if gen_at else "nieznana data"
+                    note = (f"Obecny profil: {when}, zbudowany z "
+                            f"{profile_built_from} Twoich decyzji.")
+                    if new_decisions >= 25:
+                        st.markdown(
+                            f'<div class="wp-note is-warn">{_esc(note)} '
+                            f'<em>Od tego czasu doszło {new_decisions} nowych ocen - '
+                            f'przebudowanie poprawi trafność kolejnych.</em></div>',
+                            unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="wp-note is-ok">{_esc(note)}</div>',
+                                    unsafe_allow_html=True)
+                    with st.expander("Co jest w profilu", expanded=False, type="compact"):
+                        def _list(key):
+                            return ", ".join(profile.get(key, [])) or "—"
+                        st.markdown(f"**Podsumowanie:** {profile.get('summary', '—')}")
+                        st.markdown(f"**Preferowane role:** {_list('preferred_role_types')}")
+                        st.markdown(f"**Preferowane branże:** {_list('preferred_industries')}")
+                        st.markdown(f"**Przyciąga Cię:** {_list('attractive_keywords')}")
+                        st.markdown(f"**Odrzucasz:** {_list('red_flags')}")
+                elif decisions_count < 10:
+                    st.markdown(
+                        f'<div class="wp-note">Masz {decisions_count} ocen. Profil '
+                        f'zbuduje się sensownie od jakichś dziesięciu - oceniaj dalej '
+                        f'oferty na liście.</div>', unsafe_allow_html=True)
+
+                if st.button("Przebuduj profil", icon=":material/autorenew:",
+                             width="stretch", key="gen_profile_btn"):
+                    if _run_step(["generate_preference_profile.py"],
+                                 "Buduję profil z Twoich ocen…",
+                                 "Profil przebudowany", tail=8):
+                        st.rerun(scope="app")
+
+                st.markdown(
+                    f'<div class="wx-step is-fresh" style="--i:2">'
+                    f'<div class="wx-num">03</div>'
+                    f'<div class="wx-title">Oceń oferty przez AI</div>'
+                    f'<div class="wx-desc">Wysyła do Gemini oferty, które nie mają '
+                    f'jeszcze oceny, i dla każdej liczy procent dopasowania oraz '
+                    f'uzasadnienie. Dopiero po tym kroku oferta pojawia się '
+                    f'w „Dopasowane”.</div>'
+                    f'<div class="wx-meta">do policzenia teraz: {fmt_n(pending)} ofert<br>'
+                    f'około {max(1, round(pending / 180))} min · zużywa limit Gemini'
+                    f'</div></div>',
+                    unsafe_allow_html=True)
+                if st.button("Oceń oferty", icon=":material/play_arrow:",
+                             width="stretch", key="run_analysis_btn",
+                             disabled=pending == 0):
+                    if _run_step(["waterfall_analysis.py"], "Oceniam oferty przez AI…",
+                                 "Ocenianie zakończone"):
+                        st.session_state.data_loaded = False
+                        _ws_touch()
+                        st.rerun(scope="app")
+                if pending == 0 and db_count:
+                    st.markdown('<div class="wp-note is-ok">Wszystkie oferty w bazie '
+                                'mają już ocenę AI.</div>', unsafe_allow_html=True)
+
+            ws_panel_head("rzadziej używane", mid=True)
+
+            # Przeliczenie od zera jest nieodwracalne i kosztuje cały limit
+            # Gemini, więc siedzi osobno, a nie jako pole wyboru obok zwykłego
+            # przycisku, gdzie łatwo je kliknąć przez pomyłkę.
+            with st.expander("Policz wszystkie oceny AI od nowa", expanded=False,
+                             type="compact"):
+                with st.container(key="wstool_recalc"):
+                    st.markdown(
+                        f"Kasuje **{fmt_n(analyzed_count)}** dotychczasowych ocen AI "
+                        f"i liczy je od zera. Twoje własne oceny i decyzje zostają "
+                        f"nietknięte, ale przeliczenie zużyje limit Gemini na "
+                        f"wszystkie oferty w bazie (około "
+                        f"{max(1, round(db_count / 180))} min). Ma sens po zmianie "
+                        f"polecenia dla AI albo modelu.")
+                    confirm = st.text_input("Wpisz PRZELICZ, żeby odblokować",
+                                            key="confirm_recalc", placeholder="PRZELICZ")
+                    if st.button("Skasuj oceny AI i policz od nowa",
+                                 icon=":material/warning:", key="recalc_all_btn",
+                                 disabled=confirm.strip().upper() != "PRZELICZ"):
+                        save_json_atomic(str(analyzed_path), [], backup=True)
+                        st.toast("Skasowano dotychczasowe oceny AI (kopia w backups/).")
+                        if _run_step(["waterfall_analysis.py"], "Liczę wszystko od nowa…",
+                                     "Przeliczone"):
+                            st.session_state.data_loaded = False
+                            _ws_touch()
+                            st.rerun(scope="app")
+
+            with st.expander("Klucze API", expanded=False, type="compact"):
+                with st.container(key="wstool_keys"):
+                    ws_render_env_keys()
+
+
+def ws_render_env_keys():
+    """Edycja kluczy w .env. Wartości nie opuszczają dysku."""
+    fields = [
+        ("GEMINI_API_KEY_PRIMARY", "Gemini - klucz główny", True),
+        ("GEMINI_API_KEY_1", "Gemini - zapas 1", True),
+        ("GEMINI_API_KEY_2", "Gemini - zapas 2", True),
+        ("GEMINI_API_KEY_3", "Gemini - zapas 3", True),
+        ("GEMINI_API_KEY_4", "Gemini - zapas 4", True),
+        ("ADZUNA_APP_ID", "Adzuna App ID", False),
+        ("ADZUNA_APP_KEY", "Adzuna App Key", True),
+        ("JOOBLE_API_KEY", "Jooble API Key", True),
+        ("CAREERJET_API_KEY", "Careerjet API Key", True),
+    ]
+    env_path = Path(__file__).parent / ".env"
+    current = {name: "" for name, _, _ in fields}
+    if env_path.exists():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                if "=" in line and not line.strip().startswith("#"):
+                    k, v = line.split("=", 1)
+                    if k.strip() in current:
+                        current[k.strip()] = v.strip()
+        except OSError as e:
+            logger.warning(f"Nie udało się odczytać .env: {e}")
+
+    st.markdown('<div class="wx-meta">Klucze 1-4 służą do rotacji przy limitach. '
+                'Portale pracy są opcjonalne - skraper włącza się sam po ustawieniu '
+                'klucza.</div>', unsafe_allow_html=True)
+
+    new_vals = {}
+    for name, label, secret in fields:
+        new_vals[name] = st.text_input(label, value=current[name],
+                                       type="password" if secret else "default",
+                                       key=f"env_{name}")
+
+    if st.button("Zapisz klucze", icon=":material/save:", key="save_env_keys_btn"):
+        lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+        written, out = set(), []
+        for line in lines:
+            if "=" in line and not line.strip().startswith("#"):
+                k = line.split("=", 1)[0].strip()
+                if k in new_vals:
+                    out.append(f"{k}={new_vals[k]}")
+                    written.add(k)
+                    continue
+            out.append(line)
+        for k, v in new_vals.items():
+            if k not in written:
+                out.append(f"{k}={v}")
+        env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+        st.toast("Zapisano klucze w .env")
+
+
+# --- pasek u gory i sklejenie calosci --------------------------------------
+
+def ws_render_topbar(active):
+    """Pasek u góry: marka, listwa liczb, zakładki."""
+    n_raw = len(st.session_state.raw_jobs)
+    n_analyzed = len(st.session_state.analyzed_matches)
+    n_active = sum(1 for l in st.session_state.user_decisions
+                   if get_decision(l)[0] in ('apply', 'save'))
+
+    # Marka i liczby jednym blokiem: kolumny Streamlita mierzyly wlasna
+    # wysokosc inaczej niz tresc i wlosowa kreska przechodzila przez cyfry.
+    st.markdown(
+        f'<div class="wt-bar">'
+        f'<div class="wt-brand">job<span>finder</span></div>'
+        f'<div class="wt-rail">'
+        f'<div class="wt-item"><b>{fmt_n(n_raw)}</b><span>w bazie</span></div>'
+        f'<div class="wt-item"><b>{fmt_n(n_analyzed)}</b><span>ocen AI</span></div>'
+        f'<div class="wt-item"><b>{fmt_n(n_active)}</b><span>zapisanych</span></div>'
+        f'</div></div>',
+        unsafe_allow_html=True
+    )
+
+    with st.container(key="wstabs"):
+        chosen = st.segmented_control(
+            "Widok", WS_ALL, default=active, key="ws_nav",
+            label_visibility="collapsed"
+        )
+    return chosen or active
+
+
+@st.fragment
+def render_workspace():
+    """
+    Cały pulpit: pasek u góry i dwa panele pod nim.
+
+    Fragment, a nie zwykła funkcja: kliknięcie oferty czy zmiana zakładki
+    przelicza wyłącznie ten kawałek, zamiast całego skryptu razem
+    z wczytywaniem danych z dysku. Stąd st.rerun(scope="app") przy tych
+    nielicznych działaniach, które faktycznie zmieniają dane pod spodem.
+    """
+    active = st.session_state.get("ws_view", "Dopasowane")
+    chosen = ws_render_topbar(active)
+
+    if chosen != active:
+        st.session_state.ws_view = chosen
+        st.session_state.ws_selected = None
+        active = chosen
+
+    st.markdown(f'<div class="wp-hint-top">{_esc(WS_TAB_HINT.get(active, ""))}</div>',
+                unsafe_allow_html=True)
+
+    with st.container(key="wscols"):
+        left, right = st.columns([1, 1.08], gap="medium")
+
+        if active == "Tablica":
+            ws_tool_board(left, right)
+        elif active == "Dodaj z linku":
+            ws_tool_add(left, right)
+        elif active == "Panel sterowania":
+            ws_tool_pipeline(left, right)
+        else:
+            # Prawy panel liczy się pierwszy, choć stoi po prawej: to on
+            # przyjmuje kliknięcie w ofertę, a lewy ma o nim wiedzieć już
+            # w tym samym przebiegu.
+            with right:
+                with st.container(key="wsright"):
+                    ws_render_list_panel(active)
+            with left:
+                with st.container(key="wsleft"):
+                    selected = st.session_state.get("ws_selected")
+                    if selected:
+                        ws_render_detail(selected)
+                    else:
+                        ws_render_activity()
+
+
 VIEWS = {
     "Dopasowane przez AI":  render_analyzed_view,
     "Cała baza":            render_raw_view,
@@ -2347,100 +4297,15 @@ VIEW_ALIASES = {
 
 def main():
     inject_custom_css()
+    inject_workspace_css()
     init_session_state()
     load_data()
 
-    st.sidebar.markdown('<div class="sidebar-brand">Job Search</div>',
-                        unsafe_allow_html=True)
+    # Nawigacja jest wylacznie na gornym pasku. Panelu bocznego nie ma wcale -
+    # to, co w nim zostawalo (plik CV, ponowny odczyt z dysku), siedzi teraz
+    # w "Panel sterowania", czyli tam, gdzie reszta ustawien aplikacji.
+    render_workspace()
 
-    st.sidebar.markdown('<div class="sidebar-sec-header">Widok</div>',
-                        unsafe_allow_html=True)
-
-    view_options = VIEW_ORDER
-
-    # Widget trzyma swoja wartosc w session_state miedzy przeladowaniami.
-    # Po zmianie nazw widokow zostaje tam nieistniejaca opcja i st.radio
-    # wysypuje sie z bledem - dlatego czyscimy klucz, zanim go uzyjemy.
-    if st.session_state.get("single_main_nav_radio") not in view_options:
-        st.session_state.pop("single_main_nav_radio", None)
-
-    default_idx = 0
-    if st.session_state.active_view in view_options:
-        default_idx = view_options.index(st.session_state.active_view)
-
-    selected_view = st.sidebar.radio(
-        "Nawigacja",
-        view_options,
-        index=default_idx,
-        key="single_main_nav_radio",
-        label_visibility="collapsed"
-    )
-    st.session_state.active_view = selected_view
-
-    st.sidebar.markdown("---")
-
-    st.sidebar.markdown('<div class="sidebar-sec-header">Twoje CV</div>',
-                        unsafe_allow_html=True)
-    current_path = Path(st.session_state.current_cv_path)
-    st.sidebar.markdown(
-        f'<div class="cv-name">{html.escape(current_path.name)}</div>'
-        f'<div class="cv-dir">{html.escape(str(current_path.absolute().parent))}</div>',
-        unsafe_allow_html=True
-    )
-    
-    c1, c2 = st.sidebar.columns(2)
-    if c1.button("Otwórz", icon=":material/description:", width="stretch"):
-        if current_path.exists():
-            try:
-                os.startfile(str(current_path))
-                st.toast("Otwieram CV…")
-            except OSError as e:
-                st.error(f"Nie udało się otworzyć pliku: {e}")
-        else: st.error("Nie znaleziono pliku")
-    
-    if c2.button("Zmień", icon=":material/edit:", width="stretch"):
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.wm_attributes('-topmost', 1)
-        file_path = filedialog.askopenfilename(
-            title="Wybierz plik CV",
-            filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")]
-        )
-        root.destroy()
-        if file_path:
-            st.session_state.current_cv_path = file_path
-            st.session_state.cv_text = None 
-            st.rerun()
-
-    st.sidebar.markdown("---")
-    
-    # Nazwa musi mówić, co się stanie, komuś kto nie zna pipeline'u. "Wczytaj
-    # dane od nowa" brzmiało jak ponowne pobranie ofert z portali albo kasowanie
-    # czegoś - a to jedynie ponowny odczyt plików z dysku do pamięci aplikacji.
-    # Przydaje się, gdy scraper albo analiza szły w terminalu obok.
-    if st.sidebar.button("Odśwież z dysku", icon=":material/refresh:",
-                         width="stretch",
-                         help="Ponownie czyta pliki z ofertami i ocenami. "
-                              "Nic nie pobiera z internetu i niczego nie usuwa - "
-                              "użyj, gdy dane zmieniły się poza aplikacją."):
-        st.session_state.data_loaded = False
-        st.toast("Wczytano dane z dysku od nowa.")
-        st.rerun()
-    st.sidebar.markdown(
-        '<div class="sidebar-hint">Odczytuje pliki z dysku. '
-        'Nie pobiera nowych ofert.</div>',
-        unsafe_allow_html=True
-    )
-
-    # RENDER TOP HERO DASHBOARD HEADER
-    render_status_rail()
-
-    # Sesja sprzed przebudowy moze trzymac stara nazwe widoku.
-    active = VIEW_ALIASES.get(st.session_state.active_view, st.session_state.active_view)
-    view_fn = VIEWS.get(active, render_analyzed_view)
-    view_fn()
 
 if __name__ == "__main__":
     main()
