@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
+from utils.console import force_utf8
 
 JOBS_DB = "jobs_database.json"
 ANALYZED_DB = "analyzed_jobs_waterfall.json"
@@ -89,7 +90,6 @@ def main():
     print(f"PURGE STALE OFFERS (keeping from {cutoff_date.isoformat()} onwards + decided)")
     print("=" * 60)
 
-    # Load data
     jobs = load_json(JOBS_DB)
     decisions = load_json(DECISIONS_FILE) if os.path.exists(DECISIONS_FILE) else {}
     if isinstance(decisions, list):
@@ -117,13 +117,13 @@ def main():
         link = canonical_link(job.get("link", ""))
         scraped_at = job.get("scraped_at", "") # format: 2026-03-22T...
 
-        # Keep if user has made a decision on this job
+        # Zostaje, jeśli oferta ma ręczną decyzję
         if link in decided_links:
             kept_jobs.append(job)
             kept_decided += 1
             continue
 
-        # Keep if scraped within the last 14 days
+        # Zostaje, jeśli zescrapowana w ciągu ostatnich 14 dni
         if scraped_at:
             try:
                 scraped_date = datetime.fromisoformat(scraped_at[:10]).date()
@@ -134,7 +134,7 @@ def main():
             except:
                 pass
 
-        # Otherwise, purge
+        # W przeciwnym razie leci z bazy
         removed_count += 1
 
     print(f"\nResults:")
@@ -143,11 +143,10 @@ def main():
     print(f"   REMOVED (stale):  {removed_count}")
     print(f"   Final DB size:    {len(kept_jobs)}")
 
-    # Save cleaned jobs DB
     save_json(JOBS_DB, kept_jobs)
     print(f"Saved cleaned {JOBS_DB}")
 
-    # Also clean analyzed_jobs_waterfall.json
+    # To samo dla analyzed_jobs_waterfall.json
     if os.path.exists(ANALYZED_DB):
         analyzed = load_json(ANALYZED_DB)
         kept_links = {canonical_link(j.get("link", "")) for j in kept_jobs}
@@ -167,4 +166,5 @@ def main():
 
 
 if __name__ == "__main__":
+    force_utf8()
     main()

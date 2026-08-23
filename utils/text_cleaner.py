@@ -37,26 +37,27 @@ def strip_html(text: str) -> str:
 
 def detect_work_mode(location: str = "", description: str = "", title: str = "") -> dict:
     """
-    Detects work mode (Zdalnie, Hybryda, Stacjonarnie) based on job metadata.
-    Returns dict: {'label': str, 'icon': str, 'badge_class': str}
+    Rozpoznaje tryb pracy (zdalnie, hybryda, stacjonarnie) z metadanych oferty.
+
+    Zwraca słownik: {'label': str, 'icon': str, 'badge_class': str}
     """
     text = f"{location} {title} {description}".lower()
     
-    # Hybrid patterns
+    # Wzorce: hybryda
     if any(k in text for k in ['hybryd', 'hybrid', 'częściowo zdaln', 'partly remote', '2-3 dn', '3-2 dn']):
         return {
             'label': 'Hybrydowo',
             'icon': '🏢/🏠',
             'badge_class': 'badge-match-med'
         }
-    # 100% Remote patterns
+    # Wzorce: pełny zdalny
     elif any(k in text for k in ['zdaln', 'remote', 'home office', '100% zdaln', 'fully remote', 'praca z domu', 'anywhere']):
         return {
             'label': '100% Zdalnie',
             'icon': '🏠',
             'badge_class': 'badge-match-high'
         }
-    # On-site / Office
+    # Wzorce: stacjonarnie
     else:
         return {
             'label': 'Stacjonarnie',
@@ -66,9 +67,10 @@ def detect_work_mode(location: str = "", description: str = "", title: str = "")
 
 def clean_job_description(text: str) -> str:
     """
-    Reduces job description size by ~40-60% by removing non-technical sections.
-    Removes: Benefits, RODO/Legal, Recruitment Process, excessive Marketing.
-    Preserves: Requirements, Tasks, Tech Stack.
+    Skraca opis oferty o mniej więcej 40-60%, wycinając sekcje nietechniczne.
+
+    Wycina: benefity, RODO i klauzule prawne, opis procesu rekrutacji, marketing.
+    Zostawia: wymagania, zakres obowiązków, stack technologiczny.
     """
     if not text:
         return ""

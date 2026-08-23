@@ -1,8 +1,7 @@
 """
-Jooble API Scraper
-Free aggregator REST API for job listings.
-Docs: https://jooble.org/api/about
-Registration: Free at https://jooble.org/api/about
+Scraper Jooble - darmowe REST API agregatora ofert.
+
+Dokumentacja i rejestracja: https://jooble.org/api/about
 """
 
 import logging
@@ -24,7 +23,7 @@ BASE_URL = "https://jooble.org/api"
 
 
 class JoobleAPIScraper:
-    """Scraper using Jooble free aggregator API."""
+    """Scraper na darmowym API agregatora Jooble."""
 
     def __init__(self, config: dict):
         self.config = config
@@ -40,7 +39,6 @@ class JoobleAPIScraper:
         return "Jooble"
 
     def _fetch_page(self, keywords: str, page: int, retries: int = 3) -> dict:
-        """Fetch a single page of results via POST."""
         url = f"{BASE_URL}/{self.api_key}"
         payload = {
             "keywords": keywords,
@@ -72,12 +70,10 @@ class JoobleAPIScraper:
         
         description = item.get("snippet", item.get("description", ""))
         
-        # Salary
         salary = item.get("salary", "")
         if salary:
             description += f"\nWynagrodzenie: {salary}"
         
-        # Type
         job_type = item.get("type", "")
         if job_type:
             description += f"\nTyp: {job_type}"
@@ -97,7 +93,6 @@ class JoobleAPIScraper:
         )
 
     def run(self) -> List[Job]:
-        """Fetch job listings from Jooble aggregator."""
         if not self.api_key:
             logger.warning("Jooble: No API key configured (JOOBLE_API_KEY). "
                          "Register for free at https://jooble.org/api/about")
@@ -115,7 +110,7 @@ class JoobleAPIScraper:
         
         for keywords in keyword_sets:
             page = 1
-            max_pages = 10  # Safety limit per keyword set
+            max_pages = 10  # Bezpiecznik na każdy zestaw słów kluczowych
             
             while page <= max_pages:
                 data = self._fetch_page(keywords, page)
@@ -137,11 +132,11 @@ class JoobleAPIScraper:
                 total = data.get("totalCount", 0)
                 logger.info(f"Jooble: '{keywords}' page {page} - {len(jobs_data)} results (total: {total})")
                 
-                if len(jobs_data) < 20:  # Jooble returns fewer items on last page
+                if len(jobs_data) < 20:  # Jooble zwraca mniej pozycji na ostatniej stronie
                     break
                 
                 page += 1
-                time.sleep(1.5)  # Respect rate limits
+                time.sleep(1.5)  # Nie przekraczamy limitu zapytań
         
         logger.info(f"Jooble: Total {len(all_jobs)} unique jobs fetched")
         return all_jobs

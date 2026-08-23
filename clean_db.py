@@ -11,7 +11,6 @@ from pathlib import Path
 from utils.safe_io import load_json_safe, save_json_atomic
 from utils.text_cleaner import clean_job_description
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -67,10 +66,10 @@ def reduce_file(filepath, is_analyzed=False):
 def run():
     logger.info("Starting Token Diet Procedure...")
     
-    # 1. Clean Analyzed Jobs
+    # 1. Oferty z ocenami
     reduce_file("analyzed_jobs_waterfall.json", is_analyzed=True)
     
-    # 2. Clean Raw Database
+    # 2. Surowa baza
     reduce_file("jobs_database.json", is_analyzed=False)
     
     logger.info("Token Diet Complete. Ready for efficient analysis.")

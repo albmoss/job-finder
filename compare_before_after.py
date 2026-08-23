@@ -33,7 +33,7 @@ def precision_at_k(ranked, k, threshold=7):
 
 
 def report(label, pairs, threshold=7):
-    """pairs = [(score_0_100, user_rating_0_10)]"""
+    """pary = [(ocena_0_100, twoja_ocena_0_10)]"""
     rho = spearman(pairs)
     ranked = sorted(pairs, key=lambda x: -x[0])
     mae = sum(abs(s / 10 - r) for s, r in pairs) / len(pairs)

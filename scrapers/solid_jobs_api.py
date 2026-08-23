@@ -1,8 +1,8 @@
 """
-SOLID.Jobs API Scraper
-Fully public REST API - no authentication required.
-API docs: https://solid.jobs (public-api section)
-Rate limit: 300 requests/minute per IP
+Scraper SOLID.Jobs - w pełni publiczne REST API, bez uwierzytelniania.
+
+Dokumentacja: https://solid.jobs (sekcja public-api).
+Limit: 300 zapytań na minutę na adres IP.
 """
 
 import logging
@@ -21,13 +21,13 @@ logger = logging.getLogger(__name__)
 
 DIVISIONS = ["it", "engineering", "marketing", "sales", "hr", "logistics", "finances", "other"]
 BASE_URL = "https://solid.jobs/public-api/offers"
-CAMPAIGN_ID = "job-scratcher"  # Required param (lowercase, letters/numbers/dashes)
+CAMPAIGN_ID = "job-scratcher"  # Parametr wymagany: małe litery, cyfry, myślniki
 # Mniejsze strony są stabilniejsze - przy pageSize=500 API bywa niekonsekwentne
 PAGE_SIZE = 200
 
 
 class SolidJobsAPIScraper:
-    """Scraper using SOLID.Jobs fully public REST API (no auth needed)."""
+    """Scraper na publicznym REST API SOLID.Jobs - klucz niepotrzebny."""
 
     def __init__(self, config: dict):
         self.config = config
@@ -87,7 +87,7 @@ class SolidJobsAPIScraper:
         """
         all_offers = []
         page = 0
-        max_pages = 20  # Safety limit
+        max_pages = 20  # Bezpiecznik - twardy limit stron
 
         while page < max_pages:
             url = f"{BASE_URL}/{division}?campaign={CAMPAIGN_ID}&pageIndex={page}&pageSize={PAGE_SIZE}"
@@ -105,7 +105,7 @@ class SolidJobsAPIScraper:
                         time.sleep(2 ** attempt)
             
             if data is None:
-                break  # All retries failed
+                break  # Wszystkie próby nieudane
             
             offers = data.get("jobs", [])
             total_count = data.get("totalCount", 0)
@@ -130,21 +130,20 @@ class SolidJobsAPIScraper:
         """Convert API offer dict to Job dataclass."""
         title = offer.get("title", offer.get("name", "Unknown"))
         
-        # Company can be a string or dict depending on endpoint
+        # Firma bywa stringiem albo słownikiem, zależnie od endpointu
         company_raw = offer.get("company", offer.get("companyName", "Unknown"))
         if isinstance(company_raw, dict):
             company = company_raw.get("name", company_raw.get("display_name", "Unknown"))
         else:
             company = str(company_raw) if company_raw else "Unknown"
         
-        # Build link
-        # SOLID.Jobs returns full URL with campaign tracking
+        # SOLID.Jobs zwraca pełny URL z parametrami kampanii
         link = offer.get("url", "")
         if not link:
             slug = offer.get("slug", offer.get("jobOfferKey", ""))
             link = f"https://solid.jobs/offer/{slug}"
         
-        # Description: combine what's available
+        # Opis sklejamy z tego, co jest
         desc_parts = []
         if offer.get("description"):
             desc_parts.append(offer["description"])
@@ -174,7 +173,6 @@ class SolidJobsAPIScraper:
         if offer.get("experienceLevel"):
             desc_parts.append(f"Poziom: {offer['experienceLevel']}")
 
-        # Location
         locations = offer.get("locations", [])
         if isinstance(locations, list) and locations:
             location = locations[0]
@@ -183,18 +181,16 @@ class SolidJobsAPIScraper:
             if isinstance(location, dict):
                 location = location.get("name", location.get("city", ""))
         
-        # Remote/Hybrid info
         if offer.get("isRemote"):
             desc_parts.append("Tryb pracy: Zdalnie")
         elif offer.get("isHybrid"):
             desc_parts.append("Tryb pracy: Hybrydowo")
 
-        # Benefits
         benefits = offer.get("benefits", [])
         if benefits and isinstance(benefits, list):
             desc_parts.append("Benefity: " + ", ".join(str(b) for b in benefits))
 
-        # Salary info from structured salary object
+        # Wynagrodzenie ze strukturalnego obiektu salary
         salary = offer.get("salary", {})
         salary_parts = []
         if isinstance(salary, dict):
@@ -255,7 +251,7 @@ class SolidJobsAPIScraper:
                         all_jobs.append(job)
                 except Exception as e:
                     logger.warning(f"SOLID.Jobs: Failed to parse offer: {e}")
-            time.sleep(0.3)  # Be polite even with 300/min limit
+            time.sleep(0.3)  # Nie dobijamy serwera, mimo limitu 300 zapytań na minutę
 
         logger.info(
             f"SOLID.Jobs: fetched {fetched} offers, dropped {skipped} "

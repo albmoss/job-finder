@@ -1,32 +1,28 @@
 """
-Configuration for Job Search Automation System
+Konfiguracja centralna: ścieżki, klucze API, ustawienia scraperów i interfejsu.
 """
 
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from .env
 load_dotenv(Path(__file__).parent / ".env")
 
-# Project paths
 BASE_DIR = Path(__file__).parent
 JOBS_DATABASE_PATH = BASE_DIR / "jobs_database.json"
 
-# Gemini API Configuration
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY_PRIMARY", "")
 # Model domyślny. Właściwa kaskada modeli jest w waterfall_analysis.py (MODELS)
 # i została dobrana empirycznie - patrz benchmark_models.py.
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 
-# All available API keys for waterfall/rotation
+# Wszystkie klucze do rotacji w kaskadzie modeli
 GEMINI_API_KEYS = [
     os.getenv("GEMINI_API_KEY_1", ""),
     os.getenv("GEMINI_API_KEY_2", ""),
     os.getenv("GEMINI_API_KEY_3", ""),
     os.getenv("GEMINI_API_KEY_4", ""),
 ]
-# Filter out empty keys
 GEMINI_API_KEYS = [k for k in GEMINI_API_KEYS if k]
 
 # Fallback: jeśli klucz główny jest pusty lub to placeholder, weź pierwszy z rotacji.
@@ -35,53 +31,52 @@ _PLACEHOLDERS = {"", "YOUR_KEY_HERE", "CHANGEME", "TODO"}
 if GEMINI_API_KEY.strip() in _PLACEHOLDERS and GEMINI_API_KEYS:
     GEMINI_API_KEY = GEMINI_API_KEYS[0]
 
-# === External Job Portal API Keys ===
-# SOLID.Jobs — no key needed (public API)
-# Adzuna — free registration at https://developer.adzuna.com/
+# === Klucze API zewnętrznych portali ===
+# SOLID.Jobs — klucz niepotrzebny, publiczne API
+# Adzuna — darmowa rejestracja: https://developer.adzuna.com/
 ADZUNA_APP_ID = os.getenv("ADZUNA_APP_ID", "")
 ADZUNA_APP_KEY = os.getenv("ADZUNA_APP_KEY", "")
-# Jooble — free registration at https://jooble.org/api/about
+# Jooble — darmowa rejestracja: https://jooble.org/api/about
 JOOBLE_API_KEY = os.getenv("JOOBLE_API_KEY", "")
-# Careerjet — free registration at https://www.careerjet.com/partners/api/
+# Careerjet — darmowa rejestracja: https://www.careerjet.com/partners/api/
 CAREERJET_API_KEY = os.getenv("CAREERJET_API_KEY", "")
 
-# Scraper Configuration
 SCRAPER_CONFIG = {
     "location": "Warszawa",
-    "radius_km": 15,  # User specified +15km
+    "radius_km": 15,  # Promień +15 km od miasta
     "days_posted": 30,
     "headless": True,
     "timeout_ms": 30000,
     "max_retries": 3,
     "delay_between_requests": 2.0,
-    "max_workers": 3,  # Parallel scraping limit
+    "max_workers": 3,  # Limit równolegle pracujących scraperów
     
-    # Portal-specific entry-level filters
-    # Based on user's Pracuj.pl screenshot showing 5 levels = 4374 jobs
+    # Filtry poziomu wejściowego - osobne dla każdego portalu
+    # Pracuj.pl: pięć poziomów doświadczenia daje ok. 4374 oferty
     "pracuj_pl": {
-        # Experience level codes (et parameter)
+        # Kody poziomu doświadczenia (parametr et)
         "experience_levels": [2, 3, 4, 5, 6],  
         # 2 = Praktykant/stażysta (146)
         # 3 = Asystent (572)
         # 4 = Młodszy specjalista/Junior (1719)
         # 5 = Menedżer (707)
         # 6 = Pracownik fizyczny (1421)
-        # Total: ~4374 jobs
-        "days_param": 7,  # itth=7 (last 7 days)
+        # Razem: ok. 4374 oferty
+        "days_param": 7,  # itth=7, czyli ostatnie 7 dni
     },
     
     "olx_praca": {
-        # OLX has simple experience filter: bez doświadczenia (without experience)
-        # No specific categories - user wants ALL entry-level jobs
-        "experience_filter": "bez-doswiadczenia",  # Without experience
+        # OLX ma tylko jeden filtr doświadczenia: bez doświadczenia
+        # Bez zawężania kategorii - bierzemy wszystko dla początkujących
+        "experience_filter": "bez-doswiadczenia",
         "location": "warszawa",
-        "radius": "15",  # +15km as specified by user
+        "radius": "15",  # +15 km
     },
     
     "linkedin": {
-        # LinkedIn experience level filter (f_E parameter)
-        "experience_levels": ["1", "2"],  # 1=Internship, 2=Entry level
-        "job_types": ["F", "P"],  # F=Full-time, P=Part-time
+        # LinkedIn: filtr poziomu doświadczenia (parametr f_E)
+        "experience_levels": ["1", "2"],  # 1 = staż, 2 = poziom podstawowy
+        "job_types": ["F", "P"],  # F = pełny etat, P = część etatu
     },
     
     # RocketJobs i JustJoin.it dzielą to samo candidate-api.
@@ -163,14 +158,13 @@ SCRAPER_CONFIG = {
     "careerjet_api_key": CAREERJET_API_KEY,
 }
 
-# User agents for anti-detection
+# User-agenty do rotacji - utrudniają wykrycie bota
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
 ]
 
-# AI Matching Configuration
 AI_CONFIG = {
     "temperature": 0.3,
     "max_output_tokens": 500,
@@ -195,15 +189,14 @@ Bądź krytyczny - lepiej odrzucić wątpliwe oferty niż zaproponować nieodpow
     "batch_size": 50
 }
 
-# Streamlit UI Configuration
 UI_CONFIG = {
     "page_title": "Job Search Analytics",
     "page_icon": "💼",
     "page_size": 25,
     "match_color_thresholds": {
-        "high": 70,  # >= 70% green
-        "medium": 40,  # 40-69% yellow
-        # < 40% red
+        "high": 70,  # od 70% zielony
+        "medium": 40,  # 40-69% żółty
+        # poniżej 40% czerwony
     }
 }
 

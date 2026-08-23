@@ -38,6 +38,8 @@ def extract_job_info_from_url(url: str) -> Dict[str, str]:
         pass
 
     def try_playwright_fetch(target_url):
+        import os
+        import sys
         import subprocess
         import tempfile
         logger.info(f"Link Fetcher: Falling back to Playwright subprocess for {target_url}")
@@ -66,8 +68,11 @@ with sync_playwright() as p:
 """
         try:
             proc_result = subprocess.run(
-                ['python', '-c', script, target_url],
-                capture_output=True, text=True, encoding='utf-8', timeout=25
+                [sys.executable, '-c', script, target_url],
+                capture_output=True, text=True, encoding='utf-8', timeout=25,
+                # Podproces wypisuje HTML z polskimi znakami do potoku. Bez tego
+                # jego stdout ma cp1252 i kazda strona z 'ł' wraca jako blad.
+                env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}
             )
             if proc_result.returncode == 0:
                 return proc_result.stdout
@@ -79,7 +84,7 @@ with sync_playwright() as p:
 
     try:
         html = ""
-        # 1. Try simple Request
+        # 1. Najpierw zwykłe żądanie
         try:
             req = urllib.request.Request(
                 url,
@@ -108,7 +113,7 @@ with sync_playwright() as p:
              
         soup = BeautifulSoup(html, 'html.parser')
 
-        # --- JUSTJOIN.IT SPECIFIC PARSER ---
+        # --- PARSER POD JUSTJOIN.IT ---
         if 'justjoin.it' in domain:
             next_data_script = soup.find('script', id='__NEXT_DATA__')
             if next_data_script and next_data_script.string:
@@ -122,13 +127,13 @@ with sync_playwright() as p:
                     def find_job_info(d):
                         nonlocal found_title, found_company, found_city
                         if isinstance(d, dict):
-                            # usually jj has '__typename': 'Offer'
+                            # JJIT zwykle ma '__typename': 'Offer'
                             if d.get('__typename') == 'Offer':
                                 if d.get('title'): found_title = d['title']
                                 if d.get('companyName'): found_company = d['companyName']
                                 if d.get('city'): found_city = d['city']
                                 
-                            # fallback generic keys inside state
+                            # zapas: ogólne klucze w stanie
                             if not found_title and 'title' in d and isinstance(d['title'], str) and len(d['title']) > 3:
                                 if 'companyName' in d:
                                     found_title = d['title']
@@ -148,7 +153,7 @@ with sync_playwright() as p:
                     if found_city: result["location"] = found_city
                     
                     if result["title"]:
-                        return result # Exit early if JJIT parsing succeeded
+                        return result  # Jeśli JJIT się udał, kończymy tutaj
                 except Exception as ex:
                     logger.warning(f"Failed to parse JustJoin NEXT_DATA: {ex}")
             
@@ -156,16 +161,16 @@ with sync_playwright() as p:
         title_tag = soup.find('title')
         page_title = title_tag.text.strip() if title_tag else ""
         
-        # Open Graph Title as backup
+        # Tytuł z Open Graph jako zapas
         og_title = soup.find("meta", property="og:title")
         if og_title and og_title.get("content"):
              page_title = og_title["content"].strip()
              
-        # Heuristic parsing of Title depending on common formats like "Job Title at Company Name"
-        # or "Job Title - Company - Location"
+        # Heurystyka na tytuł - typowe formaty to „Stanowisko at Firma”
+        # albo „Stanowisko - Firma - Lokalizacja”
         if page_title:
             title_set = False
-            # JustJoin.it specific title splitting: "Job Title (Level) - Company Name"
+            # JustJoin.it: „Stanowisko (Poziom) - Firma”
             if 'justjoin.it' in domain and " - " in page_title:
                 parts = page_title.split(" - ")
                 result["title"] = parts[0].strip()
@@ -187,7 +192,7 @@ with sync_playwright() as p:
                 result["title"] = page_title
                 
         if 'justjoin.it' in domain and not result["company"]:
-            # JustJoin.it usually places the company name in a single h2 tag.
+            # JustJoin.it trzyma nazwę firmy w pojedynczym h2
             h2s = soup.find_all('h2')
             for h2 in h2s:
                 if len(h2.text.strip()) > 1:
@@ -212,7 +217,7 @@ with sync_playwright() as p:
              
     except Exception as e:
         logger.warning(f"Link fetcher failed for {url}: {e}")
-        # Return graceful degradation
+        # Zwracamy tyle, ile udało się ustalić
         result["title"] = "Błąd pobierania (sprawdź URL lub blokadę bota)"
         
     return result

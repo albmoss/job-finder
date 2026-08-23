@@ -1,5 +1,5 @@
 """
-Data Models for Job Search System
+Modele danych: oferta, ocena dopasowania, baza ofert, stan scraperów.
 """
 
 from dataclasses import dataclass, asdict
@@ -10,7 +10,7 @@ import threading
 
 @dataclass
 class Job:
-    """Represents a job posting"""
+    """Pojedyncza oferta pracy."""
     title: str
     company: str
     link: str
@@ -34,7 +34,6 @@ class Job:
     also_on: Optional[list] = None
     
     def __post_init__(self):
-        """Automatically clean description on initialization (Token Diet)"""
         from utils.text_cleaner import clean_job_description
         if self.description:
             self.description = clean_job_description(self.description)
@@ -45,7 +44,6 @@ class Job:
     
     @classmethod
     def from_dict(cls, data: dict):
-        """Create Job from dict without re-cleaning description."""
         from dataclasses import fields as dc_fields
         known_fields = {f.name for f in dc_fields(cls)}
         obj = cls.__new__(cls)
@@ -56,13 +54,13 @@ class Job:
 
 @dataclass
 class JobMatch:
-    """Represents a job with AI matching results"""
+    """Oferta razem z oceną dopasowania od modelu."""
     job: Job
     match_percentage: int
     reason: str
     is_entry_level: bool
     missing_skills: Optional[list[str]] = None
-    user_decision: Optional[str] = None  # "apply", "reject", or None
+    user_decision: Optional[str] = None  # „apply”, „reject” albo None
     learnable_in_month: bool = False
     industry: str = "Other"
     
@@ -81,7 +79,6 @@ class JobMatch:
     
     @classmethod
     def from_dict(cls, data: dict):
-        """Create JobMatch instance from dictionary"""
         job = Job.from_dict(data['job'])
         return cls(
             job=job,
@@ -96,7 +93,7 @@ class JobMatch:
 
 
 class JobDatabase:
-    """Simple JSON database for storing jobs"""
+    """Prosta baza ofert trzymana w pliku JSON."""
     
     def __init__(self, filepath: str):
         self.filepath = filepath
@@ -115,7 +112,6 @@ class JobDatabase:
         os.replace(temp_file, self.filepath)
     
     def load_jobs(self) -> list[Job]:
-        """Load jobs from JSON file"""
         try:
             with open(self.filepath, 'r', encoding='utf-8') as f:
                 jobs_data = json.load(f)
@@ -196,11 +192,11 @@ class JobDatabase:
         return touched
 
     def remove_job(self, link: str) -> bool:
-        """Remove a job from the database by its link. Returns True if removed."""
+        """Usuwa ofertę po linku. Zwraca True, jeśli coś usunięto."""
         existing_jobs = self.load_jobs()
         original_length = len(existing_jobs)
         
-        # Keep only jobs that don't match the link
+        # Zostawiamy oferty o innym linku
         updated_jobs = [job for job in existing_jobs if job.link != link]
         
         if len(updated_jobs) < original_length:
@@ -210,12 +206,12 @@ class JobDatabase:
         return False
         
     def check_if_source_scraped_today(self, source_name: str) -> bool:
-        """Deprecated: Use ScraperStatusManager instead"""
+        """Przestarzałe - zamiast tego ScraperStatusManager."""
         return False
 
 
 class ScraperStatusManager:
-    """Manages tracking of successful daily scrapes"""
+    """Pilnuje, które źródła zostały dziś poprawnie zescrapowane."""
     _lock = threading.Lock()
     
     def __init__(self, filepath: str = "scraper_status.json"):
@@ -235,7 +231,7 @@ class ScraperStatusManager:
                 json.dump(status_data, f, ensure_ascii=False, indent=2)
             
     def is_scraped_today(self, source_name: str) -> bool:
-        """Check if source was SUCCESSFULLY scraped today"""
+        """Czy źródło zostało dziś poprawnie zescrapowane."""
         with self._lock:
             from datetime import datetime
             today = datetime.now().date().isoformat()
@@ -257,7 +253,7 @@ class ScraperStatusManager:
             return False
         
     def mark_as_completed(self, source_name: str, jobs_count: int):
-        """Mark source as successfully scraped today"""
+        """Odnotowuje udany dzisiejszy scraping źródła."""
         with self._lock:
             from datetime import datetime
             today = datetime.now().date().isoformat()

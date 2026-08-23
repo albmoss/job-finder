@@ -29,8 +29,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import GEMINI_API_KEYS
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe
+from utils.console import force_utf8
 
-# Configuration
 # UWAGA: tutaj celowo INNA kolejność niż w waterfall_analysis.py.
 # Tam mamy tysiące wywołań klasyfikujących wg gotowej rubryki - wygrywają modele lite.
 # Tutaj jest JEDNO wywołanie robiące otwartą syntezę preferencji z przykładów,
@@ -44,7 +44,7 @@ RATED_ARCHIVE = "rated_archive.json"
 CV_FILE = "final_cv_text.txt"
 OUTPUT_FILE = "preference_profile.json"
 
-# Tier configuration — v3: increased desc_len for better AI pattern recognition
+# Progi ocen - v3: dłuższe opisy pomagają modelowi wyłapać wzorce
 TIERS = {
     "ideal":      {"range": (9, 10), "label": "🟢 IDEALNIE (9-10/10)",     "max_samples": 999, "desc_len": 800},
     "very_good":  {"range": (7, 8),  "label": "🟢 BARDZO DOBRZE (7-8/10)", "max_samples": 999, "desc_len": 600},
@@ -98,16 +98,15 @@ def smart_sample(items, max_count):
     if len(items) <= max_count:
         return items
     
-    # Always include first and last, then evenly space the rest
+    # Zawsze pierwszy i ostatni, resztę rozkładamy równomiernie
     step = len(items) / max_count
     indices = [int(i * step) for i in range(max_count)]
-    # Ensure uniqueness
     indices = sorted(set(indices))
     return [items[i] for i in indices if i < len(items)]
 
 
 def categorize_decisions_granular(all_jobs):
-    """Categorize user decisions into 5 granular tiers + aspirational."""
+    """Rozdziela decyzje na pięć progów ocen plus kategorię aspiracyjną."""
     decisions = load_user_decisions()
     if not decisions:
         print("No user decisions found. Cannot generate profile.")
@@ -116,10 +115,9 @@ def categorize_decisions_granular(all_jobs):
     # Porównanie po postaci kanonicznej - inaczej oceny nie trafiają na oferty
     link_to_job = {canonical_link(j.get('link', '')): j for j in all_jobs}
 
-    # Initialize tier buckets
     tiers = {name: [] for name in TIERS}
     aspirational = []
-    legacy_rejects = []  # Legacy string-format decisions with no rating
+    legacy_rejects = []  # Stary format decyzji - sam string, bez oceny liczbowej
     orphaned = 0
 
     for link, d in decisions.items():
@@ -147,17 +145,16 @@ def categorize_decisions_granular(all_jobs):
                 continue
 
             if rating is None:
-                # Status-only decisions (no numeric rating)
+                # Decyzje bez oceny liczbowej - sam status
                 if status in ('save', 'apply'):
-                    # Treat as 9/10
+                    # traktujemy jak 9/10
                     rating = 9
                 elif status == 'reject':
-                    # Treat as 1/10
+                    # traktujemy jak 1/10
                     rating = 1
                 else:
                     continue
 
-            # Place in correct tier
             for tier_name, tier_cfg in TIERS.items():
                 lo, hi = tier_cfg["range"]
                 if lo <= rating <= hi:
@@ -169,7 +166,7 @@ def categorize_decisions_granular(all_jobs):
                     break
 
         elif isinstance(d, str):
-            # Legacy string-format decisions
+            # Stary format decyzji
             if d in ('apply', 'save'):
                 tiers["ideal"].append({
                     "title": title, "company": company,
@@ -189,7 +186,7 @@ def categorize_decisions_granular(all_jobs):
                     "location": location, "source": source
                 })
 
-    # Merge legacy rejects into hard_no
+    # Stare odrzucenia dorzucamy do hard_no
     tiers["hard_no"].extend(legacy_rejects)
 
     total = sum(len(v) for v in tiers.values()) + len(aspirational)
@@ -213,7 +210,7 @@ def categorize_decisions_granular(all_jobs):
 
 
 def format_tier_text(items, tier_name, tier_cfg):
-    """Format a tier's items for the prompt, with descriptions and metadata."""
+    """Składa pozycje jednego progu do promptu - z opisami i metadanymi."""
     sampled = smart_sample(items, tier_cfg["max_samples"])
     desc_len = tier_cfg["desc_len"]
     
@@ -239,7 +236,7 @@ def format_tier_text(items, tier_name, tier_cfg):
 
 
 def build_contrastive_pairs(tiers):
-    """Build contrastive pairs comparing jobs from adjacent tiers."""
+    """Buduje pary kontrastowe: oferty z sąsiadujących progów obok siebie."""
     adjacent = [
         ("ideal", "very_good", "9-10 vs 7-8"),
         ("very_good", "maybe", "7-8 vs 5-6"),
@@ -273,12 +270,11 @@ PYTANIE: Co KONKRETNIE sprawia, że pierwsza oferta jest wyżej oceniona?"""
 
 
 def build_meta_prompt(categories, cv_text):
-    """Build the granular meta-analysis prompt for Gemini (v3 with contrastive pairs & weighted scoring)."""
+    """Składa prompt meta-analizy dla modelu - wersja 3, z parami kontrastowymi i ważoną punktacją."""
     
     tiers = categories["tiers"]
     aspirational = categories["aspirational"]
     
-    # Build tier sections
     tier_sections = []
     for tier_name, tier_cfg in TIERS.items():
         items = tiers[tier_name]
@@ -287,10 +283,9 @@ def build_meta_prompt(categories, cv_text):
     
     tiers_text = "\n\n".join(tier_sections)
     
-    # Build contrastive pairs
+    # Pary kontrastowe: podobne oferty z różnymi ocenami
     contrastive_text = build_contrastive_pairs(tiers)
     
-    # Aspirational section
     asp_lines = []
     for item in aspirational:
         desc = item["description"][:300].replace('\n', ' ').strip() if item["description"] else ""
@@ -419,19 +414,19 @@ def generate_profile(categories, cv_text):
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
-                        max_output_tokens=8192  # Increased for richer output
+                        max_output_tokens=8192  # Podniesione - model ma zwrócić więcej treści
                     )
                 )
 
                 text = response.text.replace("```json", "").replace("```", "").strip()
                 profile = json.loads(text)
 
-                # Validate expected fields (core + new)
+                # Sprawdzamy, czy wróciły wszystkie oczekiwane pola
                 required = ["preferred_role_types", "preferred_industries", "red_flags", "summary"]
                 if all(k in profile for k in required):
                     print(f"   Profile generated successfully!")
                     
-                    # Check for new enriched fields (v2 + v3)
+                    # Pola wzbogacone z v2 i v3
                     new_fields = ["deal_breakers", "deal_makers", "borderline_signals", "rating_calibration",
                                   "scoring_weights", "negative_patterns", "location_preferences", "salary_preferences"]
                     found_new = [f for f in new_fields if f in profile]
@@ -480,7 +475,6 @@ def main():
     profile = generate_profile(categories, cv_text)
 
     if profile:
-        # Add metadata
         tiers = categories["tiers"]
         profile["_metadata"] = {
             "generated_at": datetime.now().isoformat(),
@@ -512,7 +506,6 @@ def main():
         print(f"Red flags: {', '.join(profile.get('red_flags', []))}")
         print(f"Growth directions: {', '.join(profile.get('growth_directions', []))}")
         
-        # Print new fields
         if "deal_breakers" in profile:
             print(f"Deal breakers: {', '.join(profile.get('deal_breakers', []))}")
         if "deal_makers" in profile:
@@ -533,4 +526,5 @@ def main():
 
 
 if __name__ == "__main__":
+    force_utf8()
     main()

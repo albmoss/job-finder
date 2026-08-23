@@ -31,7 +31,7 @@ HEADERS = {
 
 
 class NoFluffScraper(BaseScraper):
-    """Scraper for NoFluffJobs using internal API (no browser needed)."""
+    """Scraper NoFluffJobs na wewnętrznym API - bez przeglądarki."""
 
     def get_source_name(self) -> str:
         return "NoFluffJobs"
@@ -124,7 +124,6 @@ class NoFluffScraper(BaseScraper):
         return list(unique.values())
 
     def _fetch_detail(self, session: requests.Session, slug: str) -> dict:
-        """Fetch full job details for a single posting."""
         url = f"{DETAIL_URL}/{slug}"
         try:
             resp = session.get(url, headers=HEADERS, timeout=20)
@@ -151,7 +150,7 @@ class NoFluffScraper(BaseScraper):
         slug = posting.get("url", posting.get("slug", posting.get("id", "")))
         link = f"https://nofluffjobs.com/pl/job/{slug}"
 
-        # Build description from detail if available
+        # Opis budujemy ze szczegółów oferty, jeśli są
         desc_parts = []
 
         if detail:
@@ -191,7 +190,7 @@ class NoFluffScraper(BaseScraper):
             # Świadomie POMIJAMY detail["consents"] - to klauzule RODO
             # (potrafią mieć 7000 znaków) i sam koszt tokenów bez wartości.
 
-        # Fallback: use technology tags from search result
+        # Zapas: tagi technologii z listy wyników
         if not desc_parts:
             tiles = posting.get("tiles", {})
             technologies = tiles.get("technologies", [])
@@ -200,7 +199,6 @@ class NoFluffScraper(BaseScraper):
                 desc_parts.append("Technologie: " + ", ".join(tech_names))
             desc_parts.append(f"Oferta z NoFluffJobs: {title}")
 
-        # Salary info from posting
         salary = posting.get("salary", {})
         if salary:
             sal_from = salary.get("from", salary.get("min", ""))
@@ -215,7 +213,6 @@ class NoFluffScraper(BaseScraper):
 
         description = "\n".join(desc_parts)
 
-        # Location
         location_data = posting.get("location", {})
         if isinstance(location_data, dict):
             places = location_data.get("places", [])
@@ -226,7 +223,6 @@ class NoFluffScraper(BaseScraper):
         else:
             location = "Warszawa"
 
-        # Seniority
         seniority = posting.get("seniority", [])
         if seniority and isinstance(seniority, list):
             description += f"\nPoziom: {', '.join(seniority)}"
@@ -257,11 +253,11 @@ class NoFluffScraper(BaseScraper):
                 if not slug:
                     continue
 
-                # Fetch detail for richer descriptions (rate-limited)
+                # Dociągamy szczegóły dla pełniejszych opisów - z ograniczeniem tempa
                 detail = {}
                 if i < 200:  # Limit detail fetches to avoid excessive requests
                     detail = self._fetch_detail(session, slug)
-                    time.sleep(0.8)  # Rate limit: ~1 req/sec
+                    time.sleep(0.8)  # Limit: ok. 1 zapytanie na sekundę
 
                 try:
                     job = self._parse_posting(posting, detail)
