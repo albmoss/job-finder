@@ -16,8 +16,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import GEMINI_API_KEYS, GEMINI_MODEL
 from utils.links import canonical_link
 from utils.safe_io import save_json_atomic
+from utils.console import force_utf8
 
-# Structures for Structured Outputs
+# Struktury pod tryb Structured Outputs
 class JobEval(BaseModel):
     id: int
     match_percentage: int
@@ -27,7 +28,6 @@ class JobEval(BaseModel):
     learnable_in_month: bool
     industry: str
 
-# Configuration
 BATCH_SIZE = 75
 
 # Kolejność ustalona empirycznie (benchmark_models.py na 53 ofertach ocenionych
@@ -76,7 +76,7 @@ def load_cv():
 def load_jobs():
     with open(INPUT_DB, "r", encoding="utf-8") as f:
         data = json.load(f)
-    # Filter for valid descriptions only - taking into account OLX placeholders which are shorter than 50 chars
+    # Tylko oferty z sensownym opisem - zaślepki OLX mają poniżej 50 znaków
     valid = [j for j in data if j.get("description") and j["description"] != "Brak opisu" and len(j["description"].strip()) > 20]
     return valid
 
@@ -133,13 +133,13 @@ def load_user_decisions():
     return {}
 
 def build_active_learning_context(all_jobs):
-    # PRIORITY: Use pre-generated preference profile if available
+    # Priorytet: gotowy profil preferencji, jeśli został wygenerowany
     if os.path.exists("preference_profile.json"):
         try:
             with open("preference_profile.json", "r", encoding="utf-8") as f:
                 profile = json.load(f)
             
-            # Core profile fields
+            # Podstawowe pola profilu
             preferred_roles = ", ".join(profile.get("preferred_role_types", []))
             preferred_industries = ", ".join(profile.get("preferred_industries", []))
             red_flags = ", ".join(profile.get("red_flags", []))
@@ -149,7 +149,7 @@ def build_active_learning_context(all_jobs):
             work_conds = profile.get("work_conditions_preference", "Brak danych")
             summary = profile.get("summary", "Brak podsumowania")
             
-            # V2 enriched fields
+            # Pola wzbogacone (v2)
             deal_breakers = ", ".join(profile.get("deal_breakers", []))
             deal_makers = ", ".join(profile.get("deal_makers", []))
             
@@ -159,7 +159,7 @@ def build_active_learning_context(all_jobs):
             
             calibration = profile.get("rating_calibration", {})
             
-            # Build calibration section
+            # Sekcja kalibracji ocen
             cal_section = ""
             if calibration:
                 cal_section = """
@@ -176,11 +176,11 @@ def build_active_learning_context(all_jobs):
                     if key in calibration:
                         cal_section += f"{prefix}{calibration[key]}\n"
             
-            # Build context
+            # Kontekst dla modelu
             version = profile.get("_metadata", {}).get("generator_version", "v1")
             total_analyzed = profile.get("_metadata", {}).get("total_decisions_analyzed", "?")
             
-            # v3: Scoring weights section
+            # v3: wagi punktacji
             scoring_section = ""
             scoring_weights = profile.get("scoring_weights", {})
             if scoring_weights:
@@ -190,7 +190,7 @@ def build_active_learning_context(all_jobs):
                     scoring_section += f"   {cat}: {pct}%\n"
                 scoring_section += "   INSTRUKCJA: Oceń każdą kategorię 0-100, potem oblicz: match_percentage = Σ(ocena_kategorii × waga)\n"
             
-            # v3: Negative patterns section
+            # v3: wzorce negatywne
             neg_patterns = profile.get("negative_patterns", [])
             neg_section = ""
             if neg_patterns:
@@ -199,7 +199,7 @@ def build_active_learning_context(all_jobs):
                     if isinstance(np_item, dict):
                         neg_section += f"   - Wzorzec: '{np_item.get('pattern', '')}' → max score: {np_item.get('auto_score_max', 15)}%\n"
             
-            # v3: Location & salary preferences
+            # v3: preferencje lokalizacji i wynagrodzenia
             loc_prefs = profile.get("location_preferences", "")
             salary_prefs = profile.get("salary_preferences", "")
             extra_prefs = ""
@@ -248,7 +248,7 @@ INSTRUKCJA OCENIANIA:
         except Exception as e:
             print(f"   Error loading preference profile: {e}. Falling back to raw decisions.")
     
-    # FALLBACK: Build raw hit/kit list from decisions
+    # Zapas: surowa lista trafień i odrzuceń prosto z decyzji
     decisions = load_user_decisions()
     if not decisions: return ""
     
@@ -394,7 +394,7 @@ def main():
     all_jobs = load_jobs()
     print(f"Loaded {len(all_jobs)} valid jobs form DB.")
     
-    # RESUME LOGIC
+    # Wznawianie przerwanego przebiegu
     existing_results = load_existing_results()
     print(f"Loaded {len(existing_results)} existing matched jobs.")
 
@@ -424,10 +424,10 @@ def main():
 
     processed_links = {link for link in existing_by_link if link not in stale_links}
 
-    # Filter remaining jobs
+    # Co zostało do przeliczenia
     remaining_jobs = [j for j in all_jobs if canonical_link(j['link']) not in processed_links]
 
-    # Also skip jobs user already decided on (reject/save/apply/aspirational) - no point re-analyzing
+    # Pomijamy też oferty ocenione ręcznie - nie ma po co ich przeliczać
     user_decisions = load_user_decisions()
     decided_links = {canonical_link(k) for k in user_decisions.keys()}
     before_filter = len(remaining_jobs)
@@ -444,9 +444,9 @@ def main():
     current_key_val, current_model_idx = load_api_state()
     print(f"Loaded API State: Model[{current_model_idx}] Key[{current_key_val}]")
     
-    results = existing_results # Start with existing data
+    results = existing_results
     
-    # Dynamic Queue Setup
+    # Kolejka dynamiczna
     job_queue = remaining_jobs[:]
     b_idx = 0
     current_batch_size = BATCH_SIZE
@@ -600,4 +600,5 @@ def save_results(data):
     save_json_atomic(OUTPUT_FILE, data)
 
 if __name__ == "__main__":
+    force_utf8()
     main()

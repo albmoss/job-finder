@@ -1,9 +1,8 @@
 """
-Adzuna API Scraper
-Official REST API with free tier for Poland (country code: pl).
-Docs: https://developer.adzuna.com/
-Rate limit: 25 requests/minute (free tier)
-Registration: Free at https://developer.adzuna.com/
+Scraper Adzuny - oficjalne REST API, darmowy próg dla Polski (kod kraju: pl).
+
+Dokumentacja i rejestracja: https://developer.adzuna.com/
+Limit darmowego progu: 25 zapytań na minutę.
 """
 
 import logging
@@ -26,7 +25,7 @@ SEARCH_KEYWORDS = "junior OR praktykant OR stażysta OR asystent OR trainee"
 
 
 class AdzunaAPIScraper:
-    """Scraper using Adzuna official REST API (free tier)."""
+    """Scraper na oficjalnym REST API Adzuny (darmowy próg)."""
 
     def __init__(self, config: dict):
         self.config = config
@@ -43,7 +42,6 @@ class AdzunaAPIScraper:
         return "Adzuna"
 
     def _fetch_page(self, page: int, retries: int = 3) -> dict:
-        """Fetch a single page of results."""
         params = {
             "app_id": self.app_id,
             "app_key": self.app_key,
@@ -76,10 +74,8 @@ class AdzunaAPIScraper:
         company = result.get("company", {}).get("display_name", "Unknown")
         link = result.get("redirect_url", result.get("adref", ""))
         
-        # Description
         description = result.get("description", "")
         
-        # Salary info
         salary_parts = []
         if result.get("salary_min"):
             salary_parts.append(f"od {result['salary_min']:.0f}")
@@ -88,16 +84,13 @@ class AdzunaAPIScraper:
         if salary_parts:
             description += f"\nWynagrodzenie: {' '.join(salary_parts)} PLN"
         
-        # Category
         category = result.get("category", {}).get("label", "")
         if category:
             description += f"\nKategoria: {category}"
         
-        # Location
         location_data = result.get("location", {})
         location = location_data.get("display_name", "")
         
-        # Date
         posted_date = result.get("created", "")
 
         return Job(
@@ -112,7 +105,6 @@ class AdzunaAPIScraper:
         )
 
     def run(self) -> List[Job]:
-        """Fetch all available job listings from Adzuna Poland."""
         if not self.app_id or not self.app_key:
             logger.warning("Adzuna: No API credentials configured (ADZUNA_APP_ID / ADZUNA_APP_KEY). "
                          "Register for free at https://developer.adzuna.com/")
@@ -122,7 +114,7 @@ class AdzunaAPIScraper:
         all_jobs = []
         seen_links = set()
         page = 1
-        max_pages = 20  # Safety limit
+        max_pages = 20  # Bezpiecznik - twardy limit stron
 
         while page <= max_pages:
             data = self._fetch_page(page)
@@ -148,7 +140,7 @@ class AdzunaAPIScraper:
                 break
 
             page += 1
-            time.sleep(2.5)  # Respect 25 req/min rate limit
+            time.sleep(2.5)  # Limit portalu: 25 zapytań na minutę
 
         logger.info(f"Adzuna: Total {len(all_jobs)} unique jobs fetched")
         return all_jobs

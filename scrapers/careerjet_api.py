@@ -1,8 +1,7 @@
 """
-Careerjet API Scraper
-Free Publisher REST API for job listings.
-Docs: https://www.careerjet.com/partners/api/
-Registration: Free Publisher account at https://www.careerjet.com/partners/api/
+Scraper Careerjet - darmowe REST API dla wydawców.
+
+Dokumentacja i rejestracja: https://www.careerjet.com/partners/api/
 """
 
 import logging
@@ -25,7 +24,7 @@ BASE_URL = "https://search.api.careerjet.net/v4/query"
 
 
 class CareerjetAPIScraper:
-    """Scraper using Careerjet Publisher API."""
+    """Scraper na API wydawcy Careerjet."""
 
     def __init__(self, config: dict):
         self.config = config
@@ -33,7 +32,7 @@ class CareerjetAPIScraper:
         self.location = config.get("location", "Warszawa")
         self.session = requests.Session()
         
-        # Basic Auth: api_key as username, empty password
+        # Basic Auth: klucz jako login, puste hasło
         if self.api_key:
             auth_str = b64encode(f"{self.api_key}:".encode()).decode()
             self.session.headers.update({
@@ -49,7 +48,6 @@ class CareerjetAPIScraper:
         return "Careerjet"
 
     def _fetch_page(self, keywords: str, page: int, retries: int = 3) -> dict:
-        """Fetch a single page of results."""
         params = {
             "keywords": keywords,
             "location": self.location,
@@ -86,7 +84,6 @@ class CareerjetAPIScraper:
         location = item.get("locations", item.get("location", ""))
         posted_date = item.get("date", "")
         
-        # Salary
         salary = item.get("salary", "")
         if salary:
             description += f"\nWynagrodzenie: {salary}"
@@ -103,7 +100,6 @@ class CareerjetAPIScraper:
         )
 
     def run(self) -> List[Job]:
-        """Fetch job listings from Careerjet."""
         if not self.api_key:
             logger.warning("Careerjet: No API key configured (CAREERJET_API_KEY). "
                          "Register for free at https://www.careerjet.com/partners/api/")
@@ -146,7 +142,7 @@ class CareerjetAPIScraper:
                     break
                 
                 page += 1
-                time.sleep(2.0)  # Respect rate limits
+                time.sleep(2.0)  # Nie przekraczamy limitu zapytań
         
         logger.info(f"Careerjet: Total {len(all_jobs)} unique jobs fetched")
         return all_jobs

@@ -1,5 +1,5 @@
 """
-CV Parser - Extract text from PDF and DOCX files
+Wyciąganie tekstu z CV w formacie PDF i DOCX.
 """
 
 import logging
@@ -20,11 +20,10 @@ logger = logging.getLogger(__name__)
 
 
 class CVParser:
-    """Parse CV files and extract text content"""
+    """Wyciąga tekst z pliku CV."""
     
     @staticmethod
     def extract_from_pdf(filepath: str) -> Optional[str]:
-        """Extract text from PDF file"""
         if PdfReader is None:
             raise ImportError("pypdf not installed. Install with: pip install pypdf")
         
@@ -47,7 +46,6 @@ class CVParser:
     
     @staticmethod
     def extract_from_docx(filepath: str) -> Optional[str]:
-        """Extract text from DOCX file"""
         if Document is None:
             raise ImportError("python-docx not installed. Install with: pip install python-docx")
         
@@ -59,7 +57,7 @@ class CVParser:
                 if paragraph.text.strip():
                     text_parts.append(paragraph.text)
             
-            # Also extract text from tables
+            # Tekst z tabel też
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
@@ -103,11 +101,10 @@ class CVParser:
     
     @staticmethod
     def clean_text(text: str) -> str:
-        """Clean and normalize extracted text"""
         if not text:
             return ""
         
-        # Remove excessive whitespace
+        # Zbijamy nadmiarowe białe znaki
         lines = [line.strip() for line in text.split('\n')]
         lines = [line for line in lines if line]
         

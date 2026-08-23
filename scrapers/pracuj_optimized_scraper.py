@@ -1,8 +1,8 @@
 """
-OPTIMIZED Pracuj.pl Scraper with Urllib + JSON parsing
-- Bypass Playwright entirely
-- Downloads AI summaries natively
-- Multi-threaded pagination
+Scraper Pracuj.pl na urllib i parsowaniu JSON.
+
+Omija Playwrighta w całości, bierze gotowe streszczenia AI prosto z danych
+strony i stronicuje wielowątkowo.
 """
 
 import logging
@@ -27,9 +27,10 @@ USER_AGENTS = [
 ]
 
 class PracujOptimizedScraper:
-    """Ultra-optimized scraper using urllib + JSON parsing (NO Playwright).
-    Does NOT inherit BaseScraper since it doesn't need browser automation.
-    Implements same interface: get_source_name() and run()."""
+    """Scraper na urllib i JSON, bez Playwrighta.
+
+    Nie dziedziczy po BaseScraper, bo nie potrzebuje przeglądarki - ale wystawia
+    ten sam interfejs: get_source_name() i run()."""
     
     BASE_URL = "https://www.pracuj.pl"
     
@@ -74,7 +75,6 @@ class PracujOptimizedScraper:
        return "Pracuj.pl"
     
     def build_search_url(self, page: int = 1) -> str:
-        """Build search URL"""
         import random
         from config import SCRAPER_CONFIG
         
@@ -132,7 +132,7 @@ class PracujOptimizedScraper:
         return ""
 
     def fetch_job_listings_page(self, page_num: int) -> List[Job]:
-        """Fetch job listings AND their AI summaries from one page synchronously"""
+        """Pobiera z jednej strony oferty razem z ich streszczeniami AI."""
         jobs = []
         html = self.fetch_page_html(page_num)
         if not html:
@@ -168,7 +168,7 @@ class PracujOptimizedScraper:
             for offer in found_offers:
                 title = offer.get('jobTitle', 'Unknown')
                 company = offer.get('companyName', 'Unknown')
-                # Search deeply for the uri inside this specific job offer structure
+                # Szukamy uri w głąb struktury oferty
                 def find_uri(d):
                     if isinstance(d, dict):
                         if 'offerAbsoluteUri' in d and d['offerAbsoluteUri']: return d['offerAbsoluteUri']
@@ -184,21 +184,20 @@ class PracujOptimizedScraper:
                     
                 link = find_uri(offer)
                 
-                # Fallback parsing
+                # Parsowanie zapasowe
                 if not link or link in seen_links: continue
                 seen_links.add(link)
                 
                 if not link.startswith('http'):
                     link = self.BASE_URL + link
                     
-                # Handle location
                 locations = offer.get('displayWorkplaces', [])
                 location = locations[0] if locations else "Warszawa"
                 
-                # THE SECRET SAUCE: Getting the description WITHOUT hitting the subpage
+                # Sedno optymalizacji: opis bez wchodzenia na podstronę oferty
                 description = "Brak opisu"
                 if offer.get('aiSummary'):
-                    # The aiSummary is usually HTML bullets
+                    # aiSummary to zwykle punktory w HTML
                     description = BeautifulSoup(offer['aiSummary'], "html.parser").get_text(separator="\n", strip=True)
                     
                 job = Job(
@@ -219,7 +218,7 @@ class PracujOptimizedScraper:
         return jobs
     
     def fetch_all_listings(self) -> List[Job]:
-        """Fetch all job listings using ThreadPoolExecutor"""
+        """Pobiera wszystkie oferty równolegle, przez pulę wątków."""
         all_jobs = []
         
         # 1. Fetch first page to find pagination
@@ -231,9 +230,9 @@ class PracujOptimizedScraper:
             logger.warning("No jobs found on first page")
             return []
             
-        # Hard cap to 50 pages if we can't extract total_pages easily.
-        # Next.js pagination parsing is fragile, but since HTTP requests are instant,
-        # we can just try up to a reasonable cap and break on empty pages.
+        # Twardy limit stron - parsowanie paginacji Next.js jest kruche,
+        # a że żądania HTTP są natychmiastowe, po prostu próbujemy
+        # do rozsądnego limitu i przerywamy na pustej stronie.
         total_pages = 100 
         
         logger.info(f"Scanning up to {total_pages} pages with {self.parallel_threads} threads...")
@@ -243,11 +242,9 @@ class PracujOptimizedScraper:
         
         with ThreadPoolExecutor(max_workers=self.parallel_threads) as executor:
             while current_page <= total_pages and consecutive_empty < 3:
-                # Create batch
                 batch_size = self.parallel_threads
                 page_batch = list(range(current_page, min(current_page + batch_size, total_pages + 1)))
                 
-                # Execute batch
                 results = list(executor.map(self.fetch_job_listings_page, page_batch))
                 
                 batch_found_jobs = False
@@ -262,14 +259,13 @@ class PracujOptimizedScraper:
                     
                 current_page += batch_size
         
-        # Deduplicate final global list because Pracuj repeating offers sometimes happens on bounds
+        # Deduplikacja na koniec - Pracuj potrafi powtórzyć oferty na styku stron
         unique_jobs = {job.link: job for job in all_jobs}.values()
         
         logger.info(f"Total Unique listings fetched: {len(unique_jobs)}")
         return list(unique_jobs)
     
     def run(self) -> List[Job]:
-        """Sync entrypoint — no async needed for urllib-based scraper."""
         logger.info(f"{self.get_source_name()}: Starting optimized scrape")
         return self.fetch_all_listings()
 

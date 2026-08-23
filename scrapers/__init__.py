@@ -1,6 +1,5 @@
 """
-Job Scrapers Package
-Contains scrapers for Polish job portals
+Scrapery polskich portali z ogłoszeniami o pracę.
 """
 
 from .base_scraper import BaseScraper
@@ -11,7 +10,7 @@ from .linkedin_scraper import LinkedInScraper
 from .nofluff_scraper import NoFluffScraper
 from .justjoin_scraper import JustJoinScraper
 
-# New API-based scrapers
+# Scrapery oparte o API
 from .solid_jobs_api import SolidJobsAPIScraper
 from .adzuna_api import AdzunaAPIScraper
 from .jooble_api import JoobleAPIScraper
@@ -34,7 +33,7 @@ __all__ = [
     'LinkedInScraper',
     'NoFluffScraper',
     'JustJoinScraper',
-    # API scrapers
+    # scrapery API
     'SolidJobsAPIScraper',
     'AdzunaAPIScraper',
     'JoobleAPIScraper',
@@ -44,6 +43,6 @@ __all__ = [
     'PracaPlScraper',
     'AplikujScraper',
     'GoWorkScraper',
-    # Browser
+    # scrapery przeglądarkowe
     'IndeedScraper',
 ]

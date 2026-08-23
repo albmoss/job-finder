@@ -17,6 +17,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from utils.console import force_utf8
+
+force_utf8()
+
 from main_scraper import run_all_scrapers
 from utils.data_models import JobDatabase
 from config import JOBS_DATABASE_PATH
@@ -82,7 +86,7 @@ def run_pipeline(skip_scraping=False):
     # 4. Ewaluacja - czy ranking faktycznie działa?
     def _eval():
         import eval_ranking
-        eval_ranking.main()
+        eval_ranking.main([])
 
     _phase("PHASE 4: Ranking evaluation", _eval)
 

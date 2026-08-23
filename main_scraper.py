@@ -11,6 +11,7 @@ from pathlib import Path
 # Add parent directory to path to import modules
 sys.path.insert(0, str(Path(__file__).parent))
 
+from utils.console import force_utf8
 from config import SCRAPER_CONFIG, JOBS_DATABASE_PATH, USER_AGENTS
 from scrapers import (
     PracujOptimizedScraper,  # HTTP + __NEXT_DATA__ (bez przeglądarki)
@@ -31,7 +32,6 @@ from scrapers import (
 
 from utils.data_models import JobDatabase, ScraperStatusManager
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -120,16 +120,16 @@ def run_all_scrapers(only=None, force=False, refresh=False):
     logger.info("Starting Job Search Scraper")
     logger.info("=" * 60)
     
-    # Prepare scraper config with user agents
+    # Konfiguracja scrapera razem z pulą user-agentów
     scraper_config = SCRAPER_CONFIG.copy()
     scraper_config['user_agents'] = USER_AGENTS
     
-    # === Phase 1: API scrapers (fast, no browser needed) ===
+    # === Etap 1: scrapery API - szybkie, bez przeglądarki ===
     api_scrapers = [
-        SolidJobsAPIScraper(scraper_config),      # 🌐 Public API (no key!)
-        PracujOptimizedScraper(scraper_config),   # 🚀 HTTP + __NEXT_DATA__
-        NoFluffScraper(scraper_config),           # 🚀 Internal API
-        JustJoinScraper(scraper_config),          # 🚀 candidate-api
+        SolidJobsAPIScraper(scraper_config),  # publiczne API - bez klucza
+        PracujOptimizedScraper(scraper_config),  # HTTP + __NEXT_DATA__
+        NoFluffScraper(scraper_config),  # wewnętrzne API
+        JustJoinScraper(scraper_config),  # candidate-api
         RocketJobsScraper(scraper_config),        # 🚀 candidate-api (był browser + 0 ofert)
         PracaPlScraper(scraper_config),           # 📄 ld+json - portal ogólny
         AplikujScraper(scraper_config),           # 📄 ld+json - dużo entry-level
@@ -150,7 +150,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
         else:
             logger.debug(f"Skipped {scraper_cls.__name__} - missing keys: {', '.join(required_keys)}")
 
-    # === Phase 2: Browser scrapers (slower, need Playwright) ===
+    # === Etap 2: scrapery przeglądarkowe - wolniejsze, wymagają Playwrighta ===
     browser_scrapers = [
         OLXScraper(scraper_config),
         LinkedInScraper(scraper_config),
@@ -184,17 +184,13 @@ def run_all_scrapers(only=None, force=False, refresh=False):
     all_jobs = []
     scraper_results = {}
     
-    # Initialize status manager
     status_manager = ScraperStatusManager()
     
-    # Initialize database
     db = JobDatabase(str(JOBS_DATABASE_PATH))
 
-    # Define inner function for parallel execution
     def _scrape_source(scraper):
         source_name = scraper.get_source_name()
         
-        # Check explicit status
         if not force and status_manager.is_scraped_today(source_name):
             logger.info(f"\n{'='*60}")
             logger.info(f"Skipping {source_name} - Already scraped SUCCESSFULLY today")
@@ -212,7 +208,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
         try:
             jobs = scraper.run()
             
-            # SMART SUCCESS CHECK: Only mark as completed if we got a meaningful number of jobs
+            # Za sukces uznajemy dopiero sensowną liczbę ofert, nie sam brak wyjątku
             MIN_JOBS_THRESHOLD = 5
             
             if len(jobs) >= MIN_JOBS_THRESHOLD:
@@ -239,7 +235,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 'status': 'failed'
             }
 
-    # === Phase 1: Run API scrapers in parallel (safe, no browser conflicts) ===
+    # === Etap 1: scrapery API równolegle - nie kolidują, brak przeglądarki ===
     logger.info(f"\nPhase 1: Running {len(api_scrapers)} API/HTTP scrapers in parallel...")
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
@@ -271,7 +267,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                     'status': result['status']
                 }
                 
-                # Incremental Save
+                # Zapis przyrostowy
                 if new_jobs:
                     saved = db.append_jobs(new_jobs)
                     logger.info(f"{source}: Saved {saved} new jobs to DB.")
@@ -331,7 +327,6 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                     'status': 'failed'
                 }
     
-    # Print summary
     print("\n" + "="*60)
     print("SCRAPING SUMMARY")
     print("="*60)
@@ -363,6 +358,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
 
 
 if __name__ == "__main__":
+    force_utf8()
     import argparse
 
     parser = argparse.ArgumentParser(description="Uruchom scrapery ofert pracy")

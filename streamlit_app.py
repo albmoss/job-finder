@@ -1,6 +1,7 @@
 """
-Job Search Analytics - Streamlit Application
-AI-powered job matching with Gemini
+Job Finder - interfejs Streamlit.
+
+Przegląd ofert z ocenami dopasowania, sterowanie pipeline'em i śledzenie aplikacji.
 """
 
 import streamlit as st
@@ -35,17 +36,14 @@ from utils.links import canonical_link
 from utils.offer_age import ghost_signals, ghost_label
 import ui_theme
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Constants from config
 PAGE_SIZE = UI_CONFIG.get('page_size', 25)
 
-# Page configuration
 st.set_page_config(
     page_title="Job Search Analytics — AI Matcher",
     page_icon="💼",
@@ -908,7 +906,7 @@ def render_view_header(eyebrow: str, title: str, subtitle: str = ""):
     )
 
 
-# --- UTILS & DATA LOADING ---
+# --- WCZYTYWANIE DANYCH ---
 
 USER_DECISIONS_PATH = Path("user_decisions.json")
 
@@ -946,7 +944,7 @@ def update_decision(link, status, rating, stage=None):
     save_user_decisions(st.session_state.user_decisions)
 
 def get_decision(link):
-    """Gracefully handle legacy string decisions and new dict decisions"""
+    """Obsługuje oba formaty decyzji naraz: stary string i nowy słownik."""
     decisions = st.session_state.user_decisions
     val = decisions.get(link)
     if val is None:
@@ -962,12 +960,10 @@ def sync_pagination(source, target):
     st.session_state[target] = st.session_state[source]
 
 def init_session_state():
-    """Initialize session state variables"""
     if 'cv_text' not in st.session_state: st.session_state.cv_text = None
     if 'analyzed_matches' not in st.session_state: st.session_state.analyzed_matches = []
     if 'raw_jobs' not in st.session_state: st.session_state.raw_jobs = []
     
-    # Load persistent decisions
     if 'user_decisions' not in st.session_state:
         st.session_state.user_decisions = load_user_decisions()
         
@@ -975,7 +971,7 @@ def init_session_state():
     if 'current_cv_path' not in st.session_state: st.session_state.current_cv_path = "cv.pdf"
     if 'active_view' not in st.session_state: st.session_state.active_view = "Dopasowane przez AI"
     
-    # Job lookup dict (built once on data load)
+    # Indeks ofert po linku - budowany raz przy wczytaniu danych
     if 'job_lookup' not in st.session_state: st.session_state.job_lookup = {}
 
     # Pulpit: ktora zakladka i ktora oferta jest otwarta w lewym panelu
@@ -983,14 +979,13 @@ def init_session_state():
     if 'ws_selected' not in st.session_state: st.session_state.ws_selected = None
 
 def load_data():
-    """Loads both Raw DB and Analyzed Jobs into session state"""
     if st.session_state.data_loaded:
         return
     with st.spinner("Ładowanie bazy danych ofert..."):
         _load_data_impl()
 
 def _load_data_impl():
-    # 1. Load Analyzed Jobs (Waterfall Analysis)
+    # 1. Oferty z ocenami z analizy kaskadowej
     deep_path = Path("analyzed_jobs_waterfall.json")
     if deep_path.exists():
         try:
@@ -1008,7 +1003,7 @@ def _load_data_impl():
         except Exception as e:
             st.error(f"Błąd ładowania wyników analizy AI: {e}")
 
-    # 2. Load Raw Database
+    # 2. Surowa baza ofert
     if JOBS_DATABASE_PATH.exists():
         try:
             db = JobDatabase(str(JOBS_DATABASE_PATH))
@@ -1023,7 +1018,7 @@ def _load_data_impl():
         except Exception as e:
             st.error(f"Błąd ładowania bazy surowej: {e}")
     
-    # 3. Build fast lookup dict
+    # 3. Indeks po linku
     lookup = {}
     for m in st.session_state.analyzed_matches:
         lookup[m.job.link] = m.job
@@ -1035,7 +1030,7 @@ def _load_data_impl():
     st.session_state.data_loaded = True
 
 def find_job_obj(link):
-    """O(1) job lookup via pre-built dict"""
+    """Wyszukanie oferty w czasie stałym, po gotowym indeksie."""
     return st.session_state.job_lookup.get(link)
 
 
@@ -1325,7 +1320,7 @@ def render_job_card(job, key_prefix, status=None, rating=None, match=None, show_
 
 
 def _delete_job_permanent(job_link: str):
-    """Delete a job from all datastores."""
+    """Usuwa ofertę ze wszystkich plików z danymi."""
     try:
         db = JobDatabase(str(JOBS_DATABASE_PATH))
         db.remove_job(job_link)
@@ -1360,7 +1355,7 @@ def _delete_job_permanent(job_link: str):
 
 def render_paginated_list(items, page_key_prefix, render_item_fn, header_text):
     """
-    Shared pagination wrapper for all views.
+    Wspólne stronicowanie dla wszystkich widoków.
     """
     if not items:
         return
@@ -1393,7 +1388,7 @@ def render_paginated_list(items, page_key_prefix, render_item_fn, header_text):
 
 
 # =============================================================================
-# KANBAN BOARD VIEW (APPLICATION TRACKER)
+# TABLICA KANBAN - ŚLEDZENIE APLIKACJI
 # =============================================================================
 
 def render_kanban_view():
@@ -1510,7 +1505,7 @@ def render_kanban_view():
 
 
 # =============================================================================
-# VIEWS
+# WIDOKI
 # =============================================================================
 
 def render_analyzed_view():
@@ -1549,7 +1544,6 @@ def render_analyzed_view():
     }
     mapped_sort = sort_mapping.get(sort_order, "Highest Match")
     
-    # Apply Filters
     filtered = []
     for m in matches:
         if search_query and search_query not in m.job.title.lower() and search_query not in m.job.company.lower(): continue
@@ -1569,7 +1563,6 @@ def render_analyzed_view():
     if hide_stale:
         filtered = [m for m in filtered if ghost_signals(m.job)["level"] != "ghost"]
 
-    # Sort
     if mapped_sort == "Highest Match":
         filtered.sort(key=lambda x: x.match_percentage, reverse=True)
     elif mapped_sort == "Lowest Match":
@@ -1706,7 +1699,6 @@ def render_saved_view():
         st.info("Brak zapisanych lub aplikowanych ofert.")
         return
         
-    # Export Section
     try:
         import pandas as pd
         import io
@@ -1838,7 +1830,7 @@ def render_rejected_view():
 
 
 # =============================================================================
-# PIPELINE CONTROL CENTER
+# STEROWANIE PIPELINE'EM
 # =============================================================================
 
 def _read_links(path: Path, nested: bool = False) -> set:
@@ -2121,7 +2113,6 @@ def render_pipeline_control():
 
     st.markdown("---")
 
-    # CONFIG & API KEYS
     st.markdown('<div class="sec-label">Klucze API</div>', unsafe_allow_html=True)
     
     def read_current_env_keys():
@@ -2198,7 +2189,7 @@ def render_pipeline_control():
 
 
 # =============================================================================
-# MANUAL JOB ENTRY
+# RĘCZNE DODANIE OFERTY
 # =============================================================================
 
 def render_add_manual_view():
@@ -4292,7 +4283,7 @@ VIEW_ALIASES = {
 
 
 # =============================================================================
-# MAIN APPLICATION
+# APLIKACJA
 # =============================================================================
 
 def main():

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class OLXScraper(BaseScraper):
-    """Scraper for OLX Praca job portal"""
+    """Scraper portalu OLX Praca."""
     
     BASE_URL = "https://www.olx.pl"
     
@@ -63,13 +63,12 @@ class OLXScraper(BaseScraper):
         import os, json
         state_file = "olx_category_state.json"
         
-        # Load state
         completed_categories = []
         if os.path.exists(state_file):
             try:
                 with open(state_file, 'r') as f:
                     state = json.load(f)
-                    # Reset state daily
+                    # Stan kasowany raz na dobę
                     import datetime
                     today_str = datetime.datetime.now().strftime("%Y-%m-%d")
                     if state.get("date") == today_str:
@@ -86,7 +85,7 @@ class OLXScraper(BaseScraper):
                 logger.info(f"Skipping already scraped category: {category}")
                 continue
 
-            # Use dynamic location and radius from config
+            # Lokalizacja i promień z configu
             from config import SCRAPER_CONFIG
             location = SCRAPER_CONFIG.get("location", "Warszawa").lower()
             radius = SCRAPER_CONFIG.get("radius_km", 15)
@@ -97,7 +96,7 @@ class OLXScraper(BaseScraper):
                 logger.error(f"{self.get_source_name()}: Failed to navigate to {category}")
                 continue
                 
-            # Handle cookie consent on first load gracefully without waiting too long
+            # Zgoda na ciasteczka przy pierwszym wejściu - bez długiego czekania
             try:
                 cookie_button = self.page.locator('button[id="onetrust-accept-btn-handler"]')
                 if cookie_button.count() > 0 and cookie_button.is_visible(timeout=1000):
@@ -106,7 +105,6 @@ class OLXScraper(BaseScraper):
             except Exception as e:
                 pass
 
-            # Check if category has results
             try:
                 empty_state = self.page.query_selector('h3[data-testid="no-results-header"]')
                 if empty_state:
@@ -125,7 +123,7 @@ class OLXScraper(BaseScraper):
                 try:
                     self.page.wait_for_selector('a[href*="/oferta/"]', timeout=3000)
                 except Exception:
-                    break # Usually means no more offers or timeout
+                    break  # Zwykle znaczy koniec ofert albo timeout
                 
                 cards = self.page.query_selector_all('div[data-cy="l-card"]')
                 page_found = 0
@@ -139,7 +137,7 @@ class OLXScraper(BaseScraper):
                         title = title_elem.inner_text().strip() if title_elem else link_elem.inner_text().strip()
                         href = link_elem.get_attribute('href')
                         
-                        # Use multiple selectors for robustness (CSS-modules classes change on deploys)
+                        # Kilka selektorów naraz - klasy CSS-modules zmieniają się przy każdym wdrożeniu
                         company_elem = (
                             card.query_selector('p.css-w5qju7') or
                             card.query_selector('[data-testid="company-name"]') or
@@ -154,7 +152,6 @@ class OLXScraper(BaseScraper):
                         # do bazy wielokrotnie pod różnymi URL-ami
                         href = normalize_olx_link(href)
 
-                        # Quick dedup logic
                         if href in seen_links: continue
                         seen_links.add(href)
 
@@ -176,7 +173,6 @@ class OLXScraper(BaseScraper):
                 
                 if page_found == 0: break
                     
-                # Next page
                 try:
                     next_btn = self.page.query_selector('a[data-cy="pagination-forward"]')
                     if next_btn:
@@ -184,15 +180,15 @@ class OLXScraper(BaseScraper):
                         self.page.wait_for_timeout(1500)
                         page_num += 1
                     else:
-                        break # Reached end
+                        break  # Koniec listy
                 except Exception:
                     break
                     
-            # Mark category as fully processed
+            # Kategoria przerobiona do końca
             completed_categories.append(category)
             logger.info(f"Completed category {category}. Total cumulative jobs: {len(jobs)}")
             
-            # Save state after each category
+            # Stan zapisywany po każdej kategorii
             try:
                 import datetime
                 with open(state_file, 'w') as f:
@@ -257,7 +253,7 @@ class OLXScraper(BaseScraper):
 
 
     def scrape_current_page(self) -> List[Job]:
-        return [] # Unused
+        return []  # Nieużywane
         
     def go_to_next_page(self) -> bool:
-        return False # Unused
+        return False  # Nieużywane

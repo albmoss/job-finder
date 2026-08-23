@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.safe_io import load_json_safe
+from utils.console import force_utf8
 
 ANALYZED_FILE = "analyzed_jobs_waterfall.json"
 DECISIONS_FILE = "user_decisions.json"
@@ -119,11 +120,13 @@ def bar(frac, width=28):
     return "█" * filled + "·" * (width - filled)
 
 
-def main():
+def main(argv=None):
+    # argv=[] przy wywolaniu z pipeline'u: bez tego argparse czyta sys.argv
+    # i wywraca sie na flagach adresowanych do run_final_pipeline.py.
     ap = argparse.ArgumentParser()
     ap.add_argument("--threshold", type=int, default=7,
                     help="Od jakiej oceny uznajemy ofertę za trafioną (domyślnie 7/10)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     ratings = load_manual_ratings()
     scores = load_scores()
@@ -204,4 +207,5 @@ def main():
 
 
 if __name__ == "__main__":
+    force_utf8()
     sys.exit(main())

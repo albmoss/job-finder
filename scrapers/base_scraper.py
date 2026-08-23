@@ -1,6 +1,5 @@
 """
-Base Scraper Class
-Abstract base class with common scraping functionality
+Klasa bazowa scraperów przeglądarkowych - wspólna obsługa Playwrighta.
 """
 
 import logging
@@ -16,15 +15,9 @@ logger = logging.getLogger(__name__)
 
 
 class BaseScraper(ABC):
-    """Abstract base class for all job scrapers"""
+    """Wspólna baza dla scraperów korzystających z przeglądarki."""
     
     def __init__(self, config: dict):
-        """
-        Initialize scraper with configuration
-        
-        Args:
-            config: Dictionary with scraper configuration
-        """
         self.config = config
         self.headless = config.get("headless", True)
         self.timeout = config.get("timeout_ms", 30000)
@@ -38,25 +31,17 @@ class BaseScraper(ABC):
     
     @abstractmethod
     def get_source_name(self) -> str:
-        """Return the name of the job portal"""
         pass
     
     @abstractmethod
     def scrape_jobs(self) -> List[Job]:
-        """
-        Main scraping logic - must be implemented by subclasses
-        
-        Returns:
-            List of Job objects
-        """
         pass
     
     def setup_browser(self):
-        """Initialize Playwright browser"""
         try:
             self.playwright = sync_playwright().start()
             
-            # Random user agent for anti-detection
+            # Losowy user-agent - utrudnia wykrycie bota
             user_agent = random.choice(self.user_agents) if self.user_agents else None
             
             self.browser = self.playwright.chromium.launch(
@@ -64,7 +49,6 @@ class BaseScraper(ABC):
                 args=['--disable-blink-features=AutomationControlled']
             )
             
-            # Create context with user agent
             context_options = {
                 'viewport': {'width': 1920, 'height': 1080},
             }
@@ -73,7 +57,7 @@ class BaseScraper(ABC):
             
             self.context = self.browser.new_context(**context_options)
             
-            # Add stealth scripts
+            # Skrypty maskujące automatyzację
             self.context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
@@ -90,7 +74,6 @@ class BaseScraper(ABC):
             raise
     
     def close_browser(self):
-        """Clean up browser resources"""
         try:
             if self.page:
                 self.page.close()
@@ -124,7 +107,7 @@ class BaseScraper(ABC):
             except Exception as e:
                 logger.warning(f"{self.get_source_name()}: Navigation attempt {attempt} failed: {e}")
                 if attempt < self.max_retries:
-                    time.sleep(self.delay * attempt)  # Exponential backoff
+                    time.sleep(self.delay * attempt)  # Wykładniczo rosnąca przerwa między próbami
                 else:
                     logger.error(f"{self.get_source_name()}: All navigation attempts failed")
                     return False
@@ -148,16 +131,6 @@ class BaseScraper(ABC):
             return False
     
     def extract_text_safe(self, selector: str, default: str = "") -> str:
-        """
-        Safely extract text from element
-        
-        Args:
-            selector: CSS selector
-            default: Default value if extraction fails
-            
-        Returns:
-            Extracted text or default value
-        """
         try:
             element = self.page.query_selector(selector)
             if element:
@@ -168,17 +141,6 @@ class BaseScraper(ABC):
             return default
     
     def extract_attribute_safe(self, selector: str, attribute: str, default: str = "") -> str:
-        """
-        Safely extract attribute from element
-        
-        Args:
-            selector: CSS selector
-            attribute: Attribute name (e.g., 'href')
-            default: Default value if extraction fails
-            
-        Returns:
-            Attribute value or default
-        """
         try:
             element = self.page.query_selector(selector)
             if element:
@@ -190,12 +152,6 @@ class BaseScraper(ABC):
             return default
     
     def run(self) -> List[Job]:
-        """
-        Execute scraping with proper setup and cleanup
-        
-        Returns:
-            List of scraped jobs
-        """
         jobs = []
         try:
             logger.info(f"{self.get_source_name()}: Starting scrape")
