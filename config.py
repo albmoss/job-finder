@@ -11,25 +11,34 @@ load_dotenv(Path(__file__).parent / ".env")
 BASE_DIR = Path(__file__).parent
 JOBS_DATABASE_PATH = BASE_DIR / "jobs_database.json"
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY_PRIMARY", "")
 # Model domyślny. Właściwa kaskada modeli jest w waterfall_analysis.py (MODELS)
 # i została dobrana empirycznie - patrz benchmark_models.py.
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 
-# Wszystkie klucze do rotacji w kaskadzie modeli
-GEMINI_API_KEYS = [
-    os.getenv("GEMINI_API_KEY_1", ""),
-    os.getenv("GEMINI_API_KEY_2", ""),
-    os.getenv("GEMINI_API_KEY_3", ""),
-    os.getenv("GEMINI_API_KEY_4", ""),
-]
-GEMINI_API_KEYS = [k for k in GEMINI_API_KEYS if k]
-
-# Fallback: jeśli klucz główny jest pusty lub to placeholder, weź pierwszy z rotacji.
 # (Nie trzymamy tu żadnych realnych kluczy - nawet wygasłych, nawet jako czarna lista.)
-_PLACEHOLDERS = {"", "YOUR_KEY_HERE", "CHANGEME", "TODO"}
-if GEMINI_API_KEY.strip() in _PLACEHOLDERS and GEMINI_API_KEYS:
-    GEMINI_API_KEY = GEMINI_API_KEYS[0]
+_PLACEHOLDERS = {"YOUR_KEY_HERE", "CHANGEME", "TODO"}
+
+
+def _keys(*names):
+    """Klucze spod podanych zmiennych środowiskowych: bez pustych, bez powtórzeń."""
+    out = []
+    for name in names:
+        key = os.getenv(name, "").strip()
+        if key and key not in _PLACEHOLDERS and key not in out:
+            out.append(key)
+    return out
+
+
+# Pula do rotacji w kaskadzie modeli. Klucz główny JEST jej częścią: .env.example
+# każe wypełnić wyłącznie GEMINI_API_KEY_PRIMARY, a waterfall_analysis rotuje po
+# tej liście - gdy była budowana bez niego, świeży klon startował z pustą pulą
+# i analiza kręciła się w kółko, zamiast cokolwiek ocenić.
+GEMINI_API_KEYS = _keys(
+    "GEMINI_API_KEY_PRIMARY",
+    "GEMINI_API_KEY_1", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4",
+)
+
+GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
 
 # === Klucze API zewnętrznych portali ===
 # SOLID.Jobs — klucz niepotrzebny, publiczne API
@@ -143,7 +152,15 @@ SCRAPER_CONFIG = {
     # więc bierzemy stronę 1 dla kilku słów kluczowych (po 15 ofert).
     # Opisy zbierane są klikaniem kart, bo wejście na /viewjob kończy się 403.
     # Skracanie przerw albo wydłużanie listy słów = seria 403 i zero ofert.
+    #
+    # WYŁĄCZONY. W przebiegach z 21 i 23 sierpnia 2026 portal odrzucił każde
+    # słowo kluczowe (403, "Security Check") i oddał 0 ofert, kosztując 115 s
+    # i uruchomienie Playwrighta. Kod scrapera zostaje - razem z rozpoznaniem
+    # portalu w jego docstringu - żeby dało się sprawdzić, czy coś się zmieniło:
+    #   python main_scraper.py --only indeed --force
+    # Gdy znowu przepuści, wystarczy "enabled": True.
     "indeed": {
+        "enabled": False,
         "location": "Warszawa",
         "keywords": ["junior", "praktykant", "asystent"],
         "max_offers_per_keyword": 15,

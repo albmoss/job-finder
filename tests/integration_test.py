@@ -137,13 +137,125 @@ def test_data_consistency():
               f"{sum(1 for k in decisions if canonical_link(k) != k)} nieznormalizowanych")
 
 
+def test_model_rotation():
+    print("\n[6] Model and key rotation")
+    import waterfall_analysis as wa
+
+    models, keys = wa.MODELS, wa.API_KEYS
+    try:
+        wa.MODELS = ["m0", "m1", "m2"]
+        wa.API_KEYS = ["k0", "k1"]
+
+        pairs = list(wa._rotation(0, 0))
+        check("rotation visits every model x key pair once",
+              len(pairs) == 6 and len(set(pairs)) == 6, str(pairs))
+        check("keys are exhausted before the model is downgraded",
+              [m for m, _ in pairs] == [0, 0, 1, 1, 2, 2], str(pairs))
+
+        resumed = list(wa._rotation(1, 1))
+        check("rotation resumes from the pair that last worked",
+              resumed[0] == (1, 1), str(resumed[:2]))
+        check("after a downgrade the key pool restarts at 0",
+              resumed[1] == (1, 0), str(resumed[:3]))
+        check("rotation terminates instead of looping",
+              len(resumed) == 6 and len(set(resumed)) == 6, str(resumed))
+
+        wa.MODELS, wa.API_KEYS = ["only"], ["single"]
+        check("a single model and key still terminate",
+              list(wa._rotation(0, 0)) == [(0, 0)])
+    finally:
+        wa.MODELS, wa.API_KEYS = models, keys
+
+    # Rozróżnienie decyduje, czy szukamy innego klucza, czy dzielimy batch
+    check("429 is read as a rate limit", wa._classify("429 RESOURCE_EXHAUSTED") == "rate_limit")
+    check("truncated JSON asks for a smaller batch",
+          wa._classify("Unterminated string starting at") == "truncated")
+    check("an unknown error is neither", wa._classify("connection reset") == "other")
+
+
+def test_api_keys_configured():
+    print("\n[7] API key pool")
+    from config import GEMINI_API_KEY, GEMINI_API_KEYS
+
+    # Pusta pula oznaczała, że pętla po kluczach nie wykonywała się ani razu,
+    # każdy batch kończył się "porażką na wszystkich modelach", a etap analizy
+    # spał po 5 minut i próbował w nieskończoność.
+    check("at least one Gemini key is configured", bool(GEMINI_API_KEYS),
+          "uzupełnij GEMINI_API_KEY_PRIMARY w .env")
+    check("the primary key is part of the rotation",
+          not GEMINI_API_KEY or GEMINI_API_KEY in GEMINI_API_KEYS)
+    check("no empty entries in the pool", all(GEMINI_API_KEYS))
+    check("no duplicate keys in the pool",
+          len(set(GEMINI_API_KEYS)) == len(GEMINI_API_KEYS))
+
+
+def test_record_scrape(tmp_name="_test_record_scrape.json"):
+    print("\n[8] Recording a scrape run")
+    from utils.data_models import Job, JobDatabase
+
+    path = ROOT / tmp_name
+
+    def job(link, **kw):
+        return Job(title="Tytuł", company="Firma", link=link,
+                   description="Opis oferty wystarczająco długi, żeby przeszedł.",
+                   source="test", **kw)
+
+    def on_disk():
+        return load_json_safe(path, default=[])
+
+    try:
+        db = JobDatabase(str(path))
+
+        added, touched = db.record_scrape([job("https://a.pl/1"), job("https://a.pl/2")])
+        check("new offers are appended", (added, touched) == (2, 0), f"{added}, {touched}")
+
+        added, _ = db.record_scrape([job("https://a.pl/1")])
+        check("a known offer is not duplicated", added == 0 and len(on_disk()) == 2)
+
+        rec = [r for r in on_disk() if r["link"] == "https://a.pl/1"][0]
+        # Bez tego zapisu sygnał "wisi od X dni" nigdy by nie ruszył - dla
+        # źródeł bez posted_date to jedyna miara wieku oferty.
+        check("re-scraping a known offer bumps times_seen",
+              rec["times_seen"] == 2, str(rec["times_seen"]))
+
+        _, touched = db.record_scrape([], ["https://a.pl/2"])
+        check("seen_again refreshes an offer whose page was skipped", touched == 1)
+
+        added, touched = db.record_scrape([], ["https://a.pl/brak", "", None])
+        check("unknown links create no phantom records",
+              (added, touched) == (0, 0) and len(on_disk()) == 2)
+
+        added, touched = db.record_scrape([job("https://a.pl/3")], ["https://a.pl/1"])
+        check("one call handles new offers and re-seen ones together",
+              (added, touched) == (1, 1) and len(on_disk()) == 3, f"{added}, {touched}")
+
+        db.record_scrape([job("https://a.pl/3", posted_date="2026-08-01")])
+        db.record_scrape([job("https://a.pl/3", posted_date="2026-01-01")])
+        rec = [r for r in on_disk() if r["link"] == "https://a.pl/3"][0]
+        check("a missing date is filled in, an existing one is left alone",
+              rec["posted_date"] == "2026-08-01", str(rec["posted_date"]))
+
+        db.record_scrape([job("https://a.pl/1?utm_source=x")])
+        check("a tracking parameter does not create a second record",
+              len(on_disk()) == 3, str(len(on_disk())))
+    finally:
+        for p in (path, Path(str(path) + ".tmp")):
+            if p.exists():
+                p.unlink()
+        bdir = ROOT / "backups"
+        if bdir.exists():
+            for stale in bdir.glob(f"{tmp_name}.*.bak"):
+                stale.unlink()
+
+
 def main():
     print("=" * 62)
     print("  INTEGRATION TESTS (no API calls)")
     print("=" * 62)
 
     for test in (test_canonical_link, test_text_cleaning, test_stale_detection,
-                 test_safe_io, test_data_consistency):
+                 test_safe_io, test_data_consistency, test_model_rotation,
+                 test_api_keys_configured, test_record_scrape):
         try:
             test()
         except Exception as e:

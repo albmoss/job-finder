@@ -25,6 +25,12 @@ class OLXScraper(BaseScraper):
     
     BASE_URL = "https://www.olx.pl"
     
+    def __init__(self, config: dict):
+        super().__init__(config)
+        # Linki ofert, których stron nie pobierano - main_scraper odnotuje na
+        # nich last_seen/times_seen (patrz JobDatabase.record_scrape).
+        self.seen_again_links = []
+
     def get_source_name(self) -> str:
         return "OLX Praca"
     
@@ -208,9 +214,28 @@ class OLXScraper(BaseScraper):
         """
         Dociągnij pełne opisy z podstron ofert (HTTP, bez przeglądarki).
         Oferty wygasłe są odrzucane - i tak nie da się na nie zaaplikować.
+
+        Oferty, które są już w bazie, pomijamy w całości: `record_scrape` nie
+        nadpisuje istniejących rekordów, więc pobranie ich opisu (0.4 s każde,
+        1272 oferty w przebiegu z 23.08) nie zmieniało niczego poza czasem.
+        Ich linki idą do `seen_again_links` - main_scraper odnotowuje na nich
+        `last_seen`, czyli jedyny sygnał wieku oferty na OLX.
         """
         if not jobs:
             return jobs
+
+        from utils.known_links import known_links
+
+        known = known_links()
+        self.seen_again_links = [j.link for j in jobs if j.link in known]
+        jobs = [j for j in jobs if j.link not in known]
+        if self.seen_again_links:
+            logger.info(
+                f"OLX: {len(self.seen_again_links)} offers already in the database "
+                f"(their pages are skipped)"
+            )
+        if not jobs:
+            return []
 
         logger.info(f"OLX: fetching descriptions for {len(jobs)} offers...")
         session = requests.Session()

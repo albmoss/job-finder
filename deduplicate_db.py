@@ -206,13 +206,20 @@ def _plan(all_jobs: dict, decided: set) -> tuple:
     return keep, provenance, stats
 
 
-def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: set):
-    """Zapisz plik zachowując wyłącznie rekordy wskazane przez wspólny plan."""
-    if not path.exists():
-        logger.warning(f"File not found: {path}")
-        return
+def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: set, data=None):
+    """
+    Zapisz plik zachowując wyłącznie rekordy wskazane przez wspólny plan.
 
-    data = load_json_safe(path, default=[])
+    `data` to zawartość wczytana już przez wołającego. Plan i tak powstaje na
+    treści obu plików, więc bez tego argumentu każdy z nich (27 i 35 MB) był
+    parsowany drugi raz tylko po to, żeby dostać te same obiekty.
+    """
+    if data is None:
+        if not path.exists():
+            logger.warning(f"File not found: {path}")
+            return
+        data = load_json_safe(path, default=[])
+
     if not data:
         logger.info(f"{path.name} is empty - skipping.")
         return
@@ -273,7 +280,7 @@ def deduplicate_file(filepath, is_analyzed=False):
         all_jobs[canonical_link(job.get("link", ""))] = job
 
     keep, provenance, _ = _plan(all_jobs, decided)
-    _apply(path, is_analyzed, keep, provenance, decided)
+    _apply(path, is_analyzed, keep, provenance, decided, data=data)
 
 
 def run():
@@ -288,11 +295,14 @@ def run():
 
     # Unia obu plików - dla każdego linku bierzemy wariant z najdłuższym opisem,
     # żeby decyzja opierała się na najlepszej dostępnej wersji rekordu.
-    all_jobs = {}
+    # Wczytana zawartość leci dalej do _apply: to te same obiekty, więc drugi
+    # odczyt tych plików (27 i 35 MB) niczego by nie wniósł.
+    loaded, all_jobs = {}, {}
     for path, is_analyzed in files:
         if not path.exists():
             continue
-        for item in load_json_safe(path, default=[]):
+        loaded[path] = load_json_safe(path, default=[])
+        for item in loaded[path]:
             job = item["job"] if is_analyzed else item
             _sanitize_nan(job)
             link = canonical_link(job.get("link", ""))
@@ -315,7 +325,7 @@ def run():
         )
 
     for path, is_analyzed in files:
-        _apply(path, is_analyzed, keep, provenance, decided)
+        _apply(path, is_analyzed, keep, provenance, decided, data=loaded.get(path))
 
     logger.info("Protocol v3 Complete. Your data is safe.")
 

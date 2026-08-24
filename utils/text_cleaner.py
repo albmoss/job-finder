@@ -65,6 +65,40 @@ def detect_work_mode(location: str = "", description: str = "", title: str = "")
             'badge_class': 'badge-neutral'
         }
 
+# Nagłówki sekcji, od których opis przestaje nieść cokolwiek o wymaganiach:
+# benefity, RODO i klauzule prawne, opis procesu rekrutacji.
+_CUTOFF_MARKERS = (
+    r"Oferujemy:?",
+    r"Co zyskasz:?",
+    r"Co oferujemy:?",
+    r"Benefity:?",
+    r"What we offer:?",
+    r"To oferujemy:?",
+    r"Benefits:?",
+    r"Administratorem danych",
+    r"RODO",
+    r"Klauzula informacyjna",
+    r"Wyrażam zgodę",
+    r"Please note that",
+    r"Your personal data",
+    r"Information clause",
+    r"Zgodnie z art\. 13",
+    r"Prosimy o dopisanie następującej klauzuli",
+    r"Jak aplikować:?",
+    r"Etapy rekrutacji:?",
+    r"Recruitment process:?",
+    r"Proces rekrutacyjny:?",
+)
+
+# Składany i kompilowany RAZ przy imporcie. clean_job_description wykonuje się
+# dla każdej tworzonej oferty i dla każdego rekordu w clean_db (~35 tys. razy na
+# przebieg), a poprzednia wersja budowała ten wzorzec od nowa przy każdym wywołaniu.
+_CUTOFF_RE = re.compile(
+    r"(?:^|\n)\s*(" + "|".join(_CUTOFF_MARKERS) + r").*($|\n)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 def clean_job_description(text: str) -> str:
     """
     Skraca opis oferty o mniej więcej 40-60%, wycinając sekcje nietechniczne.
@@ -77,40 +111,8 @@ def clean_job_description(text: str) -> str:
 
     text = strip_html(text)
 
-    rodo_markers = [
-        r"Administratorem danych",
-        r"RODO",
-        r"Klauzula informacyjna",
-        r"Wyrażam zgodę",
-        r"Please note that",
-        r"Your personal data",
-        r"Information clause",
-        r"Zgodnie z art\. 13",
-        r"Prosimy o dopisanie następującej klauzuli"
-    ]
-    
-    benefits_markers = [
-        r"Oferujemy:?",
-        r"Co zyskasz:?",
-        r"Co oferujemy:?",
-        r"Benefity:?",
-        r"What we offer:?",
-        r"To oferujemy:?",
-        r"Benefits:?"
-    ]
-    
-    recruitment_markers = [
-        r"Jak aplikować:?",
-        r"Etapy rekrutacji:?",
-        r"Recruitment process:?",
-        r"Proces rekrutacyjny:?"
-    ]
-    
-    all_cutoff_markers = benefits_markers + rodo_markers + recruitment_markers
-    pattern = r"(?:^|\n)\s*(" + "|".join(all_cutoff_markers) + r").*($|\n)"
-    
-    match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+    match = _CUTOFF_RE.search(text)
     if match:
-        text = text[:match.start()].strip()
-        
+        text = text[:match.start()]
+
     return text.strip()
