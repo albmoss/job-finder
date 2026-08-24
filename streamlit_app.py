@@ -128,30 +128,6 @@ def inject_custom_css():
 
         /* ---------- nagłówek widoku ---------- */
         .vh { margin: 0 0 1.15rem 0; }
-        .vh-eyebrow {
-            font-family: var(--font-mono);
-            font-size: 0.68rem;
-            font-weight: 500;
-            letter-spacing: 0.16em;
-            text-transform: uppercase;
-            color: var(--faint);
-            margin-bottom: 0.3rem;
-        }
-        .vh-title {
-            font-family: var(--font-head);
-            font-stretch: var(--head-stretch);
-            font-size: 1.65rem;
-            font-weight: 600;
-            letter-spacing: -0.02em;
-            color: var(--text);
-            line-height: 1.15;
-        }
-        .vh-sub {
-            font-size: 0.86rem;
-            color: var(--muted);
-            margin-top: 0.3rem;
-            max-width: 62ch;
-        }
 
         /* ---------- listwa stanu ----------
            Kontekst, nie treść: cztery liczby w jednej linii z włosowymi
@@ -166,27 +142,7 @@ def inject_custom_css():
             padding: 0.6rem 0;
             margin-bottom: 1.6rem;
         }
-        .rail-item {
-            display: flex;
-            align-items: baseline;
-            gap: 0.45rem;
-            padding: 0 1.15rem;
-            border-right: 1px solid var(--line-soft);
-        }
-        .rail-item:first-child { padding-left: 0; }
-        .rail-item:last-child { border-right: none; }
-        .rail-val {
-            font-family: var(--font-mono);
-            font-size: 1.02rem;
-            font-weight: 600;
-            font-variant-numeric: tabular-nums;
-            color: var(--text);
-        }
-        .rail-lbl {
-            font-size: 0.74rem;
-            color: var(--muted);
-            letter-spacing: 0.02em;
-        }
+
         .rail-val.is-on  { color: var(--moss); }
         .rail-val.is-off { color: var(--clay); }
 
@@ -226,23 +182,6 @@ def inject_custom_css():
             background: var(--line-soft);
             border-radius: 0 2px 2px 0;
         }
-        .jc-rail-fill {
-            position: absolute;
-            bottom: 0; left: 0;
-            width: 100%;
-            border-radius: 0 2px 2px 0;
-        }
-        .jc-rail.is-empty {
-            background: repeating-linear-gradient(
-                to bottom, var(--line) 0 3px, transparent 3px 7px);
-        }
-
-        /* --- górny rząd: znacznik firmy | tytuł i meta | dopasowanie --- */
-        .jc-top {
-            display: flex;
-            align-items: flex-start;
-            gap: 0.85rem;
-        }
 
         /* Odpowiednik logo firmy. Na portalach to właśnie logotypy sprawiają,
            że lista nie wygląda jak jednolity blok - każda pozycja ma inny
@@ -263,34 +202,6 @@ def inject_custom_css():
             border: 1px solid;
         }
 
-        .jc-id { min-width: 0; flex: 1; }
-        .jc-titleline {
-            display: flex;
-            align-items: baseline;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-        }
-        .jc-title {
-            font-family: var(--font-head);
-            font-stretch: var(--head-stretch);
-            font-size: 1.14rem;
-            font-weight: 600;
-            color: var(--text-bright);
-            line-height: 1.25;
-            letter-spacing: -0.015em;
-        }
-        .jc-new {
-            font-size: 0.6rem;
-            font-weight: 600;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-            color: var(--moss);
-            background: color-mix(in srgb, var(--moss) 13%, transparent);
-            border: 1px solid color-mix(in srgb, var(--moss) 34%, transparent);
-            border-radius: 3px;
-            padding: 0.08rem 0.32rem;
-        }
-
         /* Ogłoszenie, które wisi zbyt długo. Ten sam kształt co .jc-new, ale
            wyciszony - to ostrzeżenie, nie alarm, bo sygnał jest poszlakowy. */
         .jc-stale {
@@ -302,11 +213,6 @@ def inject_custom_css():
             border: 1px solid color-mix(in srgb, var(--muted) 26%, transparent);
             border-radius: 3px;
             padding: 0.08rem 0.32rem;
-        }
-        .jc-stale.is-ghost {
-            color: var(--clay);
-            background: color-mix(in srgb, var(--clay) 12%, transparent);
-            border-color: color-mix(in srgb, var(--clay) 32%, transparent);
         }
 
         /* Meta pod tytułem, drobna i szara - jak na obu portalach.
@@ -320,26 +226,10 @@ def inject_custom_css():
             font-size: 0.78rem;
             color: var(--muted);
         }
-        .jc-org { color: color-mix(in srgb, var(--text) 78%, transparent); font-weight: 500; }
-        .jc-sep { color: var(--line); }
+
         /* Ta sama oferta na innych portalach - jeden element flexa, żeby
            etykieta i linki nie rozjechały się po gapie .jc-meta */
         .jc-alt-wrap { color: var(--muted); }
-        .jc-alt {
-            color: inherit;
-            text-decoration: underline dotted;
-            text-underline-offset: 2px;
-        }
-        .jc-alt:hover { color: color-mix(in srgb, var(--text) 85%, transparent); }
-        .jc-state {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.3rem;
-            font-size: 0.69rem;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-        }
-        .jc-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
 
         /* Metryka po prawej - miejsce, w którym oba portale trzymają widełki
            płacowe. U nas mieszka tam procent dopasowania. */
@@ -352,15 +242,6 @@ def inject_custom_css():
             border: 1px solid transparent;
             border-radius: 7px;
         }
-        .jc-score-val {
-            font-family: var(--font-mono);
-            font-size: 1.5rem;
-            font-weight: 600;
-            font-variant-numeric: tabular-nums;
-            line-height: 1;
-            letter-spacing: -0.03em;
-        }
-        .jc-score-pct { font-size: 0.58em; font-weight: 500; opacity: 0.6; }
 
         /* --- chipy: tekstura wiersza, celowo szare ---
            Na portalach stos technologiczny jest szary właśnie po to, żeby nie
@@ -415,17 +296,6 @@ def inject_custom_css():
             -webkit-box-orient: vertical;
             overflow: hidden;
         }
-        .jc-full { max-height: 24rem; overflow-y: auto; padding-right: 0.6rem; }
-        .jc-full-p {
-            max-width: 80ch;
-            font-size: 0.85rem;
-            line-height: 1.7;
-            color: color-mix(in srgb, var(--text) 80%, transparent);
-            margin: 0 0 0.7rem 0;
-        }
-        .jc-full-p:last-child { margin-bottom: 0; }
-        .jc-full::-webkit-scrollbar { width: 4px; }
-        .jc-full::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
 
         /* ---------- kontrolki w karcie ---------- */
         [class*="st-key-jc_"] [data-testid="stSlider"] { padding-top: 0.1rem; }
@@ -454,11 +324,7 @@ def inject_custom_css():
             padding-top: 0.6rem;
             margin-top: 0.6rem;
         }
-        .jc-rate-lbl {
-            font-size: 0.71rem;
-            color: var(--faint);
-            white-space: nowrap;
-        }
+
         /* Suwak rozpychał się na całą kolumnę i wypychał przycisk
            zatwierdzenia na jej przeciwległy koniec. Ograniczyć trzeba
            kontener elementu, bo to on jest elastycznym dzieckiem rzędu -
@@ -468,15 +334,6 @@ def inject_custom_css():
             max-width: 10.5rem;
         }
         [class*="st-key-ja_jc_"] [data-testid="stSlider"] { max-width: 10.5rem; }
-
-        /* Pionowa kreska oddziela decyzje od "otwórz" i "więcej" - inaczej
-           sześć ikon w rzędzie czyta się jak jeden ciąg. */
-        .jc-actions-sep {
-            width: 1px;
-            height: 1.35rem;
-            background: var(--line);
-            margin: 0 0.15rem;
-        }
 
         /* Przyciski decyzji są bez podpisów - kształt ikony i jej barwa mają
            powiedzieć, co robią, zanim zdążysz przeczytać. Każda decyzja ma
@@ -557,36 +414,6 @@ def inject_custom_css():
             align-items: baseline;
             margin: 0 0 0.9rem 0;
         }
-        .step-num {
-            font-family: var(--font-mono);
-            font-size: 0.75rem;
-            font-weight: 500;
-            letter-spacing: 0.1em;
-            color: var(--accent-dim);
-            font-variant-numeric: tabular-nums;
-        }
-        .step-title {
-            font-family: var(--font-head);
-            font-stretch: var(--head-stretch);
-            font-size: 1.08rem;
-            font-weight: 600;
-            letter-spacing: -0.01em;
-            color: var(--text);
-        }
-        .step-desc {
-            grid-column: 2;
-            font-size: 0.84rem;
-            line-height: 1.5;
-            color: var(--muted);
-            margin: 0.3rem 0 0 0;
-            max-width: 72ch;
-        }
-        .step-meta {
-            grid-column: 2;
-            font-size: 0.74rem;
-            color: var(--faint);
-            margin-top: 0.35rem;
-        }
 
         /* Podpowiedź "co teraz" - jedno zdanie, od którego zaczyna ktoś,
            kto wchodzi tu pierwszy raz i nie zna pipeline'u. */
@@ -601,15 +428,6 @@ def inject_custom_css():
             padding: 0.75rem 0.95rem;
             margin: 0 0 1.4rem 0;
         }
-        .next-up-lbl {
-            font-family: var(--font-mono);
-            font-size: 0.63rem;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-            color: var(--faint);
-            white-space: nowrap;
-        }
-        .next-up-txt { font-size: 0.9rem; color: var(--text); line-height: 1.45; }
 
         /* Komunikat stanu w panelu. Własny, bo st.warning/st.info rysują się
            w kolorach Streamlita - żółtym i niebieskim - które nie należą do
@@ -626,8 +444,6 @@ def inject_custom_css():
             background: var(--raised);
         }
         .panel-note.is-ok    { border-left-color: var(--moss); }
-        .panel-note.is-stale { border-left-color: var(--clay); }
-        .panel-note em { color: var(--muted); font-style: normal; }
 
         /* ---------- pasek filtrów ---------- */
         [class*="st-key-toolbar_"] {
@@ -662,26 +478,6 @@ def inject_custom_css():
         }
         .src-name { white-space: nowrap; }
 
-        /* ---------- kanban ---------- */
-        .kb-head {
-            display: flex;
-            align-items: baseline;
-            justify-content: space-between;
-            padding-bottom: 0.4rem;
-            margin-bottom: 0.7rem;
-            border-bottom: 1px solid var(--line);
-        }
-        .kb-name {
-            font-size: 0.76rem;
-            letter-spacing: 0.09em;
-            text-transform: uppercase;
-            color: var(--muted);
-        }
-        .kb-count {
-            font-family: var(--font-mono);
-            font-size: 0.8rem;
-            color: var(--faint);
-        }
         [class*="st-key-kb_"] {
             background: var(--raised);
             border: 1px solid var(--line);
@@ -689,16 +485,6 @@ def inject_custom_css():
             border-radius: 5px;
             padding: 0.6rem 0.7rem;
             margin-bottom: 0.45rem;
-        }
-        .kb-title { font-size: 0.87rem; font-weight: 600; line-height: 1.3; }
-        .kb-org { font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem; }
-
-        /* ---------- paginacja ---------- */
-        .pg-count {
-            font-family: var(--font-mono);
-            font-size: 0.78rem;
-            color: var(--muted);
-            letter-spacing: 0.02em;
         }
 
         /* ---------- podłoga jakości ---------- */
@@ -712,9 +498,7 @@ def inject_custom_css():
            "reduce" - przez co zamowiony wjazd wierszy nie odpalal sie w ogole.
            Ruch w tym ukladzie jest czescia projektu, nie ozdobnikiem. */
         @media (max-width: 900px) {
-            .jc-top { flex-direction: column; gap: 0.5rem; }
-            .jc-score { text-align: left; }
-            .rail-item { border-right: none; padding-left: 0; }
+
         }
         </style>
     """, unsafe_allow_html=True)
@@ -730,34 +514,6 @@ def _esc(value) -> str:
     Bez tego pojedynczy znak < w tytule rozwala układ całej karty.
     """
     return html.escape(str(value)) if value is not None else ""
-
-
-# Człony nazw spółek nic nie wnoszą do inicjałów - "DAKS sp. z o.o." ma być
-# "D", a nie "DS".
-_COMPANY_NOISE = {
-    "sp", "spolka", "spółka", "z", "o", "oo", "o.o", "o.o.", "zoo", "sa", "s.a",
-    "s.a.", "ltd", "llc", "inc", "gmbh", "ograniczona", "odpowiedzialnoscia",
-    "odpowiedzialnością", "spzoo", "akcyjna", "and", "the",
-    # Kropki są separatorem, więc "S.A." i "S.C." rozpadają się na pojedyncze
-    # litery i bez tego trafiałyby do inicjałów ("FLYTRONIC S.A." -> "FS").
-    "s", "c",
-}
-
-
-def company_mark(name: str):
-    """
-    Inicjały i stały odcień wyprowadzony z nazwy firmy - odpowiednik logotypu
-    z portali pracy. To właśnie różnokolorowe logotypy sprawiają, że lista
-    ofert nie czyta się jak jednolity blok: każdy wiersz dostaje własny punkt
-    zaczepienia dla oka. Odcień jest deterministyczny, więc ta sama firma
-    zawsze wygląda tak samo.
-    """
-    clean = re.sub(r'["„”«»\']', '', str(name or "")).strip()
-    words = [w for w in re.split(r"[\s/,.\-–—()]+", clean) if w]
-    meaningful = [w for w in words if w.lower().strip(".") not in _COMPANY_NOISE]
-    initials = "".join(w[0] for w in (meaningful or words)[:2]).upper()[:2] or "?"
-    hue = int(hashlib.md5(clean.lower().encode()).hexdigest()[:6], 16) % 360
-    return initials, hue
 
 
 def src_dot(name, label=True) -> str:
@@ -787,41 +543,6 @@ def fmt_n(value) -> str:
     i "15519 z 15562" w nagłówku listy pod spodem.
     """
     return f"{int(value):,}".replace(",", " ")
-
-
-def freshness_label(scraped_at):
-    """
-    Znacznik świeżości W BAZIE - liczony od momentu pobrania, czyli "nowa"
-    znaczy "doszła przy ostatnim skanowaniu".
-
-    To celowo NIE to samo co wiek ogłoszenia u pracodawcy: oferta wystawiona pół
-    roku temu, a znaleziona przez nas dzisiaj, jest tu "nowa". Od drugiej strony
-    jest `ghost_signals` z utils/offer_age.py, które pokazuje na karcie osobny
-    znacznik, gdy ogłoszenie wisi zbyt długo.
-    """
-    if not isinstance(scraped_at, str) or not scraped_at:
-        return None
-    try:
-        days = (datetime.now() - datetime.fromisoformat(scraped_at)).days
-    except ValueError:
-        return None
-    if days <= 1:
-        return "nowa"
-    if days <= 3:
-        return f"{days} dni"
-    return None
-
-
-def _plural_pl(n: int, one: str, few: str, many: str) -> str:
-    """
-    Polska odmiana przez liczbę: 1 umiejętność, 2-4 umiejętności,
-    5+ umiejętności, ale 12-14 znów jak 5+.
-    """
-    if n == 1:
-        return one
-    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):
-        return few
-    return many
 
 
 def score_color(percentage: int) -> str:
@@ -879,11 +600,12 @@ def format_description(text: str, drop_prefix: str = ""):
 
 # Stan decyzji niesie barwę kategorialną - przygaszoną, żeby nie konkurowała
 # z oceną dopasowania.
-WORK_MODE_FILTER = ["Wszystkie", "100% Zdalnie", "Hybrydowo", "Stacjonarnie"]
-
-
 # Barwy stanów pochodzą z ui_theme, żeby nie rozjechały się z ikonami
 # decyzji, które używają tych samych tokenów w CSS.
+# Stany, po których oferta ma już swoją zakładkę - "Dopasowane" pokazuje
+# wyłącznie to, czego jeszcze nie tknąłeś.
+DECIDED_STATUSES = frozenset({"reject", "save", "apply", "rated", "aspirational"})
+
 DECISION_STYLE = {
     "apply":        (ui_theme.STATES["moss"], "wysłane"),
     "save":         (ui_theme.STATES["slate"], "zapisane"),
@@ -891,19 +613,6 @@ DECISION_STYLE = {
     "reject":       (ui_theme.STATES["clay"], "odrzucone"),
     "rated":        (ui_theme.STATES["grey"], "ocenione"),
 }
-
-
-def render_view_header(eyebrow: str, title: str, subtitle: str = ""):
-    """Nagłówek widoku: nadkreślnik mówi gdzie jesteś, tytuł co widzisz."""
-    sub_html = f'<div class="vh-sub">{_esc(subtitle)}</div>' if subtitle else ""
-    st.markdown(
-        f'<div class="vh">'
-        f'<div class="vh-eyebrow">{_esc(eyebrow)}</div>'
-        f'<div class="vh-title">{_esc(title)}</div>'
-        f'{sub_html}'
-        f'</div>',
-        unsafe_allow_html=True
-    )
 
 
 # --- WCZYTYWANIE DANYCH ---
@@ -955,9 +664,6 @@ def get_decision(link):
         return val, None
     return None, None
 
-def sync_pagination(source, target):
-    """Callback to synchronize pagination between top and bottom controls"""
-    st.session_state[target] = st.session_state[source]
 
 def init_session_state():
     if 'cv_text' not in st.session_state: st.session_state.cv_text = None
@@ -971,8 +677,9 @@ def init_session_state():
     if 'current_cv_path' not in st.session_state: st.session_state.current_cv_path = "cv.pdf"
     if 'active_view' not in st.session_state: st.session_state.active_view = "Dopasowane przez AI"
     
-    # Indeks ofert po linku - budowany raz przy wczytaniu danych
+    # Indeksy po linku - budowane raz przy wczytaniu danych, patrz _load_data_impl
     if 'job_lookup' not in st.session_state: st.session_state.job_lookup = {}
+    if 'match_lookup' not in st.session_state: st.session_state.match_lookup = {}
 
     # Pulpit: ktora zakladka i ktora oferta jest otwarta w lewym panelu
     if 'ws_view' not in st.session_state: st.session_state.ws_view = "Dopasowane"
@@ -1018,15 +725,21 @@ def _load_data_impl():
         except Exception as e:
             st.error(f"Błąd ładowania bazy surowej: {e}")
     
-    # 3. Indeks po linku
+    # 3. Indeksy po linku: oferta i jej ocena.
+    #    Ocen jest ~17 tys., a szukały ich trzy miejsca w interfejsie przez
+    #    `next(m for m in analyzed_matches ...)` - liniowo, przy każdym
+    #    przeładowaniu strony i raz na każdą ofertę na tablicy etapów.
     lookup = {}
+    matches = {}
     for m in st.session_state.analyzed_matches:
         lookup[m.job.link] = m.job
+        matches[m.job.link] = m
     for j in st.session_state.raw_jobs:
         if j.link not in lookup:
             lookup[j.link] = j
     st.session_state.job_lookup = lookup
-    
+    st.session_state.match_lookup = matches
+
     st.session_state.data_loaded = True
 
 def find_job_obj(link):
@@ -1034,289 +747,9 @@ def find_job_obj(link):
     return st.session_state.job_lookup.get(link)
 
 
-# =============================================================================
-# LISTWA STANU
-# =============================================================================
-
-def render_status_rail():
-    """
-    Kontekst pracy w jednej linii. Świadomie nie są to kafle z gradientem -
-    te liczby są tłem dla decyzji, a nie treścią ekranu.
-    """
-    n_analyzed = len(st.session_state.analyzed_matches)
-    n_raw = len(st.session_state.raw_jobs)
-    n_active = sum(1 for l in st.session_state.user_decisions
-                   if get_decision(l)[0] in ('apply', 'save'))
-    profile_exists = Path("preference_profile.json").exists()
-
-    profile_cls = "is-on" if profile_exists else "is-off"
-    profile_val = "aktywny" if profile_exists else "brak"
-
-    # Spacja jako separator tysiecy - polska konwencja, a przecinek w f-stringu
-    # zderzalby sie z reszta tekstu.
-    def n(v):
-        return f"{v:,}".replace(",", " ")
-
-    st.markdown(
-        f'<div class="rail">'
-        f'<div class="rail-item"><span class="rail-val">{n(n_raw)}</span>'
-        f'<span class="rail-lbl">w bazie</span></div>'
-        f'<div class="rail-item"><span class="rail-val">{n(n_analyzed)}</span>'
-        f'<span class="rail-lbl">ocenionych przez AI</span></div>'
-        f'<div class="rail-item"><span class="rail-val">{n(n_active)}</span>'
-        f'<span class="rail-lbl">zapisanych i wysłanych</span></div>'
-        f'<div class="rail-item"><span class="rail-val {profile_cls}">{profile_val}</span>'
-        f'<span class="rail-lbl">profil preferencji</span></div>'
-        f'</div>',
-        unsafe_allow_html=True
-    )
-
-
-# =============================================================================
-# KARTA OFERTY
-# =============================================================================
-
-@st.fragment
-def render_job_card(job, key_prefix, status=None, rating=None, match=None, show_restore=False):
-    """
-    Karta zbudowana pod jedno zadanie: ocenić ofertę w dwie sekundy.
-
-    Karta jest FRAGMENTEM. Bez tego każde drgnięcie suwaka oceny przeliczało
-    cały skrypt od góry - a więc wszystkie 25 kart na stronie, listwę statusu
-    i filtry - co wyglądało jak odświeżanie się całej listy przy samym
-    dotknięciu suwaka. Fragment ogranicza przeliczenie do jednej karty.
-
-    Dlatego przyciski decyzji wołają `st.rerun(scope="app")`: one faktycznie
-    zmieniają zawartość listy i liczniki, więc muszą przeładować stronę.
-    Przeładowanie w zakresie fragmentu zostaje tylko tam, gdzie zmiana dotyczy
-    wyłącznie tej jednej karty (potwierdzenie usunięcia).
-
-    Układ wzięty z JustJoin.it i NoFluffJobs, gdzie tę samą listę przegląda
-    się setkami dziennie:
-      znacznik firmy | tytuł + drobna meta | procent dopasowania po prawej,
-      pod spodem chipy, werdykt AI i dwie linijki opisu.
-
-    Decyzje zapisują też aktualną pozycję suwaka, więc jedno kliknięcie
-    załatwia ocenę i decyzję naraz.
-    """
-    card_key = f"jc_{key_prefix}_{hashlib.md5(job.link.encode()).hexdigest()[:10]}"
-
-    with st.container(border=False, key=card_key):
-        # --- procent dopasowania: pasek przy krawędzi + kafel po prawej ---
-        if match:
-            pct = max(0, min(100, int(match.match_percentage)))
-            color, tint, edge = score_style(pct)
-            rail_html = (f'<div class="jc-rail">'
-                         f'<div class="jc-rail-fill" style="height:{pct}%;background:{color}">'
-                         f'</div></div>')
-            score_html = (f'<div class="jc-score" '
-                          f'style="background:{tint};border-color:{edge}">'
-                          f'<div class="jc-score-val" style="color:{color}">{pct}'
-                          f'<span class="jc-score-pct">%</span></div></div>')
-        else:
-            rail_html = '<div class="jc-rail is-empty"></div>'
-            score_html = ''
-
-        # --- znacznik firmy w roli logotypu ---
-        initials, hue = company_mark(job.company)
-        avatar_html = (
-            f'<div class="jc-avatar" style="'
-            f'background:hsl({hue} 32% 15%);'
-            f'border-color:hsl({hue} 30% 30%);'
-            f'color:hsl({hue} 45% 66%)">{_esc(initials)}</div>'
-        )
-
-        fresh = freshness_label(getattr(job, "scraped_at", None))
-        new_html = f'<span class="jc-new">{fresh}</span>' if fresh else ''
-
-        # Sygnał martwego ogłoszenia. Świeżość powyżej mówi, kiedy MY ją
-        # znaleźliśmy; to mówi, jak długo wisi u pracodawcy - a to dwie różne
-        # rzeczy. Gdy nie ma z czego liczyć, nie pokazujemy nic.
-        stale = ghost_signals(job)
-        stale_text = ghost_label(job)
-        if stale_text:
-            new_html += (
-                f'<span class="jc-stale{" is-ghost" if stale["level"] == "ghost" else ""}" '
-                f'title="{_esc("; ".join(stale["reasons"]))}">'
-                f'{_esc(stale_text)}</span>'
-            )
-
-        # --- meta: firma, miejsce, tryb, portal ---
-        work_mode = detect_work_mode(job.location or "", job.description or "", job.title or "")
-        meta_bits = [f'<span class="jc-org">{_esc(job.company)}</span>']
-        for value in (job.location or "Warszawa", work_mode["label"]):
-            if value:
-                meta_bits.append(f'<span>{_esc(value)}</span>')
-        if job.source:
-            meta_bits.append(f'<span class="jc-src">{src_dot(job.source)}</span>')
-        # Ta sama oferta bywa na kilku portalach - deduplikacja zostawia jeden
-        # rekord, ale zapisuje pozostałe linki w `also_on`. Pokazujemy je, bo
-        # bywa, że drugi portal ma pełniejszy opis albo działający formularz.
-        alt_links = []
-        for entry in (getattr(job, "also_on", None) or [])[:3]:
-            if not isinstance(entry, dict) or not entry.get("link"):
-                continue
-            label = re.sub(r"\s*\(.*?\)", "", str(entry.get("source") or "portal")).strip()
-            alt_links.append(
-                f'<a class="jc-alt" href="{_esc(str(entry["link"]))}" '
-                f'target="_blank" rel="noopener">{_esc(label or "portal")}</a>'
-            )
-        if alt_links:
-            meta_bits.append(
-                f'<span class="jc-alt-wrap">także na: {", ".join(alt_links)}</span>'
-            )
-
-        meta_html = '<span class="jc-sep">·</span>'.join(meta_bits)
-
-        if status in DECISION_STYLE:
-            dot_color, state_label = DECISION_STYLE[status]
-            if status == 'rated' and rating:
-                state_label = f"ocena {rating}/10"
-            meta_html += (f'<span class="jc-sep">·</span>'
-                          f'<span class="jc-state" style="color:{dot_color}">'
-                          f'<span class="jc-dot" style="background:{dot_color}"></span>'
-                          f'{_esc(state_label)}</span>')
-
-            decision = st.session_state.user_decisions.get(job.link)
-            applied_at = decision.get('applied_at') if isinstance(decision, dict) else None
-            if applied_at and status == 'apply':
-                meta_html += (f'<span class="jc-sep">·</span>'
-                              f'<span>{_esc(str(applied_at)[:10])}</span>')
-
-        # --- chipy: branża, poziom, konkretne braki ---
-        # missing_skills leżało wcześniej odłogiem jako sam licznik ("2 braki"),
-        # a to najbardziej decyzyjna informacja na całej karcie.
-        chips = []
-        if match:
-            if getattr(match, "industry", None):
-                chips.append(f'<span class="jc-chip">{_esc(match.industry)}</span>')
-            if match.is_entry_level:
-                chips.append('<span class="jc-chip is-good">junior / staż</span>')
-            if match.learnable_in_month:
-                chips.append('<span class="jc-chip is-good">nauka ≤ 1 mc</span>')
-            for skill in (getattr(match, "missing_skills", None) or [])[:3]:
-                chips.append(f'<span class="jc-chip is-gap">brak: {_esc(skill)}</span>')
-        chips_html = f'<div class="jc-chips">{"".join(chips)}</div>' if chips else ''
-
-        reason_html = ''
-        if match and getattr(match, "reason", None):
-            reason_html = f'<div class="jc-reason">{_esc(match.reason)}</div>'
-
-        paragraphs = format_description(job.description, drop_prefix=job.title)
-        snippet_html = ''
-        if paragraphs:
-            snippet_html = f'<div class="jc-desc">{_esc(" ".join(paragraphs)[:400])}</div>'
-
-        # Cała głowa karty jednym blokiem - każde osobne st.markdown dokłada
-        # własny wrapper z marginesem i rozjeżdża odstępy.
-        st.markdown(
-            f'{rail_html}'
-            f'<div class="jc-top">'
-            f'{avatar_html}'
-            f'<div class="jc-id">'
-            f'<div class="jc-titleline"><span class="jc-title">{_esc(job.title)}</span>'
-            f'{new_html}</div>'
-            f'<div class="jc-meta">{meta_html}</div>'
-            f'</div>'
-            f'{score_html}'
-            f'</div>'
-            f'{chips_html}{reason_html}{snippet_html}',
-            unsafe_allow_html=True
-        )
-
-        if paragraphs:
-            body = "".join(f'<p class="jc-full-p">{_esc(p)}</p>' for p in paragraphs)
-            with st.expander("Cały opis", type="compact"):
-                st.markdown(f'<div class="jc-full">{body}</div>', unsafe_allow_html=True)
-
-        # --- akcje ---
-        # Decyzje bez podpisów: kształt i barwa ikony niosą znaczenie, a opis
-        # zostaje w dymku. Cztery ikony obok siebie czyta się jednym rzutem
-        # oka, czterech etykiet - nie.
-        with st.container(key=f"ja_{card_key}"):
-            # Ocena po lewej, wszystkie działania zbite w jedną grupę po
-            # prawej - tak jak na portalach, gdzie ikony akcji trzymają się
-            # jednej krawędzi i zawsze wiadomo, gdzie ich szukać.
-            # Ocena zajmuje tyle, ile potrzebuje suwak; reszta idzie na
-            # przyciski, żeby przy węższym oknie rząd nie łamał się na dwie
-            # linie i "Usuń" nie lądowało samo pod spodem.
-            col_rate, col_act = st.columns([3.4, 8.6], vertical_alignment="center")
-
-            with col_rate:
-                with st.container(horizontal=True, vertical_alignment="center"):
-                    st.markdown('<div class="jc-rate-lbl">Twoja ocena</div>',
-                                unsafe_allow_html=True)
-                    rating_val = st.slider(
-                        "Ocena", 1, 10, rating if rating else 5,
-                        key=get_key(f"slider_{key_prefix}", job.link),
-                        label_visibility="collapsed"
-                    )
-                    if st.button("", icon=":material/check:",
-                                 key=get_key(f"conf_{key_prefix}", job.link),
-                                 help="Zapisz samą ocenę - oferta zostaje na liście"):
-                        update_decision(job.link, "rated", rating_val)
-                        st.rerun(scope="app")
-
-            with col_act:
-                with st.container(horizontal=True, vertical_alignment="center",
-                                  horizontal_alignment="right"):
-                    if st.button("Zapisz", icon=":material/bookmark:",
-                                 key=get_key(f"save_{key_prefix}", job.link),
-                                 help="Trafi do „Zapisane i wysłane”"):
-                        update_decision(job.link, "save", rating_val)
-                        st.rerun(scope="app")
-
-                    if st.button("Wysłane", icon=":material/send:",
-                                 key=get_key(f"app_{key_prefix}", job.link),
-                                 help="Aplikacja poszła - zapisuje dzisiejszą datę"):
-                        update_decision(job.link, "apply", rating_val)
-                        st.rerun(scope="app")
-
-                    if st.button("Aspiruję", icon=":material/trending_up:",
-                                 key=get_key(f"asp_{key_prefix}", job.link),
-                                 help="Za wysoko na teraz, ale w tę stronę celujesz"):
-                        update_decision(job.link, "aspirational", rating_val)
-                        st.rerun(scope="app")
-
-                    if st.button("Odrzuć", icon=":material/close:",
-                                 key=get_key(f"rej_{key_prefix}", job.link),
-                                 help="Do kosza - profil uczy się, czego nie chcesz"):
-                        update_decision(job.link, "reject", min(rating_val, 3))
-                        st.rerun(scope="app")
-
-                    st.markdown('<div class="jc-actions-sep"></div>',
-                                unsafe_allow_html=True)
-
-                    st.link_button("Otwórz", job.link, icon=":material/open_in_new:",
-                                   help="Otwórz ofertę na portalu")
-
-                    if show_restore:
-                        if st.button("Przywróć", icon=":material/undo:",
-                                     key=get_key("rest", job.link),
-                                     help="Wraca do bazy jako nieoceniona"):
-                            del st.session_state.user_decisions[job.link]
-                            save_user_decisions(st.session_state.user_decisions)
-                            st.rerun(scope="app")
-
-                    # Kasowanie stoi w rzędzie jak reszta, ale jest jedynym
-                    # nieodwracalnym działaniem na karcie - dlatego wymaga
-                    # potwierdzenia zamiast chowania się w menu.
-                    confirm_key = f"confirm_del_{card_key}"
-                    if st.session_state.get(confirm_key):
-                        if st.button("Na pewno?", icon=":material/delete_forever:",
-                                     key=get_key(f"delyes_{key_prefix}", job.link),
-                                     help="Kliknij, żeby usunąć bezpowrotnie"):
-                            st.session_state.pop(confirm_key, None)
-                            _delete_job_permanent(job.link)
-                            st.toast("Oferta usunięta z bazy.")
-                            time.sleep(0.4)
-                            st.rerun(scope="app")
-                    else:
-                        if st.button("Usuń", icon=":material/delete:",
-                                     key=get_key(f"del_{key_prefix}", job.link),
-                                     help="Usuwa z bazy, z wyników AI i z Twoich decyzji"):
-                            st.session_state[confirm_key] = True
-                            st.rerun()
+def find_match(link):
+    """Ocena AI dla oferty, w czasie stałym."""
+    return st.session_state.match_lookup.get(link)
 
 
 def _delete_job_permanent(job_link: str):
@@ -1345,492 +778,16 @@ def _delete_job_permanent(job_link: str):
     st.session_state.raw_jobs = [j for j in st.session_state.raw_jobs if j.link != job_link]
     st.session_state.analyzed_matches = [m for m in st.session_state.analyzed_matches if m.job.link != job_link]
 
-    if job_link in st.session_state.job_lookup:
-        del st.session_state.job_lookup[job_link]
+    st.session_state.job_lookup.pop(job_link, None)
+    st.session_state.match_lookup.pop(job_link, None)
 
     if job_link in st.session_state.user_decisions:
         del st.session_state.user_decisions[job_link]
         save_user_decisions(st.session_state.user_decisions)
 
 
-def render_paginated_list(items, page_key_prefix, render_item_fn, header_text):
-    """
-    Wspólne stronicowanie dla wszystkich widoków.
-    """
-    if not items:
-        return
-    
-    total_pages = max(1, math.ceil(len(items) / PAGE_SIZE))
-    
-    top_key = f"{page_key_prefix}_page_top"
-    btm_key = f"{page_key_prefix}_page_btm"
-    if st.session_state.get(top_key, 1) > total_pages: st.session_state[top_key] = total_pages
-    if st.session_state.get(btm_key, 1) > total_pages: st.session_state[btm_key] = total_pages
-    
-    pc1, pc2 = st.columns([4, 1], vertical_alignment="center")
-    with pc1:
-        st.markdown(f'<div class="pg-count">{html.escape(header_text)}</div>',
-                    unsafe_allow_html=True)
-    with pc2:
-        page_num = st.number_input("Strona", min_value=1, max_value=total_pages, value=1, key=top_key, on_change=sync_pagination, args=(top_key, btm_key), label_visibility="collapsed")
-    
-    start = (page_num - 1) * PAGE_SIZE
-    end = start + PAGE_SIZE
-    
-    for item in items[start:end]:
-        render_item_fn(item)
-    
-    if total_pages > 1:
-        st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
-        bc1, bc2 = st.columns([5, 1])
-        with bc2:
-            st.number_input("Strona", min_value=1, max_value=total_pages, value=page_num, key=btm_key, on_change=sync_pagination, args=(btm_key, top_key), label_visibility="collapsed")
-
-
 # =============================================================================
-# TABLICA KANBAN - ŚLEDZENIE APLIKACJI
-# =============================================================================
-
-def render_kanban_view():
-    render_view_header(
-        "proces", "Tablica rekrutacyjna",
-        "Oferty, w których coś się dzieje. Przesuń ofertę do kolejnego etapu, "
-        "gdy dostaniesz odpowiedź."
-    )
-
-    decisions = st.session_state.user_decisions
-
-    # Klucz etapu MUSI być tym samym słowem, które zapisuje karta oferty
-    # (update_decision(..., "save")). Wcześniej tablica szukała "saved", więc
-    # kolumna "Zapisane" była zawsze pusta, choć zapisane oferty istniały.
-    stage_names = {
-        "save":      "Zapisane",
-        "apply":     "Wysłane",
-        "interview": "Rozmowa",
-        "offer":     "Oferta",
-        "archive":   "Archiwum",
-    }
-    # Stare zapisy używały innych nazw etapu
-    LEGACY = {"saved": "save", "reject": "archive", "rejected": "archive"}
-
-    stages = {key: {"label": label, "items": []} for key, label in stage_names.items()}
-
-    def board_stage(status, stage):
-        """
-        Na tablicy lądują tylko oferty, w których faktycznie coś się dzieje.
-
-        Odrzucenie przy przeglądaniu listy NIE jest etapem rekrutacji - takich
-        ofert były setki i zalewały kolumnę "Archiwum" (120 pozycji przy czterech
-        pozostałych kolumnach pustych), przez co tablica nie pokazywała niczego
-        użytecznego. Odrzucone mają własny widok. Do Archiwum trafia wyłącznie
-        to, co sam tam przesuniesz - czyli sprawy zakończone PO aplikowaniu.
-        """
-        stage = LEGACY.get(stage, stage)
-        if stage in stages:
-            return stage
-        return status if status in ("save", "apply") else None
-
-    skipped_missing = 0
-    for link, ddata in decisions.items():
-        if isinstance(ddata, dict):
-            status, stage = ddata.get("status"), ddata.get("stage")
-        else:
-            status, stage = ddata, None
-
-        target = board_stage(status, stage)
-        if target is None:
-            continue
-
-        job = find_job_obj(link)
-        if not job:
-            skipped_missing += 1
-            continue
-        stages[target]["items"].append((link, job, ddata))
-
-    total_on_board = sum(len(s["items"]) for s in stages.values())
-    if total_on_board == 0:
-        st.markdown(
-            '<div class="panel-note">Tablica jest pusta. Trafiają tu oferty, '
-            'które oznaczysz na liście jako <strong>Zapisz</strong> albo '
-            '<strong>Wysłane</strong> — a potem przesuwasz je między etapami, '
-            'gdy dostaniesz odpowiedź. Oferty odrzucone przy przeglądaniu tu nie '
-            'wchodzą, są w widoku „Odrzucone”.</div>',
-            unsafe_allow_html=True
-        )
-    if skipped_missing:
-        st.caption(f"{skipped_missing} decyzji dotyczy ofert, których nie ma już "
-                   f"w bazie (zostały usunięte jako przeterminowane).")
-
-    columns_map = list(zip(stage_names.keys(), st.columns(len(stage_names))))
-
-    for stage_key, col in columns_map:
-        info = stages[stage_key]
-        with col:
-            st.markdown(
-                f'<div class="kb-head"><span class="kb-name">{html.escape(info["label"])}</span>'
-                f'<span class="kb-count">{len(info["items"])}</span></div>',
-                unsafe_allow_html=True
-            )
-            if not info['items']:
-                st.markdown(
-                    '<div style="font-size:0.78rem;color:var(--faint);padding:0.2rem 0 0.8rem 0;">'
-                    'pusto</div>', unsafe_allow_html=True
-                )
-            for link, job, ddata in info['items']:
-                with st.container(border=False, key=f"kb_{stage_key}_{get_key('c', link)}"):
-                    st.markdown(
-                        f'<div class="kb-title">{html.escape(str(job.title))}</div>'
-                        f'<div class="kb-org">{html.escape(str(job.company))}'
-                        f' · {html.escape(str(job.location or ""))}</div>',
-                        unsafe_allow_html=True
-                    )
-                    
-                    current_stage = stage_key
-                    new_stage = st.selectbox(
-                        "Etap", options=list(stage_names.keys()),
-                        index=list(stage_names.keys()).index(current_stage),
-                        format_func=lambda x: stage_names[x],
-                        key=get_key(f"kanban_sel_{stage_key}", link),
-                        label_visibility="collapsed",
-                    )
-
-                    if new_stage != current_stage:
-                        rating = ddata.get("rating") if isinstance(ddata, dict) else 5
-                        status = ddata.get("status") if isinstance(ddata, dict) else ddata
-                        update_decision(link, status or "save", rating, stage=new_stage)
-                        st.rerun()
-                    
-                    st.link_button("Otwórz", job.link, icon=":material/open_in_new:",
-                                   type="tertiary")
-
-
-# =============================================================================
-# WIDOKI
-# =============================================================================
-
-def render_analyzed_view():
-    render_view_header(
-        "oferty", "Dopasowane przez AI",
-        "Ranking według dopasowania do Twojego CV i profilu preferencji. "
-        "Każda ocena, którą tu wystawisz, wraca do profilu i poprawia kolejne."
-    )
-    matches = st.session_state.analyzed_matches
-    
-    if not matches:
-        st.info("Brak przeanalizowanych ofert. Przejdź do 'Panel Sterowania' i uruchom analizę AI.")
-        return
-
-    with st.container(key="toolbar_an"):
-        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-        with col1: search_query = st.text_input("Stanowisko lub firma", "", key="search_an",
-                                                placeholder="Szukaj…").lower()
-        with col2: min_match = st.slider("Minimalne dopasowanie", 0, 100, 0, format="%d%%")
-        with col3: sort_order = st.selectbox("Sortowanie", ["Najwyższe dopasowanie", "Najniższe dopasowanie", "Najnowsze"], key="sort_an")
-        with col4: mode_filter = st.selectbox("Tryb pracy", WORK_MODE_FILTER, key="mode_an")
-        with st.container(horizontal=True):
-            entry_only = st.checkbox("Tylko junior i staż", value=False)
-            # Wykrywanie martwych ofert bez możliwości ich ukrycia było samą
-            # informacją; ten filtr dopiero czyni z niego narzędzie.
-            hide_stale = st.checkbox(
-                "Ukryj prawdopodobnie nieaktualne", value=False, key="hide_stale_an",
-                help="Chowa oferty z sygnałem, że ogłoszenie jest martwe: minął "
-                     "termin, ogłoszenie ma ponad 75 dni albo wisi od tygodni."
-            )
-    
-    sort_mapping = {
-        "Najwyższe dopasowanie": "Highest Match",
-        "Najniższe dopasowanie": "Lowest Match",
-        "Najnowsze": "Newest"
-    }
-    mapped_sort = sort_mapping.get(sort_order, "Highest Match")
-    
-    filtered = []
-    for m in matches:
-        if search_query and search_query not in m.job.title.lower() and search_query not in m.job.company.lower(): continue
-        status, _ = get_decision(m.job.link)
-        if status not in ['reject', 'save', 'apply', 'rated', 'aspirational']:
-            filtered.append(m)
-    
-    if min_match > 0:
-        filtered = [m for m in filtered if m.match_percentage >= min_match]
-    if entry_only:
-        filtered = [m for m in filtered if m.is_entry_level]
-
-    if mode_filter != "Wszystkie":
-        filtered = [m for m in filtered
-                    if detect_work_mode(m.job.location or "", m.job.description or "",
-                                        m.job.title or "")["label"] == mode_filter]
-    if hide_stale:
-        filtered = [m for m in filtered if ghost_signals(m.job)["level"] != "ghost"]
-
-    if mapped_sort == "Highest Match":
-        filtered.sort(key=lambda x: x.match_percentage, reverse=True)
-    elif mapped_sort == "Lowest Match":
-        filtered.sort(key=lambda x: x.match_percentage)
-    elif mapped_sort == "Newest":
-        filtered.sort(key=lambda x: x.job.scraped_at if getattr(x.job, 'scraped_at', None) else '', reverse=True)
-
-    def _render_analyzed_item(m):
-        status, rating = get_decision(m.job.link)
-        render_job_card(m.job, "an", status=status, rating=rating, match=m)
-    
-    render_paginated_list(
-        filtered, "anal",
-        _render_analyzed_item,
-        f"{fmt_n(len(filtered))} z {fmt_n(len(matches))} ofert"
-    )
-
-
-def render_raw_view():
-    render_view_header(
-        "oferty", "Cała baza",
-        "Wszystko, co pobrały skrapery i czego jeszcze nie tknąłeś ani Ty, ani AI."
-    )
-    jobs = st.session_state.raw_jobs
-    
-    if not jobs:
-        st.info("Brak nieocenionych ofert w bazie danych.")
-        return
-
-    with st.container(key="toolbar_raw"):
-        sc1, sc2, sc3 = st.columns([2, 1, 1])
-        with sc1: search_query = st.text_input("Stanowisko lub firma", "", key="search_raw",
-                                               placeholder="Szukaj…").lower()
-        with sc2: sort_order = st.selectbox("Sortowanie", ["Najnowsze", "Najstarsze"], key="sort_raw")
-        with sc3: mode_filter = st.selectbox("Tryb pracy", WORK_MODE_FILTER, key="mode_raw")
-    
-    filtered = []
-    for j in jobs:
-        if search_query and search_query not in j.title.lower() and search_query not in j.company.lower(): continue
-        status, rating = get_decision(j.link)
-        if not status and not rating:
-            filtered.append(j)
-
-    if mode_filter != "Wszystkie":
-        filtered = [j for j in filtered
-                    if detect_work_mode(j.location or "", j.description or "",
-                                        j.title or "")["label"] == mode_filter]
-
-    mapped_sort = "Newest" if sort_order == "Najnowsze" else "Oldest"
-    if mapped_sort == "Newest":
-        filtered.sort(key=lambda x: x.scraped_at if getattr(x, 'scraped_at', None) else '', reverse=True)
-    elif mapped_sort == "Oldest":
-        filtered.sort(key=lambda x: x.scraped_at if getattr(x, 'scraped_at', None) else '')
-    
-    def _render_raw_item(j):
-        status, rating = get_decision(j.link)
-        render_job_card(j, "raw", status=status, rating=rating)
-    
-    render_paginated_list(filtered, "raw", _render_raw_item, f"{fmt_n(len(filtered))} nietkniętych ofert")
-
-
-def _collect_decision_jobs(status_filter, search_query=""):
-    """Helper to collect jobs by decision status."""
-    decisions = st.session_state.user_decisions
-    results = []
-    
-    for link in decisions.keys():
-        job = find_job_obj(link)
-        if not job:
-            continue
-        if search_query and search_query not in job.title.lower() and search_query not in job.company.lower():
-            continue
-        s, r = get_decision(link)
-        if status_filter(s, r):
-            results.append((link, job, r, s))
-    
-    return results
-
-
-def _sort_decision_jobs(items, sort_order):
-    """Helper to sort decision-based job lists."""
-    if sort_order in ("Recently Added", "Ostatnio dodane"):
-        items.reverse()
-    elif sort_order in ("Highest Rated", "Najwyżej ocenione"):
-        items.sort(key=lambda x: x[2] if x[2] else 0, reverse=True)
-    elif sort_order in ("Lowest Rated", "Najniżej ocenione"):
-        items.sort(key=lambda x: x[2] if x[2] else 0)
-    elif sort_order in ("Newest (Scraped)", "Najnowsze (Skanowanie)"):
-        items.sort(key=lambda x: x[1].scraped_at if x[1] and getattr(x[1], 'scraped_at', None) else '', reverse=True)
-    return items
-
-
-def render_rated_view():
-    render_view_header("decyzje", "Ocenione",
-                       "Oferty, którym wystawiłeś ocenę. To z nich powstaje profil preferencji.")
-    
-    with st.container(key="toolbar_rt"):
-        sc1, sc2 = st.columns([2, 1])
-        with sc1: search_query = st.text_input("Stanowisko lub firma", "", key="search_rt",
-                                               placeholder="Szukaj…").lower()
-        with sc2: sort_order = st.selectbox("Sortowanie", ["Ostatnio dodane", "Najwyżej ocenione", "Najniżej ocenione", "Najnowsze (Skanowanie)"], key="sort_rt")
-    
-    items = _collect_decision_jobs(
-        lambda s, r: s in ['rated', 'save', 'reject', 'aspirational'] and r is not None,
-        search_query
-    )
-    items = _sort_decision_jobs(items, sort_order)
-    
-    if not items:
-        st.info("Brak ręcznie ocenionych ofert.")
-        return
-    
-    def _render_rated_item(item):
-        link, job, rating, status = item
-        render_job_card(job, "rt", status=status, rating=rating)
-    
-    render_paginated_list(items, "rated", _render_rated_item, f"{fmt_n(len(items))} ocenionych ofert")
-
-
-def render_saved_view():
-    render_view_header("decyzje", "Zapisane i wysłane",
-                       "Krótka lista: to, do czego wracasz, i to, gdzie już poszła aplikacja.")
-    
-    with st.container(key="toolbar_sv"):
-        sc1, sc2 = st.columns([2, 1])
-        with sc1: search_query = st.text_input("Stanowisko lub firma", "", key="search_sv",
-                                               placeholder="Szukaj…").lower()
-        with sc2: sort_order = st.selectbox("Sortowanie", ["Ostatnio dodane", "Najwyżej ocenione", "Najniżej ocenione", "Najnowsze (Skanowanie)"], key="sort_sv")
-    
-    items = _collect_decision_jobs(lambda s, r: s in ['save', 'apply'], search_query)
-    items = _sort_decision_jobs(items, sort_order)
-    
-    if not items:
-        st.info("Brak zapisanych lub aplikowanych ofert.")
-        return
-        
-    try:
-        import pandas as pd
-        import io
-        
-        export_data = []
-        for link, job, rating, status in items:
-            applied_at = st.session_state.user_decisions.get(link, {}).get('applied_at', '')
-            export_data.append({
-                "Stanowisko": job.title,
-                "Firma": job.company,
-                "Lokalizacja": job.location,
-                "Portal": job.source,
-                "Link": job.link,
-                "Status": "Aplikowano" if status == "apply" else "Zapisano",
-                "Data Aplikacji": applied_at,
-                "Ocena Użytkownika": rating if rating else ""
-            })
-        df = pd.DataFrame(export_data)
-        csv_bytes = df.to_csv(index=False).encode('utf-8')
-        
-        excel_bytes = None
-        try:
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name='Oferty')
-            excel_bytes = buffer.getvalue()
-        except Exception as e:
-            logger.warning(f"Excel error: {e}")
-            
-        ec1, ec2 = st.columns(2)
-        with ec1:
-            st.download_button("Pobierz CSV", data=csv_bytes, icon=":material/download:",
-                               file_name="zapisane_oferty.csv", mime="text/csv",
-                               width="stretch")
-        with ec2:
-            if excel_bytes:
-                st.download_button("Pobierz Excel", data=excel_bytes, icon=":material/download:",
-                                   file_name="zapisane_oferty.xlsx",
-                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                   width="stretch")
-    except Exception as e:
-        st.error(f"Błąd generowania eksportu: {e}")
-    
-    def _render_saved_item(item):
-        link, job, rating, status = item
-        render_job_card(job, "sv", status=status, rating=rating)
-    
-    render_paginated_list(items, "saved", _render_saved_item, f"{len(items)} zapisanych i wysłanych")
-
-
-def render_aspirational_view():
-    render_view_header("decyzje", "Aspiracyjne",
-                       "Za wysoko na teraz. Trzymasz je, żeby wiedzieć, czego się douczyć.")
-    
-    with st.container(key="toolbar_as"):
-        sc1, sc2 = st.columns([2, 1])
-        with sc1: search_query = st.text_input("Stanowisko lub firma", "", key="search_as",
-                                               placeholder="Szukaj…").lower()
-        with sc2: sort_order = st.selectbox("Sortowanie", ["Ostatnio dodane", "Najwyżej ocenione", "Najniżej ocenione", "Najnowsze (Skanowanie)"], key="sort_as")
-    
-    items = _collect_decision_jobs(lambda s, r: s == 'aspirational', search_query)
-    items = _sort_decision_jobs(items, sort_order)
-    
-    if not items:
-        st.info("Brak aspirujących ofert w Twojej bazie.")
-        return
-    
-    def _render_asp_item(item):
-        link, job, rating, status = item
-        render_job_card(job, "as", status=status, rating=rating)
-    
-    render_paginated_list(items, "asp", _render_asp_item, f"{fmt_n(len(items))} aspiracyjnych ofert")
-
-
-def render_rejected_view():
-    render_view_header("decyzje", "Odrzucone",
-                       "Kosz. Oferty stąd nadal uczą profil tego, czego nie chcesz.")
-    
-    with st.container(key="toolbar_rj"):
-        sc1, sc2 = st.columns([2, 1])
-        with sc1: search_query = st.text_input("Stanowisko lub firma", "", key="search_rj",
-                                               placeholder="Szukaj…").lower()
-        with sc2: sort_order = st.selectbox("Sortowanie", ["Ostatnio dodane", "Najniżej ocenione", "Najwyżej ocenione", "Najnowsze (Skanowanie)"], key="sort_rj")
-    
-    items = _collect_decision_jobs(lambda s, r: s == 'reject', search_query)
-    items = _sort_decision_jobs(items, sort_order)
-    
-    if not items:
-        st.info("Kosz jest pusty.")
-        return
-    
-    # Najbardziej niszcząca akcja w aplikacji: kasuje oferty z bazy, z wyników AI
-    # ORAZ Twoje decyzje o odrzuceniu - a te są materiałem, z którego budowany
-    # jest profil preferencji. Wcześniej stała tu jako goły przycisk, więc jedno
-    # przypadkowe kliknięcie kasowało wszystko bez pytania.
-    with st.expander(f"Usuń trwale wszystkie odrzucone ({len(items)})",
-                     expanded=False, type="compact"):
-        st.markdown(
-            f'<div class="panel-note is-stale">Usunie <strong>{len(items)}</strong> ofert '
-            f'z bazy, z wyników AI i z Twoich decyzji — bezpowrotnie. '
-            f'<em>Razem z nimi znika informacja, że je odrzuciłeś, a to właśnie ona '
-            f'uczy profil preferencji, czego nie chcesz. Jeśli chodzi Ci tylko '
-            f'o czystszą listę, nie musisz nic kasować — odrzucone i tak nie '
-            f'pokazują się w „Dopasowane przez AI”.</em></div>',
-            unsafe_allow_html=True
-        )
-        confirm_purge = st.text_input(
-            "Wpisz USUŃ, żeby odblokować", key="confirm_purge_rejected",
-            placeholder="USUŃ"
-        )
-        if st.button("Usuń trwale", icon=":material/delete_forever:",
-                     key="purge_rejected_btn",
-                     disabled=confirm_purge.strip().upper() not in ("USUŃ", "USUN")):
-            deleted = 0
-            for link, job, rating, status in items:
-                _delete_job_permanent(link)
-                deleted += 1
-            if deleted > 0:
-                st.toast(f"Usunięto {deleted} odrzuconych ofert z bazy.")
-                time.sleep(0.5)
-                st.session_state.data_loaded = False
-                st.rerun()
-    
-    def _render_rejected_item(item):
-        link, job, rating, status = item
-        render_job_card(job, "rj", status=status, rating=rating, show_restore=True)
-    
-    render_paginated_list(items, "rej", _render_rejected_item, f"{fmt_n(len(items))} odrzuconych ofert")
-
-
-# =============================================================================
-# STEROWANIE PIPELINE'EM
+# PULPIT: OPERACJE NA DANYCH I PIPELINE
 # =============================================================================
 
 def _read_links(path: Path, nested: bool = False) -> set:
@@ -1895,406 +852,6 @@ def _run_step(cmd, label, done_label, tail=14):
         st.error("Ostatnie linie:\n\n" + "\n".join(lines) if lines else f"Kod wyjścia {code}")
         return False
 
-
-def render_pipeline_control():
-    """Panel sterowania: stan danych, co zrobić dalej, trzy działania."""
-    render_view_header(
-        "pipeline", "Panel sterowania",
-        "Tu uruchamiasz to, co napełnia aplikację danymi. "
-        "Każde działanie mówi, co robi i ile trwa."
-    )
-
-    base = Path(__file__).parent
-    db_path = base / "jobs_database.json"
-    analyzed_path = base / "analyzed_jobs_waterfall.json"
-    profile_path = base / "preference_profile.json"
-    decisions_path = base / "user_decisions.json"
-
-    # Liczymy na ZBIORACH linków, nie na długościach list. Poprzednia wersja
-    # robiła `baza - oceny_AI - decyzje`, a decyzje dotyczą ofert, które już mają
-    # ocenę AI - ta sama oferta była odejmowana dwa razy i "czeka na ocenę"
-    # potrafiło pokazać 0 przy tysiącach nieprzeanalizowanych ofert.
-    db_links = _read_links(db_path)
-    analyzed_links = _read_links(analyzed_path, nested=True)
-    decided_links = set()
-    if decisions_path.exists():
-        try:
-            with open(decisions_path, "r", encoding="utf-8") as f:
-                decided_links = set(json.load(f).keys())
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Nie udało się odczytać decyzji: {e}")
-
-    db_count = len(db_links)
-    analyzed_count = len(analyzed_links)
-    decisions_count = len(decided_links)
-    pending = len(db_links - analyzed_links)
-
-    profile = {}
-    if profile_path.exists():
-        try:
-            with open(profile_path, "r", encoding="utf-8") as f:
-                profile = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Nie udało się odczytać profilu: {e}")
-    profile_exists = bool(profile)
-    profile_built_from = profile.get("_metadata", {}).get("total_decisions_analyzed", 0) or 0
-
-    def _n(v):
-        return f"{v:,}".replace(",", " ")
-
-    st.markdown('<div class="sec-label">Stan danych</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="rail" style="margin-bottom:1.2rem;">'
-        f'<div class="rail-item"><span class="rail-val">{_n(db_count)}</span>'
-        f'<span class="rail-lbl">ofert w bazie</span></div>'
-        f'<div class="rail-item"><span class="rail-val">{_n(analyzed_count)}</span>'
-        f'<span class="rail-lbl">z oceną AI</span></div>'
-        f'<div class="rail-item"><span class="rail-val">{_n(pending)}</span>'
-        f'<span class="rail-lbl">czeka na ocenę</span></div>'
-        f'<div class="rail-item"><span class="rail-val">{_n(decisions_count)}</span>'
-        f'<span class="rail-lbl">Twoich decyzji</span></div>'
-        f'<div class="rail-item"><span class="rail-val '
-        f'{"is-on" if profile_exists else "is-off"}">'
-        f'{"gotowy" if profile_exists else "brak"}</span>'
-        f'<span class="rail-lbl">profil preferencji</span></div>'
-        f'</div>',
-        unsafe_allow_html=True
-    )
-
-    # --- Co teraz? Jedno zdanie dla kogoś, kto wchodzi tu pierwszy raz. ---
-    new_decisions = max(0, decisions_count - profile_built_from)
-    if db_count == 0:
-        next_up = ("Zacznij od kroku 01 — baza jest pusta, więc nie ma czego oceniać. "
-                   "Pobranie ofert niczego nie kasuje.")
-    elif pending > 0:
-        next_up = (f"Przejdź do kroku 03 — {_n(pending)} ofert czeka na ocenę AI. "
-                   f"Bez tego nie pojawią się w „Dopasowane przez AI”.")
-    elif not profile_exists and decisions_count >= 10:
-        next_up = (f"Przejdź do kroku 02 — masz {decisions_count} ocen, "
-                   f"z których da się zbudować profil i trafniej oceniać kolejne oferty.")
-    elif new_decisions >= 25:
-        next_up = (f"Warto odświeżyć krok 02 — od zbudowania profilu doszło "
-                   f"{new_decisions} nowych decyzji.")
-    else:
-        next_up = ("Wszystko policzone. Wróć do „Dopasowane przez AI” i oceniaj oferty — "
-                   "każda Twoja ocena poprawia kolejne.")
-
-    st.markdown(
-        f'<div class="next-up"><span class="next-up-lbl">co teraz</span>'
-        f'<span class="next-up-txt">{html.escape(next_up)}</span></div>',
-        unsafe_allow_html=True
-    )
-
-    # --- KROK 01 ---
-    st.markdown(
-        '<div class="step">'
-        '<span class="step-num">01</span>'
-        '<span class="step-title">Pobierz oferty z portali</span>'
-        '<div class="step-desc">Odwiedza wszystkie portale i dopisuje do bazy oferty, '
-        'których jeszcze nie masz. Istniejących ofert ani Twoich ocen nie rusza.</div>'
-        '<div class="step-meta">Pracuj.pl · OLX · aplikuj.pl · GoWork.pl · praca.pl · '
-        'NoFluffJobs · JustJoin.it · RocketJobs · SOLID.Jobs · LinkedIn · Indeed '
-        '&nbsp;·&nbsp; trwa od kilku minut do ok. 45 min, zależnie od liczby nowych ofert</div>'
-        '</div>',
-        unsafe_allow_html=True
-    )
-    if st.button("Pobierz oferty", icon=":material/download:", width="stretch",
-                 key="run_scrapers_btn"):
-        if _run_step(["main_scraper.py"], "Pobieram oferty z portali…",
-                     "Pobieranie zakończone"):
-            _run_step(["deduplicate_db.py"], "Scalam duplikaty…", "Duplikaty scalone", tail=6)
-            _run_step(["clean_db.py"], "Skracam opisy…", "Opisy skrócone", tail=4)
-            st.session_state.data_loaded = False
-            st.rerun()
-
-    st.markdown("---")
-
-    # --- KROK 02 ---
-    st.markdown(
-        '<div class="step">'
-        '<span class="step-num">02</span>'
-        '<span class="step-title">Przebuduj profil preferencji</span>'
-        '<div class="step-desc">Czyta Twoje oceny i wyciąga z nich wzorzec: jakie role '
-        'i branże Ci pasują, a co odrzucasz. Profil trafia do polecenia dla AI, '
-        'więc kolejne oferty są oceniane trafniej.</div>'
-        '<div class="step-meta">Uruchom po każdej większej porcji ocen '
-        '&nbsp;·&nbsp; trwa poniżej minuty</div>'
-        '</div>',
-        unsafe_allow_html=True
-    )
-
-    if profile_exists:
-        gen_at = profile.get("_metadata", {}).get("generated_at", "")
-        when = gen_at[:16].replace("T", ", ") if gen_at else "nieznana data"
-        note = f"Obecny profil: {when}, zbudowany z {profile_built_from} Twoich decyzji."
-        if new_decisions >= 25:
-            st.markdown(
-                f'<div class="panel-note is-stale">{html.escape(note)} '
-                f'<em>Od tego czasu doszło {new_decisions} nowych ocen — '
-                f'przebudowanie profilu poprawi trafność kolejnych ocen AI.</em></div>',
-                unsafe_allow_html=True
-            )
-        else:
-            st.markdown(
-                f'<div class="panel-note is-ok">{html.escape(note)}</div>',
-                unsafe_allow_html=True
-            )
-
-        with st.expander("Co jest w profilu", expanded=False, type="compact"):
-            def _list(key):
-                return ", ".join(profile.get(key, [])) or "—"
-            st.markdown(f"**Podsumowanie:** {profile.get('summary', '—')}")
-            st.markdown(f"**Preferowane role:** {_list('preferred_role_types')}")
-            st.markdown(f"**Preferowane branże:** {_list('preferred_industries')}")
-            st.markdown(f"**Przyciąga Cię:** {_list('attractive_keywords')}")
-            st.markdown(f"**Odrzucasz:** {_list('red_flags')}")
-    elif decisions_count < 10:
-        st.markdown(
-            f'<div class="panel-note">Masz {decisions_count} ocen. Profil zbuduje się '
-            f'sensownie od jakichś dziesięciu — oceniaj dalej oferty na liście.</div>',
-            unsafe_allow_html=True
-        )
-
-    if st.button("Przebuduj profil", icon=":material/autorenew:", width="stretch",
-                 key="gen_profile_btn"):
-        if _run_step(["generate_preference_profile.py"], "Buduję profil z Twoich ocen…",
-                     "Profil przebudowany", tail=8):
-            st.rerun()
-
-    st.markdown("---")
-
-    # --- KROK 03 ---
-    st.markdown(
-        '<div class="step">'
-        '<span class="step-num">03</span>'
-        '<span class="step-title">Oceń oferty przez AI</span>'
-        '<div class="step-desc">Wysyła do Gemini oferty, które nie mają jeszcze oceny, '
-        'i dla każdej liczy procent dopasowania oraz uzasadnienie. Dopiero po tym '
-        'kroku oferta pojawia się w „Dopasowane przez AI”.</div>'
-        f'<div class="step-meta">Do policzenia teraz: {_n(pending)} ofert '
-        f'&nbsp;·&nbsp; około {max(1, round(pending / 180))} min '
-        f'&nbsp;·&nbsp; zużywa limit Gemini</div>'
-        '</div>',
-        unsafe_allow_html=True
-    )
-
-    if st.button("Oceń oferty", icon=":material/play_arrow:", width="stretch",
-                 key="run_analysis_btn", disabled=pending == 0):
-        if _run_step(["waterfall_analysis.py"], "Oceniam oferty przez AI…",
-                     "Ocenianie zakończone"):
-            st.session_state.data_loaded = False
-            st.rerun()
-    if pending == 0 and db_count:
-        st.caption("Wszystkie oferty w bazie mają już ocenę AI.")
-
-    # Przeliczenie od zera jest nieodwracalne i kosztuje cały limit Gemini,
-    # więc siedzi osobno, a nie jako pole wyboru obok zwykłego przycisku,
-    # gdzie łatwo je kliknąć przez pomyłkę.
-    with st.expander("Policz wszystkie oceny AI od nowa", expanded=False, type="compact"):
-        st.markdown(
-            f"Kasuje **{_n(analyzed_count)}** dotychczasowych ocen AI i liczy je "
-            f"od zera. Twoje własne oceny i decyzje zostają nietknięte, ale "
-            f"przeliczenie zużyje limit Gemini na wszystkie oferty w bazie "
-            f"(około {max(1, round(db_count / 180))} min). Ma sens po zmianie "
-            f"polecenia dla AI albo modelu."
-        )
-        confirm = st.text_input(
-            "Wpisz PRZELICZ, żeby odblokować", key="confirm_recalc",
-            placeholder="PRZELICZ"
-        )
-        if st.button("Skasuj oceny AI i policz od nowa", icon=":material/warning:",
-                     key="recalc_all_btn", disabled=confirm.strip().upper() != "PRZELICZ"):
-            save_json_atomic(str(analyzed_path), [], backup=True)
-            st.toast("Skasowano dotychczasowe oceny AI (kopia w backups/).")
-            if _run_step(["waterfall_analysis.py"], "Liczę wszystko od nowa…",
-                         "Przeliczone"):
-                st.session_state.data_loaded = False
-                st.rerun()
-
-    st.markdown("---")
-
-    st.markdown('<div class="sec-label">Klucze API</div>', unsafe_allow_html=True)
-    
-    def read_current_env_keys():
-        keys = {
-            "GEMINI_API_KEY_PRIMARY": "", "GEMINI_API_KEY_1": "", "GEMINI_API_KEY_2": "",
-            "GEMINI_API_KEY_3": "", "GEMINI_API_KEY_4": "", "ADZUNA_APP_ID": "",
-            "ADZUNA_APP_KEY": "", "JOOBLE_API_KEY": "", "CAREERJET_API_KEY": ""
-        }
-        env_path = Path(__file__).parent / ".env"
-        if env_path.exists():
-            try:
-                for line in env_path.read_text(encoding="utf-8").splitlines():
-                    if "=" in line and not line.strip().startswith("#"):
-                        parts = line.split("=", 1)
-                        k = parts[0].strip()
-                        if k in keys: keys[k] = parts[1].strip()
-            except OSError as e:
-                logger.warning(f"Nie udało się odczytać .env: {e}")
-        return keys
-
-    with st.expander("Edytuj klucze", expanded=False, type="compact"):
-        env_keys = read_current_env_keys()
-        
-        st.markdown('<div class="sec-label">Gemini - klucze 1-4 służą do rotacji '
-                    'przy limitach</div>', unsafe_allow_html=True)
-        new_gemini_primary = st.text_input("Główny Klucz Gemini API", value=env_keys.get("GEMINI_API_KEY_PRIMARY", ""), type="password")
-        new_gemini_1 = st.text_input("Gemini API Key 1 (Zapasy)", value=env_keys.get("GEMINI_API_KEY_1", ""), type="password")
-        new_gemini_2 = st.text_input("Gemini API Key 2 (Zapasy)", value=env_keys.get("GEMINI_API_KEY_2", ""), type="password")
-        new_gemini_3 = st.text_input("Gemini API Key 3 (Zapasy)", value=env_keys.get("GEMINI_API_KEY_3", ""), type="password")
-        new_gemini_4 = st.text_input("Gemini API Key 4 (Zapasy)", value=env_keys.get("GEMINI_API_KEY_4", ""), type="password")
-        
-        st.markdown('<div class="sec-label">Portale pracy - opcjonalne, '
-                    'skrapery włączają się same po ustawieniu klucza</div>',
-                    unsafe_allow_html=True)
-        st.markdown("[🔗 Rejestracja Adzuna API](https://developer.adzuna.com/)")
-        c_adz1, c_adz2 = st.columns(2)
-        with c_adz1: new_adzuna_id = st.text_input("Adzuna App ID", value=env_keys.get("ADZUNA_APP_ID", ""))
-        with c_adz2: new_adzuna_key = st.text_input("Adzuna App Key", value=env_keys.get("ADZUNA_APP_KEY", ""), type="password")
-            
-        st.markdown("[🔗 Rejestracja Jooble API](https://jooble.org/api/about)")
-        new_jooble = st.text_input("Jooble API Key", value=env_keys.get("JOOBLE_API_KEY", ""), type="password")
-        
-        st.markdown("[🔗 Rejestracja Careerjet API](https://www.careerjet.com/partners/api/)")
-        new_careerjet = st.text_input("Careerjet API Key", value=env_keys.get("CAREERJET_API_KEY", ""), type="password")
-        
-        if st.button("Zapisz klucze", icon=":material/save:", key="save_env_keys_btn"):
-            updates = {
-                "GEMINI_API_KEY_PRIMARY": new_gemini_primary, "GEMINI_API_KEY_1": new_gemini_1,
-                "GEMINI_API_KEY_2": new_gemini_2, "GEMINI_API_KEY_3": new_gemini_3,
-                "GEMINI_API_KEY_4": new_gemini_4, "ADZUNA_APP_ID": new_adzuna_id,
-                "ADZUNA_APP_KEY": new_adzuna_key, "JOOBLE_API_KEY": new_jooble,
-                "CAREERJET_API_KEY": new_careerjet
-            }
-            env_path = Path(__file__).parent / ".env"
-            lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-            updated = set()
-            new_lines = []
-            for line in lines:
-                if "=" in line and not line.strip().startswith("#"):
-                    parts = line.split("=", 1)
-                    k = parts[0].strip()
-                    if k in updates:
-                        new_lines.append(f"{k}={updates[k]}")
-                        updated.add(k)
-                        continue
-                new_lines.append(line)
-            for k, v in updates.items():
-                if k not in updated: new_lines.append(f"{k}={v}")
-            env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-            st.success("Zapisano klucze w pliku `.env`!")
-            st.toast("Zapisano konfigurację!")
-            time.sleep(0.8)
-            st.rerun()
-
-
-# =============================================================================
-# RĘCZNE DODANIE OFERTY
-# =============================================================================
-
-def render_add_manual_view():
-    render_view_header(
-        "oferty", "Dodaj z linku",
-        "Wklej adres oferty z dowolnego portalu. Dane pobiorą się same, "
-        "a Ty je poprawisz przed zapisaniem."
-    )
-
-    if 'manual_job_data' not in st.session_state: st.session_state.manual_job_data = None
-    if 'manual_job_url' not in st.session_state: st.session_state.manual_job_url = ""
-
-    url_input = st.text_input("URL oferty pracy:", value=st.session_state.manual_job_url, placeholder="https://...")
-    
-    col_btn1, col_btn2 = st.columns([1, 4])
-    with col_btn1: fetch_clicked = st.button("Pobierz dane", icon=":material/download:",
-                                             type="primary", width="stretch")
-    with col_btn2:
-        if st.session_state.manual_job_data:
-            if st.button("Wyczyść formularz"):
-                st.session_state.manual_job_data = None
-                st.session_state.manual_job_url = ""
-                st.rerun()
-
-    if fetch_clicked and url_input:
-        with st.spinner("Pobieranie metadanych strony..."):
-            from utils.link_fetcher import extract_job_info_from_url
-            data = extract_job_info_from_url(url_input)
-            data['link'] = url_input
-            st.session_state.manual_job_data = data
-            st.session_state.manual_job_url = url_input
-            st.rerun()
-             
-    if st.session_state.manual_job_data:
-        st.divider()
-        st.markdown('<div class="sec-label">Sprawdź dane przed zapisem</div>',
-                    unsafe_allow_html=True)
-        
-        with st.form("manual_job_form", border=True):
-            data = st.session_state.manual_job_data
-            
-            c1, c2 = st.columns(2)
-            with c1: title = st.text_input("Tytuł stanowiska *", value=data.get('title', ''))
-            with c2: company = st.text_input("Firma *", value=data.get('company', ''))
-                
-            c3, c4 = st.columns(2)
-            with c3: location = st.text_input("Lokalizacja", value=data.get('location', ''))
-            with c4: source = st.text_input("Źródło", value=data.get('source', ''))
-                 
-            description = st.text_area("Opis (lub tagi/podsumowanie)", value=data.get('description', ''), height=100)
-            
-            submit = st.form_submit_button("Podgląd Karty Oferty", type="primary")
-            
-            if submit:
-                 if not title or not company:
-                     st.error("Tytuł i Firma są wymagane!")
-                 else:
-                     st.session_state.manual_job_data.update({
-                         'title': title, 'company': company,
-                         'location': location, 'source': source,
-                         'description': description
-                     })
-                     st.rerun()
-
-        if st.session_state.manual_job_data.get('title'):
-             st.markdown('<div class="sec-label">Podgląd karty</div>',
-                         unsafe_allow_html=True)
-             data = st.session_state.manual_job_data
-             
-             temp_job = Job(
-                 title=data['title'], company=data['company'],
-                 link=data['link'], description=data['description'],
-                 source=data['source'], location=data['location']
-             )
-             
-             is_new = temp_job.link not in st.session_state.job_lookup
-             if not is_new:
-                 ex_job = st.session_state.job_lookup[temp_job.link]
-                 ex_job.title = temp_job.title
-                 ex_job.company = temp_job.company
-                 ex_job.location = temp_job.location
-                 ex_job.source = temp_job.source
-                 ex_job.description = temp_job.description
-             else:
-                 st.session_state.raw_jobs.append(temp_job)
-                 st.session_state.job_lookup[temp_job.link] = temp_job
-                 
-             try:
-                 db = JobDatabase(str(JOBS_DATABASE_PATH))
-                 existing_jobs = db.load_jobs()
-                 updated_jobs = [j for j in existing_jobs if j.link != temp_job.link]
-                 updated_jobs.append(temp_job)
-                 db.save_jobs(updated_jobs)
-             except Exception as e:
-                 st.error(f"Błąd dodawania do bazi DB: {e}")
-             
-             status, rating = get_decision(temp_job.link)
-             render_job_card(temp_job, "manual_prev", status=status, rating=rating)
-             
-             if status:
-                  st.success(f"Oferta zapisana i oceniona jako '{status}'!")
-                  if st.button("Gotowe - Dodaj kolejną ofertę"):
-                       st.session_state.manual_job_data = None
-                       st.session_state.manual_job_url = ""
-                       st.rerun()
 
 # =============================================================================
 # PULPIT: WARSTWA WIZUALNA
@@ -3151,24 +1708,24 @@ def ws_collect(tab, search):
     prawy panel nie wie nic o tym, skąd dane pochodzą, a dołożenie zakładki
     to dopisanie jednej gałęzi tutaj.
     """
-    matches_by_link = {m.job.link: m for m in st.session_state.analyzed_matches}
+    matches_by_link = st.session_state.match_lookup
     out = []
-
-    def add(job, match):
-        status, rating = get_decision(job.link)
-        out.append((job, match, status, rating))
 
     if tab == "Dopasowane":
         for m in st.session_state.analyzed_matches:
-            status, _ = get_decision(m.job.link)
-            if status in ('reject', 'save', 'apply', 'rated', 'aspirational'):
+            # Jedno odpytanie o decyzję na ofertę. Poprzednia wersja pytała dwa
+            # razy - raz na filtr, raz na krotkę - a przy 17 tys. ofert to samo
+            # w sobie było połową kosztu przeliczenia zakładki.
+            status, rating = get_decision(m.job.link)
+            if status in DECIDED_STATUSES:
                 continue
-            add(m.job, m)
+            out.append((m.job, m, status, rating))
         out.sort(key=lambda t: t[1].match_percentage if t[1] else -1, reverse=True)
 
     elif tab == "Wszystkie":
         for j in st.session_state.raw_jobs:
-            add(j, matches_by_link.get(j.link))
+            status, rating = get_decision(j.link)
+            out.append((j, matches_by_link.get(j.link), status, rating))
         out.sort(key=lambda t: (t[1].match_percentage if t[1] else -1,
                                 getattr(t[0], "scraped_at", "") or ""), reverse=True)
 
@@ -3340,7 +1897,9 @@ def ws_render_list_panel(tab):
     st.session_state["_ws_sig"] = sig
 
     start = (page - 1) * PAGE_SIZE
-    page_items = list(enumerate(items))[start:start + PAGE_SIZE]
+    # enumerate na wycinku, nie na całości - numer wiersza i tak zaczyna się
+    # od `start`, a lista potrafi mieć kilkanaście tysięcy pozycji.
+    page_items = list(enumerate(items[start:start + PAGE_SIZE], start=start))
     ws_render_rows(page_items, fresh, st.session_state.get("ws_selected"))
 
     if total_pages > 1:
@@ -3478,7 +2037,7 @@ def ws_render_detail(link, stage_ctl=False):
                     unsafe_allow_html=True)
         return
 
-    match = next((m for m in st.session_state.analyzed_matches if m.job.link == link), None)
+    match = find_match(link)
     status, rating = get_decision(link)
 
     # Nagłówek: podpis po lewej, dwa drobne przyciski po prawej, wszystko na
@@ -3669,8 +2228,7 @@ def ws_board_stages():
         job = find_job_obj(link)
         if job is None:
             continue
-        match = next((m for m in st.session_state.analyzed_matches
-                      if m.job.link == job.link), None)
+        match = find_match(job.link)
         rating = ddata.get("rating") if isinstance(ddata, dict) else None
         stages[target].append((job, match, status, rating))
 
@@ -4252,34 +2810,6 @@ def render_workspace():
                         ws_render_detail(selected)
                     else:
                         ws_render_activity()
-
-
-VIEWS = {
-    "Dopasowane przez AI":  render_analyzed_view,
-    "Cała baza":            render_raw_view,
-    "Dodaj z linku":        render_add_manual_view,
-    "Tablica rekrutacyjna": render_kanban_view,
-    "Zapisane i wysłane":   render_saved_view,
-    "Ocenione":             render_rated_view,
-    "Aspiracyjne":          render_aspirational_view,
-    "Odrzucone":            render_rejected_view,
-    "Panel sterowania":     render_pipeline_control,
-}
-VIEW_ORDER = list(VIEWS)
-
-# Stare nazwy widokow - zeby sesja zapisana przed przebudowa nie wyladowala
-# na widoku domyslnym bez slowa wyjasnienia.
-VIEW_ALIASES = {
-    "🚀 Analiza AI (Dopasowanie)": "Dopasowane przez AI",
-    "📂 Surowa Baza Ofert":        "Cała baza",
-    "➕ Dodaj Ofertę z Linku":     "Dodaj z linku",
-    "📋 Tablica Rekrutacyjna (Kanban)": "Tablica rekrutacyjna",
-    "💾 Zapisane i Aplikowane":    "Zapisane i wysłane",
-    "⭐ Ocenione Oferty":          "Ocenione",
-    "🌟 Oferty Aspirujące":        "Aspiracyjne",
-    "🗑 Odrzucone Oferty":         "Odrzucone",
-    "🎛 Panel Sterowania":         "Panel sterowania",
-}
 
 
 # =============================================================================

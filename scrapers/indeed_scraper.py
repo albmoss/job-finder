@@ -204,8 +204,14 @@ class IndeedScraper:
 
         return descriptions
 
-    def _scrape_keyword(self, browser, keyword: str) -> List[Job]:
-        """Jedno słowo kluczowe = jeden świeży kontekst = jedna nawigacja."""
+    def _scrape_keyword(self, browser, keyword: str) -> tuple:
+        """
+        Jedno słowo kluczowe = jeden świeży kontekst = jedna nawigacja.
+
+        Zwraca (oferty, czy_zablokowano). Sama pusta lista nie wystarczy:
+        wołający musi odróżnić "nic nie znaleziono" od "portal nas odciął",
+        bo w drugim przypadku nie ma po co próbować dalej.
+        """
         context = browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent=self.user_agent,
@@ -229,7 +235,7 @@ class IndeedScraper:
                     f"Indeed [{keyword}]: blocked (HTTP {status}, title: {title[:50]}) - "
                     f"skipping. Raise pause_between_keywords if this repeats every run."
                 )
-                return []
+                return [], True
 
             cards = self._extract_cards(page.content())
             if not cards:
@@ -237,7 +243,7 @@ class IndeedScraper:
                     f"Indeed [{keyword}]: page loaded but zero offers in the mosaic JSON - "
                     f"Indeed may have changed its listing structure"
                 )
-                return []
+                return [], False
 
             cards = cards[: self.max_offers_per_keyword]
             descriptions = (
@@ -254,11 +260,11 @@ class IndeedScraper:
                 f"Indeed [{keyword}]: {len(jobs)} offers, "
                 f"{len(descriptions)}/{len(cards)} with a full description"
             )
-            return jobs
+            return jobs, False
 
         except Exception as e:
             logger.error(f"Indeed [{keyword}]: {type(e).__name__}: {e}")
-            return []
+            return [], False
         finally:
             context.close()
 
@@ -285,10 +291,23 @@ class IndeedScraper:
                         logger.info(f"Indeed: przerwa {pause:.0f}s przed '{keyword}'")
                         time.sleep(pause)
 
-                    for job in self._scrape_keyword(browser, keyword):
+                    jobs, blocked = self._scrape_keyword(browser, keyword)
+
+                    for job in jobs:
                         if job.link not in seen:
                             seen.add(job.link)
                             all_jobs.append(job)
+
+                    # Blokada jest na poziomie adresu IP, nie zapytania: kolejne
+                    # słowa kluczowe dostaną 403 tak samo, a każde kosztuje minutę
+                    # przerwy i osobny kontekst przeglądarki. W przebiegach z 21
+                    # i 23 sierpnia były to trzy porażki z rzędu i 115 s na nic.
+                    if blocked:
+                        logger.warning(
+                            f"Indeed: blocked on '{keyword}' - skipping the remaining "
+                            f"{len(self.keywords) - i - 1} keywords, the block is IP-wide"
+                        )
+                        break
             finally:
                 browser.close()
 

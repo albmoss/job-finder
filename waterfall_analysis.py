@@ -6,14 +6,13 @@ import json
 import time
 import os
 import sys
-import typing
 from datetime import datetime
 from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import GEMINI_API_KEYS, GEMINI_MODEL
+from config import GEMINI_API_KEYS
 from utils.links import canonical_link
 from utils.safe_io import save_json_atomic
 from utils.console import force_utf8
@@ -29,6 +28,38 @@ class JobEval(BaseModel):
     industry: str
 
 BATCH_SIZE = 75
+
+# Darmowy plan Gemini liczy zapytania na minutę, więc liczy się odstęp MIĘDZY
+# zapytaniami, a nie sen przed każdym. Batch sam w sobie trwa 15-40 s (patrz
+# tabela modeli niżej), więc limit zwykle mija sam i nie ma na co czekać.
+MIN_REQUEST_INTERVAL = 5    # sekundy od poprzedniego zapytania
+RETRY_INTERVAL = 15         # dłuższy odstęp po nieudanej próbie
+
+# Ile razy z rzędu wolno oberwać odmową od KAŻDEGO modelu na KAŻDYM kluczu,
+# zanim etap się podda. Bez tego limitu analiza spała 5 minut i próbowała od
+# nowa w nieskończoność - a etap, który śpi w kółko, wygląda jak pracujący.
+MAX_STALLS = 3
+STALL_COOLDOWN = 300        # sekundy przerwy między rundami
+
+_last_request_at = 0.0
+_clients = {}
+
+
+def _wait_for_slot(interval: float):
+    """Odczekaj tyle, ile brakuje do `interval` od poprzedniego zapytania."""
+    global _last_request_at
+    remaining = interval - (time.monotonic() - _last_request_at)
+    if remaining > 0:
+        time.sleep(remaining)
+    _last_request_at = time.monotonic()
+
+
+def _client_for(api_key: str):
+    """Klient genai per klucz. Tworzenie go od nowa przy każdej próbie zawiązuje
+    nowe połączenie HTTP, a kluczy jest kilka i wracają w rotacji."""
+    if api_key not in _clients:
+        _clients[api_key] = genai.Client(api_key=api_key)
+    return _clients[api_key]
 
 # Kolejność ustalona empirycznie (benchmark_models.py na 53 ofertach ocenionych
 # ręcznie, 3 przebiegi). Korelacja Spearmana z ocenami użytkownika / czas na batch:
@@ -294,20 +325,17 @@ MIN_MEANINGFUL_DESC = 150  # poniżej tego opis nie niesie realnej informacji
 
 
 def create_prompt(cv_text, jobs_batch, active_learning_context=""):
-    jobs_text = ""
-    thin_count = 0
+    entries = []
     for i, job in enumerate(jobs_batch):
         desc = (job.get("description") or "")[:4000]
         # Oznacz oferty bez realnego opisu. Bez tego model oceniał je po samym
         # tytule i wystawiał 95%+ ofertom, o których nie wiedział nic.
         if len(desc.strip()) < MIN_MEANINGFUL_DESC:
-            thin_count += 1
-            jobs_text += (
-                f"ID: {i}\nTitle: {job['title']}\nCompany: {job['company']}\n"
-                f"Desc: [BRAK PEŁNEGO OPISU - dostępny tylko tytuł]\n\n"
-            )
-        else:
-            jobs_text += f"ID: {i}\nTitle: {job['title']}\nCompany: {job['company']}\nDesc: {desc}\n\n"
+            desc = "[BRAK PEŁNEGO OPISU - dostępny tylko tytuł]"
+        entries.append(
+            f"ID: {i}\nTitle: {job['title']}\nCompany: {job['company']}\nDesc: {desc}\n"
+        )
+    jobs_text = "\n".join(entries)
 
     prompt = f"""Jesteś wszechstronnym Doradcą Kariery (nie tylko IT). Twoim celem jest PRECYZYJNE ocenienie dopasowania ofert pracy do kandydata na podstawie jego CV i profilu preferencji.
 
@@ -387,13 +415,158 @@ UWAGA:
 
 
 
+# --- jedno zapytanie i cała rotacja wokół niego -----------------------------
+
+class ToxicBatch(Exception):
+    """Model nie umiał zwrócić poprawnego JSON-a - batch jest za duży, trzeba go podzielić."""
+
+
+class NoCapacity(Exception):
+    """Odmówiła każda para model+klucz - limity są wyczerpane."""
+
+
+def _rotation(model_idx: int, key_idx: int):
+    """
+    Pary (model, klucz) w kolejności prób, zaczynając od tej, która ostatnio działała.
+
+    Najpierw wszystkie klucze dla bieżącego modelu, dopiero potem model niżej
+    w kaskadzie: zmiana klucza nic nie kosztuje, a zejście na słabszy model
+    kosztuje jakość oceny (patrz tabela korelacji przy MODELS).
+    """
+    keys = list(range(key_idx, len(API_KEYS))) + list(range(key_idx))
+    for m in list(range(model_idx, len(MODELS))) + list(range(model_idx)):
+        for k in keys:
+            yield m, k
+        # Po zejściu na kolejny model pula kluczy startuje od początku
+        keys = list(range(len(API_KEYS)))
+
+
+def _classify(err: str) -> str:
+    """Czy z tego błędu wychodzi się zmianą klucza, czy podziałem batcha?"""
+    if "429" in err or "403" in err or "ResourceExhausted" in err:
+        return "rate_limit"
+    if "Expecting" in err or "Unterminated" in err or "JSON Validate Err" in err:
+        return "truncated"
+    return "other"
+
+
+def _ask_model(model_name: str, api_key: str, prompt: str, attempt: int) -> list:
+    """Jedno zapytanie do modelu. Błędów nie tłumaczy - od tego jest _classify."""
+    # Po nieudanej próbie odczekaj dłużej; poza tym pilnuj tylko minimalnego
+    # odstępu MIĘDZY zapytaniami. Batch sam trwa 15-40 s, więc limit z darmowego
+    # planu zwykle mija w jego trakcie i nie ma na co czekać osobno.
+    _wait_for_slot(RETRY_INTERVAL if attempt > 1 else MIN_REQUEST_INTERVAL)
+
+    response = _client_for(api_key).models.generate_content(
+        model=model_name,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=list[JobEval],
+            max_output_tokens=65535,
+            temperature=0.3,
+        ),
+    )
+    return json.loads(response.text)
+
+
+def _entries_from(parsed, batch, model_name, profile_ver):
+    """Odpowiedź modelu -> wpisy wynikowe. Zwraca (wpisy, zbiór ocenionych ID)."""
+    entries, seen_ids = [], set()
+    for item in parsed:
+        idx = item.get("id")
+        if idx is None or not (0 <= idx < len(batch)) or idx in seen_ids:
+            continue
+        seen_ids.add(idx)
+        job = batch[idx]
+        entries.append({
+            "job": job,
+            "match_percentage": item.get("match_percentage", 0),
+            "reason": item.get("reason", "N/A"),
+            "is_entry_level": item.get("is_entry_level", True),
+            "missing_skills": item.get("missing_skills", []),
+            "learnable_in_month": item.get("learnable_in_month", True),
+            "industry": item.get("industry", "Other"),
+            # Stemple: pozwalają później wykryć, że wynik jest nieaktualny,
+            # i przeliczyć TYLKO te oferty
+            "_description_hash": description_fingerprint(job),
+            "_profile_version": profile_ver,
+            "_model": model_name,
+            "_analyzed_at": datetime.now().isoformat(),
+        })
+    return entries, seen_ids
+
+
+def score_batch(batch, prompt, model_idx, key_idx, profile_ver):
+    """
+    Oceń batch, schodząc po kaskadzie modeli i rotując klucze.
+
+    Zwraca (wpisy, oferty pominięte przez model, model_idx, key_idx) - dwa
+    ostatnie to para, która zadziałała, żeby następny batch zaczął od niej.
+    Podnosi ToxicBatch (odpowiedź nie jest poprawnym JSON-em - batch do podziału)
+    albo NoCapacity (odmówiła każda para model+klucz).
+    """
+    last_model = None
+
+    for m_idx, k_idx in _rotation(model_idx, key_idx):
+        if last_model is not None and m_idx != last_model:
+            print(f"   Exhausted all keys for {MODELS[last_model]} "
+                  f"- downgrading to {MODELS[m_idx]}...")
+        last_model = m_idx
+
+        model_name, api_key = MODELS[m_idx], API_KEYS[k_idx]
+        masked = api_key[:4] + "..." + api_key[-4:]
+
+        for attempt in (1, 2):
+            print(f"   Model: {model_name} | Key[{k_idx}] {masked} | Try: {attempt}")
+            try:
+                parsed = _ask_model(model_name, api_key, prompt, attempt)
+            except json.JSONDecodeError as e:
+                raise ToxicBatch(str(e)[:80])
+            except Exception as e:
+                kind = _classify(str(e))
+                if kind == "truncated":
+                    raise ToxicBatch(str(e)[:80])
+                if kind == "rate_limit":
+                    print(f"      API Error: {str(e)[:100]}...")
+                    if attempt == 1:
+                        print("      Rate limit hit. Sleeping 70s before the final try on this key...")
+                        time.sleep(70)
+                        continue
+                    print("      Key exhausted. Moving to the next one...")
+                    break
+                print(f"      General Error: {str(e)[:100]}...")
+                continue
+
+            entries, seen_ids = _entries_from(parsed, batch, model_name, profile_ver)
+            if not entries:
+                print("      JSON parsed, but zero matching IDs found. Retrying...")
+                continue
+
+            print(f"      Success! Processed {len(seen_ids)} out of {len(batch)} requested jobs.")
+            missed = [job for i, job in enumerate(batch) if i not in seen_ids]
+            if missed:
+                print(f"      LLM laziness: {len(missed)} jobs skipped. Re-queuing them...")
+            return entries, missed, m_idx, k_idx
+
+    raise NoCapacity()
+
+
 def main():
     print("Starting WATERFALL Analysis (RESUME MODE)...")
-    
+
+    # Bez klucza nie ma czego rotować. Wcześniej pusta pula oznaczała, że pętla
+    # po kluczach nie wykonywała się ani razu, każdy batch kończył się "porażką
+    # na wszystkich modelach", a etap spał po 5 minut i próbował w nieskończoność.
+    if not API_KEYS:
+        print("ERROR: no Gemini API key configured "
+              "- set GEMINI_API_KEY_PRIMARY in .env (see .env.example).")
+        return
+
     cv_text = load_cv()
     all_jobs = load_jobs()
-    print(f"Loaded {len(all_jobs)} valid jobs form DB.")
-    
+    print(f"Loaded {len(all_jobs)} valid jobs from DB.")
+
     # Wznawianie przerwanego przebiegu
     existing_results = load_existing_results()
     print(f"Loaded {len(existing_results)} existing matched jobs.")
@@ -422,177 +595,99 @@ def main():
             if canonical_link((item.get('job') or {}).get('link', '')) not in stale_links
         ]
 
-    processed_links = {link for link in existing_by_link if link not in stale_links}
+    # Do przeliczenia zostaje to, czego nie ma wśród aktualnych wyników i czego
+    # użytkownik nie ocenił ręcznie - te drugie i tak nie potrzebują oceny modelu.
+    done = {link for link in existing_by_link if link not in stale_links}
+    decided = {canonical_link(k) for k in load_user_decisions()}
 
-    # Co zostało do przeliczenia
-    remaining_jobs = [j for j in all_jobs if canonical_link(j['link']) not in processed_links]
+    remaining_jobs, skipped = [], 0
+    for job in all_jobs:
+        link = canonical_link(job['link'])
+        if link in done:
+            continue
+        if link in decided:
+            skipped += 1
+            continue
+        remaining_jobs.append(job)
 
-    # Pomijamy też oferty ocenione ręcznie - nie ma po co ich przeliczać
-    user_decisions = load_user_decisions()
-    decided_links = {canonical_link(k) for k in user_decisions.keys()}
-    before_filter = len(remaining_jobs)
-    remaining_jobs = [j for j in remaining_jobs if canonical_link(j['link']) not in decided_links]
-    skipped = before_filter - len(remaining_jobs)
-    if skipped > 0:
-        print(f"⏭ Skipped {skipped} already-decided jobs (rejected/saved/aspirational).")
+    if skipped:
+        print(f"Skipped {skipped} already-decided jobs (rejected/saved/aspirational).")
     print(f"Remaining jobs to process: {len(remaining_jobs)}")
-    
+
     if not remaining_jobs:
         print("Nothing left to do! All jobs analyzed.")
         return
 
     current_key_val, current_model_idx = load_api_state()
+    # Stan z poprzedniego przebiegu może wskazywać klucz, którego już nie ma
+    # w .env - wtedy rotacja startowałaby poza zakresem listy.
+    current_model_idx = min(max(current_model_idx, 0), len(MODELS) - 1)
+    current_key_val = min(max(current_key_val, 0), len(API_KEYS) - 1)
     print(f"Loaded API State: Model[{current_model_idx}] Key[{current_key_val}]")
-    
+
     results = existing_results
-    
-    # Kolejka dynamiczna
     job_queue = remaining_jobs[:]
-    b_idx = 0
     current_batch_size = BATCH_SIZE
+    b_idx = 0
+    stalls = 0
+
     print(f"Processing {len(job_queue)} jobs (Target Batch Size: {BATCH_SIZE}).")
     al_context = build_active_learning_context(all_jobs)
-    
+
     while job_queue:
         batch = job_queue[:current_batch_size]
         b_idx += 1
-        print(f"\nBatch {b_idx} (Processing {len(batch)} jobs, {len(job_queue)} remaining in queue)...")
-        batch_success = False
-        fatal_json_error = False
-        
-        available_models = MODELS[current_model_idx:] + MODELS[:current_model_idx]
-        
-        for model_name in available_models:
-            if batch_success or fatal_json_error: break
-            
-            available_keys_idx = list(range(current_key_val, len(API_KEYS))) + list(range(0, current_key_val))
-            
-            for key_idx in available_keys_idx:
-                if batch_success or fatal_json_error: break
-                
-                api_key = API_KEYS[key_idx]
-                client = genai.Client(api_key=api_key)
-                masked_key = api_key[:4] + "..." + api_key[-4:]
-                
-                for attempt in range(1, 3): 
-                    try:
-                        print(f"   Model: {model_name} | Key[{key_idx}] {masked_key} | Try: {attempt}")
-                        
-                        if attempt > 1: time.sleep(15) 
-                        else: time.sleep(5)
+        print(f"\nBatch {b_idx} (Processing {len(batch)} jobs, "
+              f"{len(job_queue)} remaining in queue)...")
 
-                        prompt = create_prompt(cv_text, batch, al_context)
-                        
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                response_schema=list[JobEval],
-                                max_output_tokens=65535,
-                                temperature=0.3
-                            )
-                        )
-                        
-                        parsed = json.loads(response.text)
-                        
-                        if parsed:
-                            processed_ids = set()
-                            for item in parsed:
-                                job_idx_local = item.get('id')
-                                if job_idx_local is not None and 0 <= job_idx_local < len(batch):
-                                    processed_ids.add(job_idx_local)
-                                    original_job = batch[job_idx_local]
-                                    result_entry = {
-                                        "job": original_job,
-                                        "match_percentage": item.get('match_percentage', 0),
-                                        "reason": item.get('reason', 'N/A'),
-                                        "is_entry_level": item.get('is_entry_level', True),
-                                        "missing_skills": item.get('missing_skills', []),
-                                        "learnable_in_month": item.get('learnable_in_month', True),
-                                        "industry": item.get('industry', 'Other'),
-                                        # Stemple: pozwalają później wykryć, że wynik jest
-                                        # nieaktualny i przeliczyć TYLKO te oferty
-                                        "_description_hash": description_fingerprint(original_job),
-                                        "_profile_version": current_profile_version,
-                                        "_model": model_name,
-                                        "_analyzed_at": datetime.now().isoformat(),
-                                    }
-                                    results.append(result_entry)
-                                    
-                            if not processed_ids:
-                                print("      JSON parsed, but zero matching IDs found. Retrying...")
-                                if attempt == 2: raise ValueError("No valid IDs")
-                                continue 
-                                
-                            print(f"      Success! Processed {len(processed_ids)} out of {len(batch)} requested jobs.")
-                            
-                            unprocessed = [job for i, job in enumerate(batch) if i not in processed_ids]
-                            job_queue = unprocessed + job_queue[len(batch):]
-                            
-                            if len(unprocessed) > 0:
-                                print(f"      LLM Laziness detected: {len(unprocessed)} jobs skipped. Re-queuing them...")
-                                
-                            batch_success = True
-                            save_results(results) 
-                            
-                            current_model_idx = MODELS.index(model_name)
-                            current_key_val = key_idx
-                            print(f"      Locked into Model '{model_name}' on Key {key_idx}.")
-                            save_api_state(current_key_val, current_model_idx)
-                            break
-                        else:
-                            print("      Invalid JSON received.")
-                            if attempt == 2: raise ValueError("JSON parsing failed repeatedly")
-                            
-                    except json.JSONDecodeError as e:
-                        print(f"      JSON Syntax Error (Toxic Batch). Failing fast to resize: {e}")
-                        fatal_json_error = True
-                        break
-                    except Exception as e:
-                        err = str(e)
-                        if "429" in err or "403" in err or "ResourceExhausted" in err:
-                            print(f"      API Error: {err[:100]}...")
-                            if attempt < 2:
-                                print("      ⏳ Rate Limit Hit. Sleeping 70s before final try on this key...")
-                                time.sleep(70)
-                            else:
-                                print("      Key exhaustion. Moving to next key...")
-                        elif "Expecting" in err or "Unterminated" in err or "JSON Validate Err" in err:
-                            print(f"      JSON Truncation Error (Toxic Batch). Failing fast to resize: {err[:80]}...")
-                            fatal_json_error = True
-                            break
-                        else:
-                            print(f"      General Error: {err[:100]}...")
-                            pass
-                            
-            if batch_success or fatal_json_error: break
-            if not batch_success and not fatal_json_error:
-                 next_model_idx = (MODELS.index(model_name) + 1) % len(MODELS)
-                 print(f"   Exhausted ALL keys for model {model_name}. Downgrading to {MODELS[next_model_idx]}...")
-                 current_model_idx = next_model_idx
-                 current_key_val = 0 
-                 save_api_state(current_key_val, current_model_idx)
-                  
-        if batch_success:
-             current_batch_size = BATCH_SIZE 
-        else:
-             if fatal_json_error:
-                  if current_batch_size > 5:
-                       new_size = current_batch_size // 2
-                       print(f"Halving batch size from {current_batch_size} to {new_size} due to JSON truncation.")
-                       current_batch_size = new_size
-                  else:
-                       print("Micro-batch is fundamentally broken. Discarding 1 job to save pipeline.")
-                       job_queue = job_queue[1:]
-                       current_batch_size = BATCH_SIZE
-             else:
-                  print("CRITICAL: Failed to process batch even after trying ALL keys on ALL models.")
-                  print("   Waiting 5 minutes before retrying (rate limits may reset)...")
-                  time.sleep(300)
-                  current_model_idx = 0
-                  current_key_val = 0
-                  save_api_state(current_key_val, current_model_idx)
+        # Prompt zależy wyłącznie od batcha, więc powstaje raz - a nie przy każdej
+        # próbie. Przy 75 ofertach to ~300 kB tekstu, który poprzednia wersja
+        # składała od nowa dla każdego modelu i każdego klucza w rotacji.
+        prompt = create_prompt(cv_text, batch, al_context)
+
+        try:
+            entries, missed, current_model_idx, current_key_val = score_batch(
+                batch, prompt, current_model_idx, current_key_val, current_profile_version
+            )
+        except ToxicBatch as e:
+            print(f"   Toxic batch - the model cannot return valid JSON for it: {e}")
+            if current_batch_size > 5:
+                current_batch_size //= 2
+                print(f"   Halving the batch size to {current_batch_size}.")
+            else:
+                print("   Micro-batch is fundamentally broken. Dropping 1 job to save the run.")
+                job_queue = job_queue[1:]
+                current_batch_size = BATCH_SIZE
+            continue
+        except NoCapacity:
+            # Limity bywają chwilowe, więc runda pauzy jest w porządku - ale nie
+            # w nieskończoność. Etap, który śpi w kółko, wygląda jak pracujący
+            # i potrafi zawiesić cały pipeline na całą noc.
+            stalls += 1
+            if stalls >= MAX_STALLS:
+                raise RuntimeError(
+                    f"Every model on every key refused {MAX_STALLS} rounds in a row "
+                    f"- aborting the analysis instead of looping forever."
+                )
+            print("CRITICAL: failed to process the batch on ALL keys and ALL models.")
+            print(f"   Waiting {STALL_COOLDOWN // 60} min for the rate limits to reset "
+                  f"(round {stalls}/{MAX_STALLS})...")
+            time.sleep(STALL_COOLDOWN)
+            current_model_idx, current_key_val = 0, 0
+            save_api_state(current_key_val, current_model_idx)
+            continue
+
+        stalls = 0
+        results.extend(entries)
+        # Oferty pominięte przez model wracają na początek kolejki. Każdy udany
+        # batch ocenia co najmniej jedną ofertę, więc kolejka zawsze się kurczy.
+        job_queue = missed + job_queue[len(batch):]
+        current_batch_size = BATCH_SIZE
+
+        save_results(results)
+        save_api_state(current_key_val, current_model_idx)
+        print(f"      Locked into Model '{MODELS[current_model_idx]}' "
+              f"on Key {current_key_val}.")
 
     print(f"\nDONE. Queue empty! Processed {b_idx} batches total.")
 

@@ -22,6 +22,7 @@ import requests
 
 from scrapers.base_scraper import BaseScraper
 from utils.data_models import Job
+from utils.links import canonical_link
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +45,19 @@ class CandidateAPIScraper(BaseScraper):
 
     # Ile ofert maksymalnie dociągać ze szczegółami (opis) - najdroższa część.
     # RocketJobs zwraca ~960 ofert; przy limicie 600 aż 360 zostawało bez opisu,
-    # a że append_jobs nie aktualizuje istniejących rekordów, zostawały takie na stałe.
+    # a że record_scrape nie aktualizuje istniejących rekordów, zostawały takie na stałe.
     # 1200 z zapasem pokrywa oba portale; przy 4 wątkach to ~1-2 minuty.
     MAX_DETAIL_FETCH = 1200
     DETAIL_WORKERS = 3
 
     def __init__(self, config: dict):
         super().__init__(config)
+        portal_cfg = config.get(self.CONFIG_KEY, {}) or {}
+        # Oferty już obecne w bazie pomijamy w całości: `record_scrape` i tak nie
+        # nadpisuje istniejącego rekordu, więc pobranie ich opisu było czystym
+        # kosztem. Przy RocketJobs to ~1000 zapytań na przebieg (11 minut).
+        self.skip_known_details = portal_cfg.get("skip_known_details", True)
+        self.seen_again_links = []
         self._rate_lock = threading.Lock()
         self._cooldown_until = 0.0
         self._detail_failures = 0
@@ -247,7 +254,7 @@ class CandidateAPIScraper(BaseScraper):
         return Job(
             title=title,
             company=company,
-            link=self.build_link(slug),
+            link=canonical_link(self.build_link(slug)),
             description="\n\n".join(parts),
             source=self.SOURCE_NAME,
             location=offer.get("city", self.config.get("location", "Warszawa")),
@@ -274,6 +281,25 @@ class CandidateAPIScraper(BaseScraper):
             offers = [o for o in offers if self._matches_location(o, target_city)]
             if before != len(offers):
                 logger.info(f"{self.SOURCE_NAME}: filtered out {before - len(offers)} offers outside {target_city}")
+
+            if self.skip_known_details:
+                from utils.known_links import known_links
+
+                known = known_links()
+                fresh = []
+                for offer in offers:
+                    link = canonical_link(self.build_link(offer.get("slug", "")))
+                    if link in known:
+                        self.seen_again_links.append(link)
+                    else:
+                        fresh.append(offer)
+                logger.info(
+                    f"{self.SOURCE_NAME}: {len(fresh)} new offers, "
+                    f"{len(self.seen_again_links)} already in the database (skipped)"
+                )
+                offers = fresh
+                if not offers:
+                    return []
 
             # Szczegóły równolegle, ale delikatnie - to najwolniejsza faza.
             to_detail = [o for o in offers if o.get("slug")][: self.MAX_DETAIL_FETCH]

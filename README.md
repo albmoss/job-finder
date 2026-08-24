@@ -25,6 +25,16 @@ streamlit_app.py              the interface — browsing, filtering and rating o
 
 `python run_final_pipeline.py` runs the whole thing end to end.
 
+Three more scripts sit outside the pipeline and are run by hand:
+
+```
+benchmark_models.py           measures how closely each model agrees with my own ratings
+compare_before_after.py       the only way to tell whether a prompt change helped: the
+                              pipeline skips offers I have rated, so the stored scores for
+                              the test set never refresh
+enrich_olx_descriptions.py    fetches the real text for OLX offers left with a placeholder
+```
+
 The interface is a single screen: offers on the right, details and decision buttons on the
 left. Rating an offer moves it between tabs — saved, applied, aspirational, rejected.
 
@@ -75,6 +85,16 @@ streamlit_app.py              interfejs — przeglądanie, filtrowanie i ocenian
 ```
 
 `python run_final_pipeline.py` przechodzi całość od początku do końca.
+
+Trzy skrypty stoją poza pipelinem i uruchamia się je ręcznie:
+
+```
+benchmark_models.py           mierzy, jak bardzo każdy model zgadza się z moimi ocenami
+compare_before_after.py       jedyny sposób, żeby stwierdzić, czy zmiana promptu pomogła:
+                              pipeline pomija oferty, które oceniłem, więc zapisane wyniki
+                              dla zbioru testowego nigdy się nie odświeżają
+enrich_olx_descriptions.py    dociąga prawdziwą treść ofert OLX, które zostały z zaślepką
+```
 
 Interfejs to jeden ekran: po prawej oferty, po lewej szczegóły i przyciski decyzji. Ocena
 oferty przenosi ją między zakładkami — zapisane, wysłane, aspiracyjne, odrzucone.

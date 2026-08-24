@@ -43,12 +43,29 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# Nazwa źródła -> jego sekcja w SCRAPER_CONFIG. Potrzebne tylko po to, żeby
+# dało się wyłączyć źródło konfiguracją ("enabled": false), bez komentowania
+# linijek w kodzie.
+SOURCE_CONFIG_KEYS = {
+    "Indeed": "indeed",
+    "OLX Praca": "olx_praca",
+    "LinkedIn": "linkedin",
+    "Pracuj.pl": "pracuj_pl",
+    "RocketJobs": "rocketjobs",
+    "JustJoinIT": "justjoinit",
+    "NoFluffJobs": "nofluffjobs",
+    "SOLID.Jobs": "solid_jobs",
+    "praca.pl": "praca_pl",
+    "aplikuj.pl": "aplikuj",
+    "GoWork.pl": "gowork",
+}
+
 
 def refresh_sources(source_names):
     """
     Usuń istniejące oferty wskazanych źródeł, żeby scraper zapisał je od nowa.
 
-    Potrzebne, bo JobDatabase.append_jobs deduplikuje po linku i NIGDY nie aktualizuje
+    Potrzebne, bo JobDatabase.record_scrape deduplikuje po linku i NIGDY nie aktualizuje
     istniejącego rekordu. Po poprawce scrapera (np. lepsze wydobywanie opisu) samo
     ponowne uruchomienie nic by nie dało - stare, ubogie rekordy zostałyby na stałe.
 
@@ -156,8 +173,27 @@ def run_all_scrapers(only=None, force=False, refresh=False):
         LinkedInScraper(scraper_config),
         # Indeed sam robi sobie długie przerwy między słowami kluczowymi
         # (zabezpieczenia portalu), więc jest najwolniejszym źródłem w przebiegu.
+        # Domyślnie wyłączony - patrz "enabled" w SCRAPER_CONFIG["indeed"].
         IndeedScraper(scraper_config),
     ]
+
+    # Źródła wyłączone w konfiguracji. Scraper zostaje w kodzie razem z całym
+    # rozpoznaniem portalu, ale nie startuje - `--only` nadal go uruchomi,
+    # więc sprawdzenie, czy portal znowu przepuszcza, to jedno polecenie.
+    disabled = {
+        name for name, key in SOURCE_CONFIG_KEYS.items()
+        if scraper_config.get(key, {}).get("enabled", True) is False
+    }
+    if disabled and not only:
+        skipped = [s for s in api_scrapers + browser_scrapers
+                   if s.get_source_name() in disabled]
+        if skipped:
+            api_scrapers = [s for s in api_scrapers if s.get_source_name() not in disabled]
+            browser_scrapers = [s for s in browser_scrapers if s.get_source_name() not in disabled]
+            logger.info(
+                f"Disabled in the config, not running: "
+                f"{', '.join(s.get_source_name() for s in skipped)}"
+            )
 
     if only:
         patterns = [p.lower() for p in only]
@@ -235,98 +271,54 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 'status': 'failed'
             }
 
-    # === Etap 1: scrapery API równolegle - nie kolidują, brak przeglądarki ===
-    logger.info(f"\nPhase 1: Running {len(api_scrapers)} API/HTTP scrapers in parallel...")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_scraper = {executor.submit(_scrape_source, s): s for s in api_scrapers}
-        
-        for future in concurrent.futures.as_completed(future_to_scraper):
-            scraper = future_to_scraper[future]
-            try:
-                result = future.result()
-            except Exception as e:
-                source_name = scraper.get_source_name()
-                logger.error(f"✗ {source_name}: Thread crashed - {e}")
-                scraper_results[source_name] = {
-                    'success': False,
-                    'error': str(e),
-                    'status': 'crashed'
-                }
-                continue
-            
-            source = result['source']
-            
-            if result['success']:
+    def _collect(scrapers, max_workers, label):
+        """Uruchom grupę scraperów równolegle i zapisuj wyniki na bieżąco."""
+        logger.info(f"{label}: running {len(scrapers)} scrapers (max {max_workers} parallel)...")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_scrape_source, s): s for s in scrapers}
+
+            for future in concurrent.futures.as_completed(futures):
+                scraper = futures[future]
+                source = scraper.get_source_name()
+
+                try:
+                    result = future.result()
+                except Exception as e:
+                    logger.error(f"✗ {source}: Thread crashed - {e}")
+                    scraper_results[source] = {'success': False, 'error': str(e), 'status': 'crashed'}
+                    continue
+
+                if not result['success']:
+                    scraper_results[source] = {
+                        'success': False,
+                        'error': result.get('error', 'Unknown'),
+                        'status': 'failed',
+                    }
+                    continue
+
                 new_jobs = result['jobs']
                 all_jobs.extend(new_jobs)
-                
                 scraper_results[source] = {
                     'success': True,
                     'jobs_count': len(new_jobs),
-                    'status': result['status']
-                }
-                
-                # Zapis przyrostowy
-                if new_jobs:
-                    saved = db.append_jobs(new_jobs)
-                    logger.info(f"{source}: Saved {saved} new jobs to DB.")
-
-                # Oferty, których szczegółów nie pobierano (są już w bazie) też
-                # trzeba odnotować - inaczej sygnał "wisi od X dni" nigdy nie ruszy.
-                seen_again = getattr(scraper, "seen_again_links", None)
-                if seen_again:
-                    touched = db.touch_seen(seen_again)
-                    logger.info(f"{source}: {touched} offers still listed")
-            else:
-                 scraper_results[source] = {
-                    'success': False,
-                    'error': result.get('error', 'Unknown'),
-                    'status': 'failed'
+                    'status': result['status'],
                 }
 
-    # === Phase 2: Run browser scrapers (limited parallelism to avoid Playwright conflicts) ===
-    logger.info(f"\nPhase 2: Running {len(browser_scrapers)} browser scrapers (max 2 parallel)...")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        future_to_scraper = {executor.submit(_scrape_source, s): s for s in browser_scrapers}
-        
-        for future in concurrent.futures.as_completed(future_to_scraper):
-            scraper = future_to_scraper[future]
-            try:
-                result = future.result()
-            except Exception as e:
-                source_name = scraper.get_source_name()
-                logger.error(f"✗ {source_name}: Thread crashed - {e}")
-                scraper_results[source_name] = {
-                    'success': False,
-                    'error': str(e),
-                    'status': 'crashed'
-                }
-                continue
-            
-            source = result['source']
-            
-            if result['success']:
-                new_jobs = result['jobs']
-                all_jobs.extend(new_jobs)
-                
-                scraper_results[source] = {
-                    'success': True,
-                    'jobs_count': len(new_jobs),
-                    'status': result['status']
-                }
-                
-                if new_jobs:
-                    saved = db.append_jobs(new_jobs)
-                    logger.info(f"{source}: Saved {saved} new jobs to DB.")
-            else:
-                 scraper_results[source] = {
-                    'success': False,
-                    'error': result.get('error', 'Unknown'),
-                    'status': 'failed'
-                }
-    
+                # Zapis przyrostowy - przerwany przebieg nie traci tego, co zebrał.
+                # Nowe oferty i te, których szczegółów nie pobierano (bo już je
+                # mamy), idą jednym zapisem: bez odnotowania tych drugich sygnał
+                # "wisi od X dni" nigdy by nie ruszył.
+                seen_again = getattr(scraper, "seen_again_links", None) or ()
+                if new_jobs or seen_again:
+                    added, touched = db.record_scrape(new_jobs, seen_again)
+                    logger.info(f"{source}: saved {added} new offers, "
+                                f"{touched} still listed")
+
+    _collect(api_scrapers, 5, "Phase 1 (API/HTTP)")
+    # Playwright nie znosi wielu instancji naraz - stąd ostrzejszy limit
+    _collect(browser_scrapers, 2, "Phase 2 (browser)")
+
     print("\n" + "="*60)
     print("SCRAPING SUMMARY")
     print("="*60)

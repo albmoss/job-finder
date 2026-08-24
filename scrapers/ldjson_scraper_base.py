@@ -67,7 +67,16 @@ class LdJsonPortalScraper:
     # Domyślne ograniczniki - podklasa może nadpisać, config użytkownika ma pierwszeństwo
     DEFAULT_MAX_PAGES = 15
     DEFAULT_MAX_OFFERS = 400
-    MIN_REQUEST_INTERVAL = 0.6  # sekundy między żądaniami, globalnie
+
+    # Odstęp między żądaniami jest ADAPTACYJNY. Zmierzone na przebiegu z 23.08:
+    # praca.pl i aplikuj.pl wypuściły ponad 2600 żądań przy 0.6 s i nie oddały
+    # ani jednego HTTP 429 - stały odstęp dobrany "na oko" pod najostrzejszy
+    # portal kosztował tam ~20 minut na nic. Startujemy więc od MIN_REQUEST_INTERVAL,
+    # po serii czystych odpowiedzi schodzimy w stronę FLOOR_REQUEST_INTERVAL, a
+    # pierwszy 429 wraca do wartości startowej (i dalej w górę, jeśli się powtarza).
+    MIN_REQUEST_INTERVAL = 0.6      # punkt startu, nie sztywny limit
+    FLOOR_REQUEST_INTERVAL = 0.2    # dolna granica przyspieszania
+    SPEEDUP_AFTER = 25              # tyle czystych odpowiedzi z rzędu -> skracamy odstęp
     DETAIL_THREADS = 3
 
     USER_AGENTS = [
@@ -87,7 +96,6 @@ class LdJsonPortalScraper:
         # Pomijanie stron szczegółów ofert już znanych bazie. Wyłącz tylko wtedy,
         # gdy chcesz odświeżyć opisy (wtedy i tak potrzebny jest --refresh).
         self.skip_known_details = cfg.get("skip_known_details", True)
-        self._known_cache = None
         self.seen_again_links = []
 
         self.session = requests.Session()
@@ -100,6 +108,8 @@ class LdJsonPortalScraper:
         self._rate_lock = threading.Lock()
         self._last_request_at = 0.0
         self._cooldown_until = 0.0
+        self._interval = self.MIN_REQUEST_INTERVAL
+        self._clean_streak = 0
 
     # --- interfejs do nadpisania ---------------------------------------------
 
@@ -120,14 +130,34 @@ class LdJsonPortalScraper:
     def _throttle(self):
         """Globalny odstęp między żądaniami, niezależny od liczby wątków."""
         with self._rate_lock:
+            interval = self._interval
             now = time.monotonic()
             if now < self._cooldown_until:
                 time.sleep(self._cooldown_until - now)
                 now = time.monotonic()
             delta = now - self._last_request_at
-            if delta < self.MIN_REQUEST_INTERVAL:
-                time.sleep(self.MIN_REQUEST_INTERVAL - delta)
+            if delta < interval:
+                time.sleep(interval - delta)
             self._last_request_at = time.monotonic()
+
+    def _note_ok(self):
+        """Czysta odpowiedź - po SPEEDUP_AFTER z rzędu przyspieszamy o 20%."""
+        with self._rate_lock:
+            if self._interval <= self.FLOOR_REQUEST_INTERVAL:
+                return
+            self._clean_streak += 1
+            if self._clean_streak >= self.SPEEDUP_AFTER:
+                self._clean_streak = 0
+                self._interval = max(self.FLOOR_REQUEST_INTERVAL, self._interval * 0.8)
+                logger.info(f"{self.SOURCE_NAME}: no push-back - interval down to {self._interval:.2f}s")
+
+    def _note_throttled(self, wait: float):
+        """HTTP 429 - cooldown plus powrót do wolniejszego (a potem coraz wolniejszego) tempa."""
+        with self._rate_lock:
+            self._clean_streak = 0
+            self._interval = min(3.0, max(self.MIN_REQUEST_INTERVAL, self._interval * 1.6))
+            self._cooldown_until = max(self._cooldown_until, time.monotonic() + wait)
+            logger.warning(f"{self.SOURCE_NAME}: HTTP 429 - cooldown {wait:.0f}s, interval {self._interval:.2f}s")
 
     def _fetch(self, url: str, attempts: int = 3) -> str:
         """Pobierz stronę. Respektuje Retry-After i wspólny cooldown po 429."""
@@ -142,13 +172,12 @@ class LdJsonPortalScraper:
                     except (TypeError, ValueError):
                         wait = None
                     wait = min(wait if wait is not None else 5 * (2 ** attempt), 120)
-                    logger.warning(f"{self.SOURCE_NAME}: HTTP 429 - cooldown {wait:.0f}s ({url[:70]})")
-                    with self._rate_lock:
-                        self._cooldown_until = max(self._cooldown_until, time.monotonic() + wait)
+                    self._note_throttled(wait)
                     continue
                 if resp.status_code == 404:
                     return ""  # koniec paginacji - nie ma sensu ponawiać
                 resp.raise_for_status()
+                self._note_ok()
                 return resp.text
             except requests.RequestException as e:
                 logger.warning(
@@ -330,35 +359,19 @@ class LdJsonPortalScraper:
                 return job, posting
         return None
 
-    def _known_links(self) -> set:
+    @staticmethod
+    def _slug_words(link: str) -> str:
         """
-        Linki, które są już w bazie. Ich stron szczegółów nie ma po co pobierać
-        ponownie - opis oferty się nie zmienia, a `append_jobs` i tak nie
-        nadpisuje istniejących rekordów (od tego jest --refresh).
+        Tytuł oferty zaszyty w URL-u, sprowadzony do tekstu ze spacjami.
 
-        To jest różnica między "przejrzeć cały portal" a "przejrzeć cały portal
-        raz": przy pełnym pokryciu ~90% linków z listingu to oferty już znane,
-        więc pobieranie ich to czysty koszt czasu bez żadnego zysku.
+        Wszystkie trzy portale trzymają w linku slug tytułu
+        (/oferta/123/senior-java-developer, /senior-java-developer_998.html),
+        więc jednoznaczne sygnały seniority widać PRZED pobraniem strony.
+        To nie jest kosmetyka: w przebiegu z 23.08 aplikuj.pl pobrał 2078 stron,
+        z czego 1706 poleciało do kosza dopiero po pobraniu.
         """
-        if self._known_cache is not None:
-            return self._known_cache
-
-        links = set()
-        try:
-            from config import JOBS_DATABASE_PATH
-            from utils.safe_io import load_json_safe
-            for record in load_json_safe(str(JOBS_DATABASE_PATH), default=[]):
-                link = canonical_link(record.get("link", ""))
-                if link:
-                    links.add(link)
-        except Exception as e:
-            logger.warning(
-                f"{self.SOURCE_NAME}: could not load the known links ({e}) - "
-                f"fetching details for every offer"
-            )
-
-        self._known_cache = links
-        return links
+        tail = link.rsplit("/", 1)[-1]
+        return tail.replace("-", " ").replace("_", " ").replace(",", " ")
 
     def run(self) -> List[Job]:
         logger.info(f"{self.SOURCE_NAME}: start (lokalizacja: {self.location_filter})")
@@ -369,18 +382,29 @@ class LdJsonPortalScraper:
                            f"the board may have changed its listing structure")
             return []
 
+        # Najpierw odsiew po bazie, dopiero potem po tytule: `seen_again_links`
+        # ma objąć wszystko, co nadal wisi na portalu, także oferty seniorskie -
+        # inaczej połowa bazy przestałaby dostawać aktualizacje `last_seen`.
         if self.skip_known_details:
-            known = self._known_links()
-            fresh = [l for l in links if l not in known]
-            # Zapamiętane do odnotowania przez main_scraper (last_seen/times_seen)
-            self.seen_again_links = [l for l in links if l in known]
+            from utils.known_links import split_known
+
+            links, self.seen_again_links = split_known(links)
             logger.info(
-                f"{self.SOURCE_NAME}: {len(links)} links, {len(fresh)} new to fetch, "
+                f"{self.SOURCE_NAME}: {len(links)} new to fetch, "
                 f"{len(self.seen_again_links)} already in the database (their pages are skipped)"
             )
-            links = fresh
-            if not links:
-                return []
+
+        if self.skip_senior:
+            before = len(links)
+            links = [l for l in links if not _SENIOR_TITLE_RE.search(self._slug_words(l))]
+            if before != len(links):
+                logger.info(
+                    f"{self.SOURCE_NAME}: {before - len(links)} senior-level offers rejected "
+                    f"by their URL slug (their pages are never fetched)"
+                )
+
+        if not links:
+            return []
 
         jobs, no_ldjson, out_of_scope = [], 0, 0
         with ThreadPoolExecutor(max_workers=self.DETAIL_THREADS) as executor:

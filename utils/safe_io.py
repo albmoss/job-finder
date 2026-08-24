@@ -18,6 +18,19 @@ logger = logging.getLogger(__name__)
 BACKUP_DIR_NAME = "backups"
 DEFAULT_KEEP = 10
 
+# Głębokość historii zależy od tego, czy plik da się odtworzyć.
+# jobs_database.json i analyzed_jobs_waterfall.json odtwarza pipeline, a ważą
+# po ~30 MB i są przepisywane przez cztery etapy każdego przebiegu - dziesięć
+# pokoleń każdego z nich to ponad pół giga kopii danych, które i tak umie
+# wyprodukować `run_final_pipeline.py`. Zostawiamy poprzednią wersję (jest po co
+# cofnąć nieudany etap) i na tym koniec. Reszta - z user_decisions.json na czele -
+# trzyma pełne dziesięć, bo tych danych nie odtworzy nic.
+REGENERABLE_KEEP = 2
+_KEEP_BY_NAME = {
+    "jobs_database.json": REGENERABLE_KEEP,
+    "analyzed_jobs_waterfall.json": REGENERABLE_KEEP,
+}
+
 
 def _backup_dir(filepath: Path) -> Path:
     d = filepath.parent / BACKUP_DIR_NAME
@@ -25,14 +38,21 @@ def _backup_dir(filepath: Path) -> Path:
     return d
 
 
-def rotate_backup(filepath, keep: int = DEFAULT_KEEP):
+def rotate_backup(filepath, keep: int = None):
     """Skopiuj aktualny plik do backups/ i zostaw tylko `keep` najnowszych kopii."""
     filepath = Path(filepath)
     if not filepath.exists() or filepath.stat().st_size == 0:
         return
 
+    if keep is None:
+        keep = _KEEP_BY_NAME.get(filepath.name, DEFAULT_KEEP)
+
     bdir = _backup_dir(filepath)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Milisekundy w stemplu, bo etapy pipeline'u potrafią przepisać ten sam plik
+    # dwa razy w tej samej sekundzie - przy samych sekundach druga kopia
+    # nadpisywała pierwszą i historia była płytsza, niż deklaruje `keep`.
+    now = datetime.now()
+    stamp = now.strftime("%Y%m%d_%H%M%S") + f"_{now.microsecond // 1000:03d}"
     target = bdir / f"{filepath.name}.{stamp}.bak"
 
     try:
@@ -50,7 +70,7 @@ def rotate_backup(filepath, keep: int = DEFAULT_KEEP):
         logger.debug(f"Backup rotation failed: {e}")
 
 
-def save_json_atomic(filepath, data, backup: bool = False, keep: int = DEFAULT_KEEP, indent: int = 2):
+def save_json_atomic(filepath, data, backup: bool = False, keep: int = None, indent: int = 2):
     """
     Zapisz JSON atomowo: najpierw .tmp, potem os.replace (operacja atomowa na NTFS/POSIX).
     Dzięki temu docelowy plik nigdy nie jest w stanie częściowo zapisanym.

@@ -102,8 +102,8 @@ def main():
     print(f"{len(decided_links)} jobs have user decisions (protected)")
 
     # Zarchiwizuj oceniane oferty ZANIM cokolwiek usuniemy
-    analyzed_now = load_json(ANALYZED_DB) if os.path.exists(ANALYZED_DB) else []
-    archived = archive_rated(jobs, analyzed_now, decisions)
+    analyzed = load_json(ANALYZED_DB) if os.path.exists(ANALYZED_DB) else []
+    archived = archive_rated(jobs, analyzed, decisions)
     if archived:
         print(f"Archived {archived} rated offers -> {RATED_ARCHIVE}")
 
@@ -146,9 +146,9 @@ def main():
     save_json(JOBS_DB, kept_jobs)
     print(f"Saved cleaned {JOBS_DB}")
 
-    # To samo dla analyzed_jobs_waterfall.json
-    if os.path.exists(ANALYZED_DB):
-        analyzed = load_json(ANALYZED_DB)
+    # To samo dla analyzed_jobs_waterfall.json - wczytanego już wyżej, na potrzeby
+    # archiwizacji (plik ma ~35 MB, drugi odczyt niczego by nie wniósł)
+    if analyzed:
         kept_links = {canonical_link(j.get("link", "")) for j in kept_jobs}
         original_analyzed = len(analyzed)
 
