@@ -147,6 +147,18 @@ def fetch_offer_details(link: str, session: requests.Session = None, timeout: in
         logger.debug(f"OLX detail fetch failed for {link}: {e}")
         return {"status": "error", "error": str(e)}
 
+    return parse_offer_html(html)
+
+
+def parse_offer_html(html: str) -> dict:
+    """
+    Wyciagnij szczegoly oferty z HTML-a strony OLX.
+
+    Osobno od pobierania, bo transport sie zmienil: gole `requests` dostaje
+    od OLX 403 (blokada na poziomie TLS - pelne naglowki przegladarki nie
+    pomagaja, strona glowna tez odpowiada 403), wiec HTML przychodzi teraz
+    z przegladarki, ktora scraper i tak ma otwarta. Parsowanie zostaje jedno.
+    """
     state = _extract_state(html)
     job = (state.get("jobAd") or {}).get("job") or {}
 

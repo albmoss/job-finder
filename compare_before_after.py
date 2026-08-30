@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from benchmark_models import run_model, spearman
+from benchmark_models import run_model_batched, spearman
 from config import GEMINI_API_KEYS
 from eval_ranking import precision_at_k as _precision_at_k
 from utils.links import canonical_link
@@ -85,8 +85,8 @@ def main():
     before = report("PRZED (zapisane wyniki)", [(old_scores[l], ratings[l]) for l in links], args.threshold)
 
     print("\nRescoring with the current prompt and profile...")
-    prompt = create_prompt(load_cv(), jobs, build_active_learning_context(jobs))
-    res = run_model(args.model, GEMINI_API_KEYS[0], prompt, len(jobs))
+    context = build_active_learning_context(jobs)
+    res = run_model_batched(args.model, GEMINI_API_KEYS[0], jobs, load_cv(), context)
 
     if not res["ok"]:
         print(f"FAILED: {res['error']}")

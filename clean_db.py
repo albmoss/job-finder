@@ -31,6 +31,7 @@ def reduce_file(filepath, is_analyzed=False):
         return
 
     initial_chars = 0
+    zmienione = 0
     final_chars = 0
     
     if is_analyzed:
@@ -39,8 +40,10 @@ def reduce_file(filepath, is_analyzed=False):
             initial_chars += len(orig_desc)
             
             cleaned = clean_job_description(orig_desc)
+            if cleaned != orig_desc:
+                zmienione += 1
             item['job']['description'] = cleaned
-            
+
             final_chars += len(cleaned)
     else:
         for item in data:
@@ -48,11 +51,20 @@ def reduce_file(filepath, is_analyzed=False):
             initial_chars += len(orig_desc)
             
             cleaned = clean_job_description(orig_desc)
+            if cleaned != orig_desc:
+                zmienione += 1
             item['description'] = cleaned
-            
+
             final_chars += len(cleaned)
 
-    save_json_atomic(path, data, backup=True)
+    # Zapis tylko wtedy, gdy cokolwiek faktycznie sie zmienilo. Przy juz
+    # przyciętej bazie ten etap przepisywał 64 MB i robił do tego kopię
+    # zapasową, żeby odtworzyć plik bajt w bajt - a rotacja kopii i tak
+    # kasowała ją w tym samym przebiegu.
+    if zmienione:
+        save_json_atomic(path, data, backup=True)
+    else:
+        logger.info(f"   {path.name}: nic do przyciecia, plik bez zmian")
 
     reduction = 0
     if initial_chars > 0:

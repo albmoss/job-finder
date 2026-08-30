@@ -34,6 +34,7 @@ from utils.text_cleaner import detect_work_mode, strip_html
 from utils.safe_io import save_json_atomic, load_json_safe
 from utils.links import canonical_link
 from utils.offer_age import ghost_signals, ghost_label
+import skill_gaps
 import ui_theme
 
 logging.basicConfig(
@@ -152,23 +153,7 @@ def inject_custom_css():
            tej samej dyscypliny: kolorowe logo po lewej, jedna kolorowa
            metryka po prawej, cała reszta szara. Kolor niesie tam wyłącznie
            to, po czym się decyduje - u nich zarobki, u nas dopasowanie. */
-        [class*="st-key-jc_"] {
-            position: relative;
-            background: var(--raised);
-            border: 1px solid var(--line);
-            border-radius: 11px;
-            padding: 0.95rem 1.15rem 0.75rem 1.35rem;
-            margin-bottom: 0.75rem;
-            transition: background 0.13s ease, border-color 0.13s ease;
-        }
-        [class*="st-key-jc_"]:hover {
-            background: var(--raised-hi);
-            border-color: color-mix(in srgb, var(--line) 70%, var(--text));
-        }
 
-        [class*="st-key-jc_"] > [data-testid="stElementContainer"]:first-child {
-            position: static;
-        }
 
         /* Pasek przy krawędzi: wysokość wypełnienia = procent dopasowania.
            Portale tego nie mają, bo nie mają czego rankingować - u nas
@@ -196,7 +181,7 @@ def inject_custom_css():
             align-items: center;
             justify-content: center;
             font-family: var(--font-mono);
-            font-size: 0.82rem;
+            font-size: var(--fs-body);
             font-weight: 600;
             letter-spacing: 0.02em;
             border: 1px solid;
@@ -205,7 +190,7 @@ def inject_custom_css():
         /* Ogłoszenie, które wisi zbyt długo. Ten sam kształt co .jc-new, ale
            wyciszony - to ostrzeżenie, nie alarm, bo sygnał jest poszlakowy. */
         .jc-stale {
-            font-size: 0.6rem;
+            font-size: var(--fs-micro);
             font-weight: 600;
             letter-spacing: 0.06em;
             color: var(--muted);
@@ -223,7 +208,7 @@ def inject_custom_css():
             align-items: center;
             gap: 0.4rem;
             margin-top: 0.28rem;
-            font-size: 0.78rem;
+            font-size: var(--fs-small);
             color: var(--muted);
         }
 
@@ -254,7 +239,7 @@ def inject_custom_css():
             margin-left: 3.45rem;
         }
         .jc-chip {
-            font-size: 0.71rem;
+            font-size: var(--fs-small);
             letter-spacing: 0.01em;
             color: color-mix(in srgb, var(--text) 62%, transparent);
             background: rgba(255, 255, 255, 0.028);
@@ -276,7 +261,7 @@ def inject_custom_css():
             background: var(--accent-soft);
             border-left: 2px solid var(--accent-dim);
             border-radius: 0 4px 4px 0;
-            font-size: 0.825rem;
+            font-size: var(--fs-body);
             line-height: 1.5;
             color: color-mix(in srgb, var(--text) 82%, transparent);
         }
@@ -288,7 +273,7 @@ def inject_custom_css():
             margin-top: 0.55rem;
             margin-left: 3.45rem;
             max-width: 78ch;
-            font-size: 0.815rem;
+            font-size: var(--fs-body);
             line-height: 1.65;
             color: color-mix(in srgb, var(--text) 58%, transparent);
             display: -webkit-box;
@@ -297,106 +282,18 @@ def inject_custom_css():
             overflow: hidden;
         }
 
-        /* ---------- kontrolki w karcie ---------- */
-        [class*="st-key-jc_"] [data-testid="stSlider"] { padding-top: 0.1rem; }
-        [class*="st-key-jc_"] [data-testid="stSlider"] [data-baseweb="slider"] div[role="slider"] {
-            height: 13px; width: 13px;
-        }
-        [class*="st-key-jc_"] [data-testid="stSliderTickBarMin"],
-        [class*="st-key-jc_"] [data-testid="stSliderTickBarMax"] { display: none; }
-
-        [class*="st-key-jc_"] [data-testid="stExpander"] details {
-            border: none;
-            background: transparent;
-            margin-top: 0.35rem;
-            margin-left: 3.45rem;
-        }
-        [class*="st-key-jc_"] [data-testid="stExpander"] summary {
-            padding-left: 0;
-            font-size: 0.76rem;
-            color: var(--faint);
-        }
-        [class*="st-key-jc_"] [data-testid="stExpander"] summary:hover { color: var(--muted); }
-
-        /* ---------- rząd akcji ---------- */
-        [class*="st-key-ja_jc_"] {
-            border-top: 1px solid var(--line-soft);
-            padding-top: 0.6rem;
-            margin-top: 0.6rem;
-        }
-
-        /* Suwak rozpychał się na całą kolumnę i wypychał przycisk
-           zatwierdzenia na jej przeciwległy koniec. Ograniczyć trzeba
-           kontener elementu, bo to on jest elastycznym dzieckiem rzędu -
-           samo zwężenie widżetu w środku niczego nie zmienia. */
-        [class*="st-key-ja_jc_"] [data-testid="stElementContainer"]:has([data-testid="stSlider"]) {
-            flex: 0 0 10.5rem;
-            max-width: 10.5rem;
-        }
-        [class*="st-key-ja_jc_"] [data-testid="stSlider"] { max-width: 10.5rem; }
-
-        /* Przyciski decyzji są bez podpisów - kształt ikony i jej barwa mają
-           powiedzieć, co robią, zanim zdążysz przeczytać. Każda decyzja ma
-           własny odcień, ten sam, którym oznaczony jest jej stan na karcie
-           i w nazwie widoku. */
-        [class*="st-key-jc_"] .stButton button,
-        [class*="st-key-jc_"] .stLinkButton a {
-            font-size: 0.79rem;
-            padding: 0.3rem 0.55rem;
-            min-height: 0;
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--line);
-            color: color-mix(in srgb, var(--text) 86%, transparent);
-        }
-        [class*="st-key-jc_"] .stButton button:hover,
-        [class*="st-key-jc_"] .stLinkButton a:hover {
-            background: rgba(255, 255, 255, 0.07);
-            border-color: color-mix(in srgb, var(--line) 60%, var(--text));
-        }
-        [class*="st-key-jc_"] [data-testid="stIconMaterial"] { font-size: 1.15rem; }
-
         [class*="st-key-save_"] [data-testid="stIconMaterial"] { color: color-mix(in srgb, var(--slate) 84%, white); }
-        [class*="st-key-app_"] [data-testid="stIconMaterial"] { color: color-mix(in srgb, var(--moss) 84%, white); }
-        [class*="st-key-asp_"] [data-testid="stIconMaterial"] { color: color-mix(in srgb, var(--amber) 84%, white); }
-        [class*="st-key-rej_"] [data-testid="stIconMaterial"] { color: color-mix(in srgb, var(--clay) 84%, white); }
-        [class*="st-key-conf_"] [data-testid="stIconMaterial"] { color: var(--muted); }
-
-        /* Usuwanie jest jedynym nieodwracalnym działaniem w rzędzie - stoi
-           obok reszty, ale wygasza się do szarości i dopiero pod kursorem
-           pokazuje, czym jest. Drugi klik ("Na pewno?") świeci od razu. */
-        [class*="st-key-del_"] [data-testid="stIconMaterial"] { color: var(--faint); }
-        [class*="st-key-del_"] button:hover {
-            border-color: color-mix(in srgb, var(--clay) 55%, transparent);
-            background: color-mix(in srgb, var(--clay) 14%, transparent); }
-        [class*="st-key-del_"] button:hover [data-testid="stIconMaterial"] {
-            color: color-mix(in srgb, var(--clay) 84%, white); }
-
-        [class*="st-key-delyes_"] button {
-            border-color: color-mix(in srgb, var(--clay) 60%, transparent) !important;
-            background: color-mix(in srgb, var(--clay) 20%, transparent) !important;
-            color: color-mix(in srgb, var(--clay) 88%, white) !important; }
-        [class*="st-key-delyes_"] [data-testid="stIconMaterial"] {
-            color: color-mix(in srgb, var(--clay) 88%, white); }
 
         [class*="st-key-save_"] button:hover {
             border-color: color-mix(in srgb, var(--slate) 55%, transparent);
             background: color-mix(in srgb, var(--slate) 14%, transparent); }
-        [class*="st-key-app_"] button:hover {
-            border-color: color-mix(in srgb, var(--moss) 55%, transparent);
-            background: color-mix(in srgb, var(--moss) 14%, transparent); }
-        [class*="st-key-asp_"] button:hover {
-            border-color: color-mix(in srgb, var(--amber) 55%, transparent);
-            background: color-mix(in srgb, var(--amber) 14%, transparent); }
-        [class*="st-key-rej_"] button:hover {
-            border-color: color-mix(in srgb, var(--clay) 55%, transparent);
-            background: color-mix(in srgb, var(--clay) 14%, transparent); }
 
         /* ---------- sekcje panelu sterowania ----------
            Numeracja kroków niesie informację: to jest realna sekwencja,
            w której kolejność ma znaczenie, a nie ozdobnik. */
         .sec-label {
             font-family: var(--font-mono);
-            font-size: 0.68rem;
+            font-size: var(--fs-micro);
             letter-spacing: 0.14em;
             text-transform: uppercase;
             color: var(--faint);
@@ -433,7 +330,7 @@ def inject_custom_css():
            w kolorach Streamlita - żółtym i niebieskim - które nie należą do
            palety aplikacji. Tu wystarczą dwa warianty z --moss i --clay. */
         .panel-note {
-            font-size: 0.86rem;
+            font-size: var(--fs-body);
             line-height: 1.5;
             border: 1px solid var(--line);
             border-left: 3px solid var(--muted);
@@ -446,19 +343,6 @@ def inject_custom_css():
         .panel-note.is-ok    { border-left-color: var(--moss); }
 
         /* ---------- pasek filtrów ---------- */
-        [class*="st-key-toolbar_"] {
-            background: var(--raised);
-            border: 1px solid var(--line);
-            border-radius: 6px;
-            padding: 0.7rem 0.9rem 0.45rem 0.9rem;
-            margin-bottom: 1.1rem;
-        }
-        [class*="st-key-toolbar_"] label {
-            font-size: 0.72rem !important;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            color: var(--faint) !important;
-        }
 
         /* ---------- kulka portalu ----------
            Znacznik źródła oferty. Stoi zawsze bezpośrednio przy nazwie
@@ -478,14 +362,6 @@ def inject_custom_css():
         }
         .src-name { white-space: nowrap; }
 
-        [class*="st-key-kb_"] {
-            background: var(--raised);
-            border: 1px solid var(--line);
-            border-left: 2px solid var(--line);
-            border-radius: 5px;
-            padding: 0.6rem 0.7rem;
-            margin-bottom: 0.45rem;
-        }
 
         /* ---------- podłoga jakości ---------- */
         :focus-visible {
@@ -790,25 +666,6 @@ def _delete_job_permanent(job_link: str):
 # PULPIT: OPERACJE NA DANYCH I PIPELINE
 # =============================================================================
 
-def _read_links(path: Path, nested: bool = False) -> set:
-    """Zbiór linków z pliku danych. Błąd odczytu = pusty zbiór, nie wyjątek w UI."""
-    if not path.exists():
-        return set()
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"Nie udało się odczytać {path.name}: {e}")
-        return set()
-
-    links = set()
-    for item in data:
-        job = item.get("job", {}) if nested else item
-        link = job.get("link") if isinstance(job, dict) else None
-        if link:
-            links.add(link)
-    return links
-
 
 def _run_step(cmd, label, done_label, tail=14):
     """
@@ -881,10 +738,58 @@ def inject_workspace_css():
         [data-testid="stExpandSidebarButton"],
         [data-testid="collapsedControl"] { display: none !important; }
 
+        /* Pulpit mieści się w oknie i nic się nie przewija na poziomie strony.
+           Pasek, zakładki i podpowiedź mają swoją wysokość, para paneli bierze
+           dokładnie to, co zostało. Wcześniej góra zjadała 194 px, z czego
+           102 px to były same przerwy między trzema paskami tekstu, a panele
+           rosły z treści - przy 864 px wysokości okna wychodziły 240 px poza
+           ekran i trzeba było scrollować, żeby kliknąć cokolwiek na dole. */
+        [data-testid="stMain"] { overflow: hidden !important; }
         [data-testid="stMainBlockContainer"] {
-            padding-top: 1.5rem;
-            padding-bottom: 2.5rem;
+            height: 100vh;
+            max-height: 100vh;
+            padding-top: 0.85rem;
+            padding-bottom: 0.9rem;
             max-width: 1680px;
+            display: flex;
+            flex-direction: column;
+        }
+        [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
+            flex: 1 1 auto;
+            min-height: 0;
+            gap: 0.55rem;
+        }
+        /* Wiersz z panelami zabiera całą resztę wysokości. Streamlit wkłada
+           między kontener a nasz blok dwa bezimienne opakowania i drugi blok
+           pionowy - każde z nich jest elementem flex o `flex: 0 1 auto`, więc
+           wystarczy jedno takie ogniwo, żeby wysokość nie doszła do paneli.
+           `:has` bierze cały łańcuch przodków naraz, bez wypisywania klas
+           z hashem, które i tak zmieniają się między wersjami. */
+        [data-testid="stMainBlockContainer"] *:has([class*="st-key-wscols"]),
+        [class*="st-key-wscols"],
+        [class*="st-key-wscols"] > div,
+        [class*="st-key-wscols"] > div > [data-testid="stHorizontalBlock"] {
+            /* Tylko pozwolenie na zwężenie, bez wymuszania rozciągania:
+               domyślne `min-height: auto` nie daje elementowi flex zejść
+               poniżej treści. Rozciągania tu NIE chcemy - inaczej "Dodaj
+               z linku" znów rysuje 885 px ramki wokół 150 px treści. */
+            min-height: 0 !important;
+        }
+        /* `st.columns` ustawia wierszowi `align-items: flex-start`, więc kolumna
+           nie rozciąga się na wysokość wiersza, tylko rośnie z własnej treści -
+           i miała 901 px w rodzicu, który miał 699. */
+        [class*="st-key-wscols"] > div > [data-testid="stHorizontalBlock"] {
+            align-items: stretch !important;
+        }
+        /* To samo w drugą stronę: między kolumną a panelem też siedzi
+           bezimienne opakowanie i to ono nie pozwalało panelowi ZEJŚĆ poniżej
+           treści. Krótkie zakładki rosły do okna, a długie zostawały przy 901
+           i wyłaziły poza ekran. */
+        [class*="st-key-wscols"] [data-testid="stColumn"],
+        [data-testid="stColumn"] *:has([class*="st-key-wsleft"]),
+        [data-testid="stColumn"] *:has([class*="st-key-wsright"]) {
+            flex: 1 1 auto !important;
+            min-height: 0 !important;
         }
 
         /* ---------- pasek u góry ----------
@@ -897,7 +802,7 @@ def inject_workspace_css():
             justify-content: space-between;
             gap: 2rem;
             flex-wrap: wrap;
-            padding-bottom: 0.7rem;
+            padding-bottom: 0.5rem;
             border-bottom: 1px solid var(--line-soft);
         }
         /* Marka: szeryf, małe litery, bez rozstrzelenia. Wcześniej szła
@@ -905,7 +810,7 @@ def inject_workspace_css():
            niczym się nie różniła od podpisu kolumny. */
         .wt-brand {
             font-family: var(--font-head);
-            font-size: 1.3rem;
+            font-size: var(--fs-num);
             font-weight: 600;
             letter-spacing: -0.015em;
             line-height: 1;
@@ -929,7 +834,7 @@ def inject_workspace_css():
         }
         .wt-item b {
             font-family: var(--font-head);
-            font-size: 1.34rem;
+            font-size: var(--fs-num);
             font-weight: 600;
             letter-spacing: -0.02em;
             line-height: 1;
@@ -938,14 +843,46 @@ def inject_workspace_css():
         }
         .wt-item span {
             font-family: var(--font-body);
-            font-size: 0.67rem;
+            font-size: var(--fs-micro);
             font-weight: 500;
             letter-spacing: 0.01em;
             color: var(--faint);
         }
 
+        /* Lejek aplikacji. Świadomie o stopień cichszy od liczb obok: tamte
+           mówią, jak duża jest baza, ten - co się dzieje z garstką ofert,
+           w które naprawdę wszedłeś. Gdyby miał tę samą wagę, pięć małych
+           liczb przykryłoby dwie duże. */
+        .wt-sep {
+            width: 1px;
+            align-self: stretch;
+            background: var(--line-soft);
+        }
+        .wt-funnel { display: flex; gap: 1.4rem; align-items: flex-end; }
+        .wt-stage {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 0.15rem;
+            line-height: 1;
+        }
+        .wt-stage b {
+            font-family: var(--font-mono);
+            font-size: var(--fs-body);
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+            color: var(--text);
+        }
+        .wt-stage span {
+            font-family: var(--font-body);
+            font-size: var(--fs-micro);
+            letter-spacing: 0.01em;
+            color: var(--faint);
+        }
+        .wt-stage.is-off b { color: var(--accent-ash); }
+
         /* ---------- zakładki ---------- */
-        [class*="st-key-wstabs"] { margin: 0.5rem 0 0.15rem; }
+        [class*="st-key-wstabs"] { margin: 0; }
         [class*="st-key-wstabs"] [data-baseweb="button-group"] { gap: 0.1rem; }
         [class*="st-key-wstabs"] button {
             border: 0 !important;
@@ -954,7 +891,7 @@ def inject_workspace_css():
             border-bottom: 2px solid transparent !important;
             padding: 0.34rem 0.7rem !important;
             font-family: var(--font-body) !important;
-            font-size: 0.84rem !important;
+            font-size: var(--fs-body) !important;
             font-weight: 500 !important;
             letter-spacing: 0 !important;
             text-transform: none !important;
@@ -970,48 +907,160 @@ def inject_workspace_css():
         }
 
         .wp-hint-top {
-            font-size: 0.73rem;
+            font-size: var(--fs-small);
             color: var(--faint);
-            margin: 0.55rem 0 0;
+            margin: 0;
+        }
+
+        /* ---------- skala tekstu ----------
+           Wcześniej w tym pliku było 41 różnych rozmiarów pisma na 69 deklaracji -
+           sąsiednie stopnie różniły się o 0,01 rem, czyli o nic. Skala ma siedem
+           stopni i to jest jej całe zadanie: różnica ma być widoczna bez mierzenia,
+           a nowy element ma nie mieć gdzie wcisnąć czterdziestego drugiego rozmiaru. */
+        :root {
+            --fs-micro: 0.68rem;   /* dane w mono: czas, liczniki, numer wiersza */
+            --fs-small: 0.78rem;   /* metryki wiersza, podpowiedzi, drugi plan */
+            --fs-body:  0.88rem;   /* tytuł oferty, treść, zakładki */
+            --fs-lead:  1.05rem;   /* tytuły paneli, wynik przy wierszu */
+            --fs-num:   1.32rem;   /* marka i liczby zbiorcze u góry */
+            --fs-head:  1.55rem;   /* tytuł otwartej oferty */
+            --fs-score: 2.2rem;    /* wynik dopasowania w podglądzie */
+        }
+        /* Akapit Streamlita ma własne 0.875rem, czyli 0.075 px obok --fs-body.
+           Różnicy nie widać, ale to dokładnie ten rozjazd, przez który skala
+           przestaje być jedynym źródłem prawdy. Bierzemy tylko akapity bez
+           klasy - własne bloki (.wd-p) trzymają rozmiar swojego kontekstu. */
+        .stMainBlockContainer [data-testid="stMarkdownContainer"] p:not([class]) {
+            font-size: var(--fs-body);
+        }
+        /* Streamlit odsyła znak zapytania na prawy skraj widgetu (inline
+           `justify-content: flex-end; width: 100%`), więc przy szerokim panelu
+           wisiał pół metra od podpisu, który tłumaczy. */
+        [data-testid="stWidgetLabel"] { font-size: var(--fs-body); }
+        [data-testid="stWidgetLabel"] [data-testid="stTooltipIcon"] {
+            margin-right: auto;   /* rodzic jest wyrównany do prawej krawędzi */
+            margin-left: 0.45rem;
         }
 
         /* ---------- panele ---------- */
-        [class*="st-key-wscols"] { margin-top: 1.1rem; }
+        [class*="st-key-wscols"] { margin-top: 0.35rem; }
+        /* Kolumna i wszystko w niej rozciąga się na wysokość wiersza, żeby
+           `height: 100%` na panelu miało się do czego odnieść. Sam procent nie
+           wystarcza: pośrednie kontenery Streamlita mają wysokość `auto`,
+           a procent liczony od `auto` nie robi nic. */
+        [class*="st-key-wscols"] [data-testid="stColumn"] { display: flex !important; }
+        [class*="st-key-wscols"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"],
+        [class*="st-key-wscols"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"]
+            > [data-testid="stLayoutWrapper"] {
+            flex: 1 1 auto !important;
+        }
         [class*="st-key-wsleft"],
         [class*="st-key-wsright"] {
             background: var(--raised);
             border: 1px solid var(--line-soft);
             border-radius: 0.8rem;
             padding: 0.95rem 1.1rem 1.15rem;
-            min-height: 62vh;
+            /* Dolna granica, zeby para paneli nie zapadla sie do paska.
+               Gorna bierze sie z okna, nie z tresci - stad `min-height: 0`
+               w lancuchu wyzej i przewijanie w srodku panelu zamiast
+               przewijania calej strony. */
+            min-height: 11rem;
+            /* Sufit liczony od okna, a nie od rodzica: 152 px zajmuje góra
+               (pasek, zakładki, podpowiedź), reszta to dolny oddech. Procentu
+               użyć się tu nie da - łańcuch opakowań Streamlita nie przenosi
+               wysokości, a wymuszenie jej rozciąga panele także tam, gdzie
+               treści jest na 150 px. Panel trzyma się treści i zatrzymuje
+               na krawędzi ekranu. */
+            max-height: calc(100vh - 168px);
+            overflow-y: auto;
+            overflow-x: hidden;
+            /* Oba panele biorą wysokość wiersza, czyli tego z większą treścią.
+               Bez tego krótszy kończył się wyżej i zestawienie się rozjeżdżało
+               inaczej w każdej zakładce - a liczba wierszy na stronie nigdy nie
+               będzie pasować do każdej zawartości lewego panelu. */
+            height: 100%;
         }
         /* Jedna skala odstępów w obu panelach - reszta rytmu siedzi
            w marginesach bloków HTML, nie w domyślnych przerwach Streamlita. */
-        [class*="st-key-wsleft"] > [data-testid="stVerticalBlock"],
-        [class*="st-key-wsright"] > [data-testid="stVerticalBlock"] {
+        [class*="st-key-wsleft"],
+        [class*="st-key-wsright"] {
             gap: 0.7rem;
         }
+        /* Stopka siada na dnie panelu - to podpis pod tym, co nad nią stoi
+           (legenda kolumn, licznik), więc ma trzymać się dolnej krawędzi tak
+           samo w każdej zakładce. Podpowiedź NIE: to zwykła proza i pchnięta
+           na dno zostawiała dziurę w środku panelu, czyli gorzej niż pas
+           pustki pod spodem. Wolne miejsce zbiera się na dole, w jednym
+           kawałku. */
+        [class*="st-key-wsleft"] > div:last-child:has(.wp-foot),
+        [class*="st-key-wsright"] > div:last-child:has(.wp-foot) {
+            margin-top: auto !important;
+        }
 
-        /* Nagłówek panelu ma stałą wysokość po obu stronach, żeby pierwsza
-           włosowa kreska w lewym i prawym panelu leżała na tej samej linii -
-           także wtedy, gdy po jednej stronie siedzą przyciski, a po drugiej
-           sam napis. */
-        .wp-head,
-        [class*="st-key-wshead"] {
+        /* Jeden nagłówek panelu - ten sam prostokąt niezależnie od tego,
+           czy w środku stoi sam napis, czy napis z przyciskami. Wysokość jest
+           sztywna, więc tytuł lewego i prawego panelu leży na tej samej linii;
+           wcześniej ten z przyciskami schodził 12 px niżej, bo Streamlit
+           zwijał kontener napisu do wysokości tekstu i centrował już tylko
+           jego. Para paneli wyglądała przez to na przekrzywioną. */
+        .wp-head:not(.is-mid),
+        [class*="st-key-wshead"],
+        [class*="st-key-wslisthead"] {
+            height: 2.9rem;
+            min-height: 2.9rem;
+            flex: 0 0 auto;
+            box-sizing: border-box;
+            border-bottom: 1px solid var(--line-soft);
+        }
+        .wp-head.is-mid {
             min-height: 2.6rem;
             border-bottom: 1px solid var(--line-soft);
         }
+        [class*="st-key-wslisthead"] > div,
+        [class*="st-key-wslistbar"] { height: 100% !important; }
+        /* Streamlit zwija .stMarkdown w pasku do 6 px i napis wisi na górnej
+           krawędzi tej zapadniętej ramki - a centrowanie paska centruje wtedy
+           ramkę, nie tekst. Rozciągamy cały łańcuch od kontenera elementu do
+           samego bloku, żeby tytuł i licznik stron liczyły środek względem
+           paska. To ta sama przyczyna dla obu: podpisu panelu i "1 / 1741". */
+        [class*="st-key-wslistbar"] > [data-testid="stElementContainer"]:first-child,
+        [class*="st-key-wshead"] > [data-testid="stElementContainer"]:first-child,
+        [class*="st-key-wspager"] > [data-testid="stElementContainer"] {
+            align-self: stretch !important;
+        }
+        [class*="st-key-wslistbar"] > [data-testid="stElementContainer"]:first-child
+            div:not(.wp-label):not(.wp-count),
+        [class*="st-key-wshead"] > [data-testid="stElementContainer"]:first-child
+            div:not(.wp-label):not(.wp-count),
+        [class*="st-key-wspager"] > [data-testid="stElementContainer"] div {
+            height: 100% !important;
+            /* Wewnetrzny margines 7 px zsuwal caly napis w dol - to on, a nie
+               centrowanie, odpowiadal za tytul o wiersz nizej niz w panelu obok. */
+            margin: 0 !important;
+        }
+        /* Podpis i licznik w jednej linii, gdy nagłówek jest kontenerem
+           Streamlita, a nie gotowym blokiem .wp-head. */
+        .wp-headline {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            height: 100%;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .wp-headline .wp-label {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .wp-headline .wp-count { flex: 0 0 auto; }
         .wp-head {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 0.8rem;
-            padding-bottom: 0.55rem;
         }
-        [class*="st-key-wshead"] {
-            align-items: center !important;
-            padding-bottom: 0.45rem;
-        }
+        [class*="st-key-wshead"] { align-items: center !important; }
         .wp-head.is-mid { margin-top: 0.55rem; }
         /* Tytuł panelu. Wcześniej był mikro-wersalikiem w mono - czyli
            dokładnie tym samym kształtem co etykieta operacji w logu i co
@@ -1022,29 +1071,34 @@ def inject_workspace_css():
            dzięki temu nie trzeba pamiętać o niej w każdym wywołaniu. */
         .wp-label {
             font-family: var(--font-head);
-            font-size: 1.03rem;
+            font-stretch: var(--head-stretch);
+            font-size: var(--fs-lead);
             font-weight: 600;
             letter-spacing: -0.01em;
             color: var(--text);
             line-height: 1.35;
         }
         .wp-label::first-letter { text-transform: uppercase; }
+        /* Naglowek panelu jest jasniejszy niz cokolwiek pod nim - inaczej
+           tytul sekcji i tytul kroku czytaly sie mocniej niz sam panel. */
+        .wp-head:not(.is-mid) .wp-label { color: var(--text-bright); }
+        .wp-head.is-mid .wp-label { font-size: var(--fs-body); }
 
         .wp-count {
             font-family: var(--font-mono);
-            font-size: 0.72rem;
+            font-size: var(--fs-small);
             color: var(--faint);
             font-variant-numeric: tabular-nums;
         }
         .wp-empty {
             padding: 1.4rem 0;
-            font-size: 0.8rem;
+            font-size: var(--fs-small);
             color: var(--faint);
         }
         .wp-foot {
             padding-top: 0.8rem;
             font-family: var(--font-mono);
-            font-size: 0.68rem;
+            font-size: var(--fs-micro);
             letter-spacing: 0.02em;
             color: var(--faint);
             text-align: right;
@@ -1054,15 +1108,15 @@ def inject_workspace_css():
             margin-top: 1.3rem;
             padding-top: 0.85rem;
             border-top: 1px solid var(--line-soft);
-            font-size: 0.73rem;
+            font-size: var(--fs-small);
             line-height: 1.55;
             color: var(--faint);
         }
         .wp-note {
-            font-size: 0.78rem;
-            line-height: 1.55;
+            font-size: var(--fs-small);
+            line-height: 1.5;
             color: var(--muted);
-            padding: 0.7rem 0.9rem;
+            padding: 0.6rem 0.85rem;
             border-left: 2px solid var(--line);
             background: rgba(255, 255, 255, 0.018);
             border-radius: 0 0.4rem 0.4rem 0;
@@ -1072,9 +1126,121 @@ def inject_workspace_css():
         .wp-note em { color: var(--text); font-style: normal; }
 
         [class*="st-key-wslisthead"] [data-testid="stTextInput"] input {
-            font-size: 0.79rem;
+            font-size: var(--fs-small);
         }
         [class*="st-key-wslisthead"] > [data-testid="stVerticalBlock"] { gap: 0.55rem; }
+        /* Rozkład nagłówka: podpis zabiera całą wolną przestrzeń, lupka i
+           stronicowanie trzymają się prawej krawędzi. Streamlit domyślnie
+           rozciąga OSTATNI element w rzędzie, przez co sterowanie lądowało
+           w połowie panelu z pustką po prawej. */
+        [class*="st-key-wslistbar"] { flex-wrap: nowrap !important; }
+        [class*="st-key-wslistbar"] > [data-testid="stElementContainer"]:first-child {
+            flex: 1 1 0 !important;
+            /* Tytuł panelu nie schodzi poniżej własnego napisu. Przy 1152 px
+               pole szukania spychało go do zera: z "Oferty 17 407" zostawało
+               "O", a licznik wypadał POD nagłówek, na pierwszą ofertę. */
+            min-width: 4.6rem !important;
+        }
+        [class*="st-key-wslistbar"] > *:not(:first-child) {
+            flex: 0 0 auto !important;
+        }
+        /* Zagnieżdżony kontener (lupka, stronicowanie) przychodzi ze
+           Streamlita z szerokością 100% rodzica - jako element rzędu zjadał
+           całą szerokość i spychał podpis panelu do zera. Ma być tak szeroki,
+           jak jego zawartość. */
+        [class*="st-key-wslistbar"] > [data-testid="stLayoutWrapper"],
+        [class*="st-key-wspager"] {
+            width: max-content !important;
+            flex: 0 0 auto !important;
+        }
+        /* Szukanie jest jedynym elementem paska, który wolno zwężać - reszta
+           to ikony o stałym rozmiarze i licznik stron, którego nie da się
+           skrócić bez utraty sensu. */
+        [class*="st-key-wssearch"] {
+            width: auto !important;
+            flex: 0 1 auto !important;
+            min-width: 0 !important;
+            /* Bez tego pole i krzyzyk lamia sie na dwa wiersze, gdy pasek
+               jest ciasny - a naglowek ma sztywne 2,9 rem, wiec drugi wiersz
+               wychodzi ponad ramke panelu i klada sie na pierwszej ofercie. */
+            flex-wrap: nowrap !important;
+        }
+        [class*="st-key-wssearch"] > [data-testid="stElementContainer"]:last-child {
+            flex: 0 0 auto !important;
+        }
+        /* Kazde ogniwo lancucha musi wolno zwezac - jedno `min-width: auto`
+           po drodze wystarczy, zeby pasek wyszedl poza ramke panelu. Przy
+           1152 px strzalka "nastepna strona" lezala 50 px ZA krawedzia. */
+        [class*="st-key-wssearch"] > [data-testid="stElementContainer"]:first-child {
+            flex: 0 1 auto !important;
+            min-width: 0 !important;
+        }
+        [class*="st-key-wssearch"] > [data-testid="stElementContainer"]:first-child
+            [data-testid="stTextInput"] { min-width: 0 !important; }
+        /* Regula wyzej ustawia KAZDEMU elementowi paska poza pierwszym
+           `flex: 0 0 auto` - razem z bezimienna otoczka, w ktorej Streamlit
+           trzyma zagniezdzony kontener. Szukanie musi z niej wyjsc, bo to
+           jedyna rzecz w pasku, ktora wolno zwezic. */
+        [class*="st-key-wslistbar"] > *:has([class*="st-key-wssearch"]) {
+            flex: 0 1 auto !important;
+            min-width: 0 !important;
+        }
+        /* Stronicowanie: kontener napisu zwija się do wysokości tekstu,
+           więc "1 / 1741" centrowało się względem własnej ramki, a nie
+           względem strzałek - stąd wrażenie, że numer stron stoi krzywo. */
+        .wp-pager { display: flex; align-items: center; justify-content: center; }
+
+        /* Przyciski nagłówka bez podpisu: kwadratowe, sama ikona. Podpis przy
+           lupce i strzałkach dopowiadał to, co ikona mówi sama. */
+        [class*="st-key-wslistbar"] .stButton button,
+        [class*="st-key-wshead"] .stButton button {
+            min-height: 1.9rem;
+            height: 1.9rem;
+            width: 1.9rem;
+            padding: 0;
+            border-radius: 0.4rem;
+        }
+        [class*="st-key-wslistbar"] .stButton button p,
+        [class*="st-key-wshead"] .stButton button p { display: none; }
+        [class*="st-key-wslistbar"] [data-testid="stIconMaterial"],
+        [class*="st-key-wshead"] [data-testid="stIconMaterial"] {
+            font-size: var(--fs-lead) !important;
+            margin: 0 !important;
+        }
+
+        /* Pole szukania wjeżdża z szerokości przycisku, w którego miejscu staje. */
+        @keyframes ws-search-in {
+            from { width: 1.9rem; opacity: 0.4; }
+            to   { width: 15rem; opacity: 1; }
+        }
+        [class*="st-key-wssearch"] [data-testid="stTextInput"] {
+            width: 15rem;
+            max-width: 100%;
+            animation: ws-search-in .2s cubic-bezier(.16, 1, .3, 1);
+        }
+        [class*="st-key-wssearch"] input { font-size: var(--fs-small); }
+
+        .wp-pager {
+            font-family: var(--font-mono);
+            font-size: var(--fs-small);
+            color: var(--muted);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            min-width: 3.6rem;
+            text-align: center;
+        }
+        .wp-pager span { color: var(--faint); margin: 0 0.2rem; }
+
+        /* Krzyżyk zamykający podświetla się na glinę - tę samą barwę, którą
+           w całym interfejsie mają decyzje odmowne. */
+        [class*="st-key-ws_close"] button:hover {
+            color: var(--clay) !important;
+            border-color: var(--clay) !important;
+            background: rgba(180, 112, 92, 0.10) !important;
+        }
+        [class*="st-key-ws_close"] button:hover [data-testid="stIconMaterial"] {
+            color: var(--clay) !important;
+        }
 
         /* ---------- wiersz oferty ---------- */
         [class*="st-key-wsrow_"],
@@ -1082,6 +1248,59 @@ def inject_workspace_css():
             position: relative;
             border-bottom: 1px solid var(--line-soft);
             transition: background-color .16s ease;
+        }
+        /* Wiersze rozbierają między siebie wolną wysokość panelu. Wysokość
+           bierze się z lewej strony i nigdy nie wyjdzie równym wielokrotnością
+           wiersza, więc bez tego na dole zostawał pas pustki - raz 40 px,
+           raz 90 px, zależnie od zakładki. Sufit pilnuje, żeby strona z
+           trzema wynikami szukania nie zrobiła z wierszy kafli. */
+        /* Klucz siedzi na kontenerze wiersza, ale w kolumnie panelu stoi
+           bezimienna otoczka Streamlita - to ona musi rosnac, inaczej
+           `flex` na wierszu nie ma na czym zadzialac. */
+        [class*="st-key-wsleft"] > div:has(> [class*="st-key-wsrow_"]),
+        [class*="st-key-wsright"] > div:has(> [class*="st-key-wsrow_"]),
+        [class*="st-key-wsrow_"] {
+            flex: 1 1 auto;
+            min-height: 2.9rem;
+            max-height: 4.6rem;
+        }
+        /* To samo dla decyzji po lewej: na niskim oknie sie sciskaja, na
+           wysokim rozchodza. Dzieki temu nie trzeba wybierac miedzy pusta
+           przestrzenia a przewijaniem w srodku panelu. */
+        [class*="st-key-wsleft"] > div:has(> [class*="st-key-wsdec_"]),
+        [class*="st-key-wsdec_"] {
+            flex: 1 1 auto;
+            min-height: 2.1rem;
+            max-height: 3.2rem;
+        }
+        [class*="st-key-wsdec_"] .wl-dec { height: 100%; align-content: center; }
+        [class*="st-key-wsrow_"] .wr-row { height: 100%; align-content: center; }
+        /* Lewy panel ma trzymać JEDNĄ wagę kreski. Wiersze decyzji brały
+           mocniejszą (--line-soft) niż linijki logu tuż nad nimi, a do tego
+           każda plakietka statusu ma własny obrys - w sumie trzy różne kreski
+           na jednej wysokości i cały panel wyglądał na rozjechany. */
+        [class*="st-key-wsdec_"] {
+            border-bottom-color: rgba(255, 255, 255, 0.03);
+        }
+        /* Streamlit dokłada -15 px marginesu pod otoczkę markdownu, żeby
+           skasować dolny margines akapitu. Nasze bloki nie są akapitami i nie
+           mają czego kasować, więc te 15 px zjadają im wysokość: kontener
+           wiersza miał 20 px przy 34 px treści, a kreska - rysowana na dole
+           kontenera - szła przez środek plakietki i przez tekst zamiast pod
+           nimi. Dotyczylo to 15 rodzajow blokow i ~66 elementow na kazdej
+           zakladce: kazdy nasz blok byl o 15 px nizszy niz jego tresc, wiec
+           odstepy w CSS nie znaczyly tego, co pisza - 0,7 rem przerwy minus
+           15 px dawalo naklada­nie sie o 4,5 px. Zerujemy dla wszystkich
+           naszych prefiksow (wp-, wl-, wr-, wg-, wx-, wt-, wd-), nie dla
+           akapitow - tam ten margines robi swoje. */
+        div:has(> [class^="wp-"]),
+        div:has(> [class^="wl-"]),
+        div:has(> [class^="wr-"]),
+        div:has(> [class^="wg-"]),
+        div:has(> [class^="wx-"]),
+        div:has(> [class^="wt-"]),
+        div:has(> [class^="wd-"]) {
+            margin-bottom: 0 !important;
         }
         [class*="st-key-wsrow_"]:hover,
         [class*="st-key-wsdec_"]:hover { background: rgba(255, 255, 255, 0.028); }
@@ -1104,9 +1323,9 @@ def inject_workspace_css():
             z-index: 4;
         }
         [class*="st-key-btn_wsrow_"] .stButton,
-        [class*="st-key-btn_wsrow_"] .stButton > button,
+        [class*="st-key-btn_wsrow_"] .stButton button,
         [class*="st-key-btn_wsdec_"] .stButton,
-        [class*="st-key-btn_wsdec_"] .stButton > button {
+        [class*="st-key-btn_wsdec_"] .stButton button {
             width: 100% !important;
             height: 100% !important;
             min-height: 0 !important;
@@ -1116,8 +1335,8 @@ def inject_workspace_css():
             box-shadow: none !important;
             cursor: pointer;
         }
-        [class*="st-key-btn_wsrow_"] .stButton > button,
-        [class*="st-key-btn_wsdec_"] .stButton > button { opacity: 0; }
+        [class*="st-key-btn_wsrow_"] .stButton button,
+        [class*="st-key-btn_wsdec_"] .stButton button { opacity: 0; }
 
         .wr-row {
             display: grid;
@@ -1130,7 +1349,7 @@ def inject_workspace_css():
         .wr-rank {
             grid-row: 1 / span 2;
             font-family: var(--font-mono);
-            font-size: 0.65rem;
+            font-size: var(--fs-micro);
             color: var(--faint);
         }
         .wr-main { grid-column: 2; min-width: 0; }
@@ -1138,7 +1357,7 @@ def inject_workspace_css():
             display: flex;
             align-items: center;
             gap: 0.4rem;
-            font-size: 0.91rem;
+            font-size: var(--fs-body);
             font-weight: 500;
             line-height: 1.3;
             color: var(--text-bright);
@@ -1149,7 +1368,10 @@ def inject_workspace_css():
         .wr-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
         .wr-meta {
             margin-top: 0.2rem;
-            font-size: 0.69rem;
+            /* O dwa stopnie niżej niż tytuł, nie o jeden: firma, portal i miasto
+               stoją w wierszu tuż pod nim i przy jednym stopniu różnicy czytały
+               się jak druga linijka tytułu. */
+            font-size: var(--fs-micro);
             line-height: 1.3;
             color: var(--faint);
             white-space: nowrap;
@@ -1168,11 +1390,11 @@ def inject_workspace_css():
             grid-row: 1 / span 2;
             text-align: right;
             font-family: var(--font-mono);
-            font-size: 1rem;
+            font-size: var(--fs-lead);
             font-weight: 600;
             letter-spacing: -0.01em;
         }
-        .wr-score small { font-size: 0.58rem; margin-left: 0.06rem; opacity: 0.7; }
+        .wr-score small { font-size: var(--fs-micro); margin-left: 0.06rem; opacity: 0.7; }
         .wr-score.is-none { color: var(--faint); font-weight: 400; }
         .wr-bar {
             grid-column: 2 / span 2;
@@ -1201,7 +1423,7 @@ def inject_workspace_css():
             padding-bottom: 0.35rem;
             border-bottom: 1px solid var(--line-soft);
             font-family: var(--font-body);
-            font-size: 0.64rem;
+            font-size: var(--fs-micro);
             font-weight: 600;
             letter-spacing: 0.06em;
             text-transform: uppercase;
@@ -1216,13 +1438,13 @@ def inject_workspace_css():
             align-items: baseline;
             gap: 0.7rem;
             padding: 0.4rem 0.15rem;
-            font-size: 0.75rem;
+            font-size: var(--fs-small);
             min-width: 0;
             border-bottom: 1px solid rgba(255, 255, 255, 0.03);
         }
         .wl-time {
             font-family: var(--font-mono);
-            font-size: 0.65rem;
+            font-size: var(--fs-micro);
             color: var(--faint);
             white-space: nowrap;
         }
@@ -1230,7 +1452,7 @@ def inject_workspace_css():
            i mocno ścięte rozstrzelenie. Ma być najcichszą warstwą wiersza. */
         .wl-op {
             font-family: var(--font-body);
-            font-size: 0.63rem;
+            font-size: var(--fs-micro);
             font-weight: 600;
             letter-spacing: 0.05em;
             text-transform: uppercase;
@@ -1240,7 +1462,7 @@ def inject_workspace_css():
         .wl-op.is-bad { color: var(--clay); }
         .wl-what {
             font-family: var(--font-mono);
-            font-size: 0.71rem;
+            font-size: var(--fs-small);
             color: var(--text);
             white-space: nowrap;
             overflow: hidden;
@@ -1248,7 +1470,7 @@ def inject_workspace_css():
         }
         .wl-detail {
             color: var(--faint);
-            font-size: 0.7rem;
+            font-size: var(--fs-small);
             white-space: nowrap;
             text-align: right;
         }
@@ -1266,14 +1488,14 @@ def inject_workspace_css():
             border: 1px solid;
             border-radius: 0.3rem;
             font-family: var(--font-body);
-            font-size: 0.6rem;
+            font-size: var(--fs-micro);
             font-weight: 600;
             letter-spacing: 0.02em;
             white-space: nowrap;
         }
         .wl-title {
             color: var(--text);
-            font-size: 0.77rem;
+            font-size: var(--fs-small);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -1281,7 +1503,7 @@ def inject_workspace_css():
         }
         .wl-org {
             color: var(--faint);
-            font-size: 0.7rem;
+            font-size: var(--fs-small);
             white-space: nowrap;
             text-align: right;
         }
@@ -1296,14 +1518,14 @@ def inject_workspace_css():
             border: 1px solid;
             border-radius: 0.3rem;
             font-family: var(--font-mono);
-            font-size: 0.6rem;
+            font-size: var(--fs-micro);
             letter-spacing: 0.08em;
             text-transform: uppercase;
         }
         .wd-title {
             font-family: var(--font-head);
             font-stretch: var(--head-stretch);
-            font-size: 1.45rem;
+            font-size: var(--fs-head);
             line-height: 1.18;
             letter-spacing: -0.018em;
             color: var(--text-bright);
@@ -1311,7 +1533,7 @@ def inject_workspace_css():
         }
         .wd-meta {
             margin-top: 0.4rem;
-            font-size: 0.74rem;
+            font-size: var(--fs-small);
             line-height: 1.5;
             color: var(--faint);
         }
@@ -1331,15 +1553,15 @@ def inject_workspace_css():
         }
         .wd-score {
             font-family: var(--font-mono);
-            font-size: 2.15rem;
+            font-size: var(--fs-score);
             font-weight: 600;
             line-height: 1;
             letter-spacing: -0.03em;
         }
-        .wd-score small { font-size: 0.8rem; margin-left: 0.08rem; opacity: 0.65; }
+        .wd-score small { font-size: var(--fs-small); margin-left: 0.08rem; opacity: 0.65; }
         .wd-gauge-lbl {
             font-family: var(--font-body);
-            font-size: 0.63rem;
+            font-size: var(--fs-micro);
             font-weight: 600;
             letter-spacing: 0.06em;
             text-transform: uppercase;
@@ -1370,14 +1592,14 @@ def inject_workspace_css():
             border-left: 2px solid var(--accent);
             background: var(--accent-soft);
             border-radius: 0 0.4rem 0.4rem 0;
-            font-size: 0.79rem;
+            font-size: var(--fs-small);
             line-height: 1.55;
             color: var(--text);
         }
 
         /* Opis: własne pole przewijania z wygaszeniem u dołu, żeby ucięcie
            tekstu wyglądało na zamierzone, a nie na przypadkowe. */
-        .wd-descwrap { position: relative; margin-top: 1.05rem; }
+        .wd-descwrap { position: relative; margin-top: 0.9rem; }
         .wd-descwrap::after {
             content: "";
             position: absolute;
@@ -1387,11 +1609,19 @@ def inject_workspace_css():
             background: linear-gradient(to bottom,
                         rgba(0, 0, 0, 0), var(--raised) 88%);
         }
+        /* Opis dostaje to, co zostaje w oknie, a nie sztywne 15,5 rem.
+           Reszta podglądu - tytuł, wynik, plakietki, nota i cała decyzja -
+           zajmuje stałe ~565 px plus 167 px górnej części strony; stąd 732.
+           Przy oknie 864 px opis ma 146 px, przy 1080 - 362. Sztywna wartość
+           wypychała panel 86 px poza ekran, a rozciąganie flexem sprawiało,
+           że opis wylewał się na sekcję "Decyzja" - łańcuch otoczek Streamlita
+           nie przenosi wysokości i procent liczył się od treści. */
         .wd-desc {
-            max-height: 15.5rem;
+            max-height: calc(100vh - 732px);
+            min-height: 6rem;
             overflow-y: auto;
             padding: 0 1rem 1.8rem 0;
-            font-size: 0.8rem;
+            font-size: var(--fs-small);
             line-height: 1.62;
             color: var(--muted);
         }
@@ -1402,7 +1632,7 @@ def inject_workspace_css():
         .wd-lead {
             margin: 0.85rem 0 0.4rem;
             color: var(--text);
-            font-size: 0.77rem;
+            font-size: var(--fs-small);
         }
         .wd-list { margin: 0 0 0.8rem; padding: 0; list-style: none; }
         .wd-list li {
@@ -1436,7 +1666,7 @@ def inject_workspace_css():
             border-radius: 0.4rem !important;
             color: var(--muted) !important;
             font-family: var(--font-body) !important;
-            font-size: 0.76rem !important;
+            font-size: var(--fs-small) !important;
             font-weight: 400 !important;
             letter-spacing: 0 !important;
             text-transform: none !important;
@@ -1467,22 +1697,100 @@ def inject_workspace_css():
         [class*="st-key-wshead"] button [data-testid="stIconMaterial"],
         [class*="st-key-wshead"] a [data-testid="stIconMaterial"],
         [class*="st-key-wstool"] button [data-testid="stIconMaterial"] {
-            font-size: 0.95rem !important;
+            font-size: var(--fs-body) !important;
             opacity: 0.75;
         }
 
-        /* Odrzucenie i usunięcie mają barwę konsekwencji, nie akcentu. */
-        [class*="st-key-ws_rej_"] button:hover,
+        /* ---------- rząd decyzji ----------
+           Cztery decyzje to nie cztery akcje - to jeden wybór stanu, w którym
+           tylko jedna opcja może być prawdziwa. Wcześniej wyglądały jak cztery
+           identyczne szare obwódki: nic nie mówiło, czym się różnią, a "Usuń"
+           pod spodem miał dokładnie ten sam fason co "Zapisz".
+
+           Każda dostaje więc swoją barwę - dokładnie tę, którą ten stan ma
+           już na plakietce w liście i na kropce przy wierszu (--slate,
+           --moss, --amber, --clay z ui_theme). Kolor nie jest tu ozdobą,
+           tylko tym samym kodem, którym reszta interfejsu opisuje stan. */
+        [class*="st-key-ws_save_"] button,
+        [class*="st-key-ws_app_"] button,
+        [class*="st-key-ws_asp_"] button,
+        [class*="st-key-ws_rej_"] button {
+            border-radius: 0.55rem !important;
+            padding: 0.44rem 0.85rem !important;
+            font-size: var(--fs-body) !important;
+            font-weight: 500 !important;
+            color: var(--text-bright) !important;
+            background: color-mix(in srgb, var(--barwa) 11%, transparent) !important;
+            border: 1px solid color-mix(in srgb, var(--barwa) 30%, transparent) !important;
+            transition: background-color .16s ease, border-color .16s ease,
+                        transform .12s ease;
+        }
+        [class*="st-key-ws_save_"] button:hover,
+        [class*="st-key-ws_app_"] button:hover,
+        [class*="st-key-ws_asp_"] button:hover,
+        [class*="st-key-ws_rej_"] button:hover {
+            background: color-mix(in srgb, var(--barwa) 20%, transparent) !important;
+            border-color: color-mix(in srgb, var(--barwa) 55%, transparent) !important;
+            /* Jeden piksel w górę - tyle, żeby kliknięcie miało odpowiedź,
+               i nie więcej, bo rząd czterech skaczących kafli to jarmark. */
+            transform: translateY(-1px);
+        }
+        [class*="st-key-ws_save_"] button:active,
+        [class*="st-key-ws_app_"] button:active,
+        [class*="st-key-ws_asp_"] button:active,
+        [class*="st-key-ws_rej_"] button:active { transform: translateY(0); }
+        /* Ikona w pełnej barwie stanu - to ona niesie znaczenie, napis je
+           tylko nazywa. Wcześniej obie były przygaszone do 0,75. */
+        [class*="st-key-ws_save_"] button [data-testid="stIconMaterial"],
+        [class*="st-key-ws_app_"] button [data-testid="stIconMaterial"],
+        [class*="st-key-ws_asp_"] button [data-testid="stIconMaterial"],
+        [class*="st-key-ws_rej_"] button [data-testid="stIconMaterial"] {
+            color: var(--barwa) !important;
+            opacity: 1 !important;
+            font-size: var(--fs-lead) !important;
+        }
+        /* "Ocen" nie jest decyzja - zapisuje samo dopasowanie i zostawia
+           oferte na liscie. Neutralny, ale w tych samych proporcjach co
+           cztery obok, zeby caly blok czytal sie jak jeden zestaw. */
+        [class*="st-key-ws_conf_"] button {
+            border-radius: 0.55rem !important;
+            padding: 0.44rem 0.85rem !important;
+            font-size: var(--fs-body) !important;
+            font-weight: 500 !important;
+            color: var(--text) !important;
+            border-color: var(--line) !important;
+        }
+        [class*="st-key-ws_conf_"] button:hover {
+            color: var(--text-bright) !important;
+            border-color: var(--accent-edge) !important;
+            background: var(--accent-soft) !important;
+        }
+
+        [class*="st-key-ws_save_"] { --barwa: var(--slate); }
+        [class*="st-key-ws_app_"]  { --barwa: var(--moss); }
+        [class*="st-key-ws_asp_"]  { --barwa: var(--amber); }
+        [class*="st-key-ws_rej_"]  { --barwa: var(--clay); }
+
+        /* Rząd drugoplanowy jest cichy z założenia: "Przywróć" i "Usuń" nie
+           są jedną z czterech decyzji, tylko cofnięciem i zniszczeniem.
+           Bez obrysu, dopiero pod kursorem pokazują, czym są. */
+        [class*="st-key-ws_rest_"] button,
+        [class*="st-key-ws_del_"] button {
+            border-color: transparent !important;
+            color: var(--faint) !important;
+        }
+        [class*="st-key-ws_rest_"] button:hover {
+            color: var(--text) !important;
+            border-color: var(--line) !important;
+            background: var(--accent-soft) !important;
+        }
+        /* Usunięcie i potwierdzenie usunięcia - barwa konsekwencji. */
         [class*="st-key-ws_del_"] button:hover,
         [class*="st-key-ws_delyes_"] button,
         [class*="st-key-wstool_recalc"] button:hover {
             color: var(--clay) !important;
             border-color: color-mix(in srgb, var(--clay) 45%, transparent) !important;
             background: color-mix(in srgb, var(--clay) 10%, transparent) !important;
-        }
-        [class*="st-key-ws_conf_"] button {
-            color: var(--accent) !important;
-            border-color: var(--accent-edge) !important;
         }
         /* Kroki pipeline'u to jedyne przyciski na pełną szerokość - są
            głównym działaniem swojej sekcji, nie jednym z czterech. */
@@ -1498,7 +1806,7 @@ def inject_workspace_css():
         }
         .wd-ratelbl {
             font-family: var(--font-body);
-            font-size: 0.63rem;
+            font-size: var(--fs-micro);
             font-weight: 600;
             letter-spacing: 0.06em;
             text-transform: uppercase;
@@ -1508,46 +1816,59 @@ def inject_workspace_css():
         [class*="st-key-wsactions"] [data-testid="stSliderTickBarMin"],
         [class*="st-key-wsactions"] [data-testid="stSliderTickBarMax"] { display: none; }
         [class*="st-key-wsactions"] [data-testid="stSlider"] { padding-top: 0; }
+        /* Suwak rozciagniety na cala szerokosc odsuwal "Ocen" o 400 px od
+           liczby, ktora ten przycisk zatwierdza - dwie polowy jednej
+           czynnosci na dwoch koncach panelu. Ograniczyc trzeba KONTENER
+           elementu (`flex: 1 1 120px` od Streamlita), bo to on jest
+           elastycznym dzieckiem rzedu; samo zwezenie widzetu w srodku
+           niczego nie przesuwa. */
+        [class*="st-key-wsactions"]
+            [data-testid="stElementContainer"]:has([data-testid="stSlider"]) {
+            flex: 0 1 18rem !important;
+        }
         [class*="st-key-wsactions"] [data-testid="stThumbValue"] {
             font-family: var(--font-mono);
-            font-size: 0.66rem;
+            font-size: var(--fs-micro);
             color: var(--accent);
         }
         [class*="st-key-wsactions"] > [data-testid="stVerticalBlock"] { gap: 0.5rem; }
 
         /* ---------- widoki narzędziowe w tym samym fasonie ---------- */
         .wx-step {
-            padding: 0.95rem 0 0.55rem;
+            padding: 0.7rem 0 0.45rem;
             border-top: 1px solid var(--line-soft);
         }
         .wx-step.is-first { border-top: 0; padding-top: 0.15rem; }
         .wx-num {
             font-family: var(--font-mono);
-            font-size: 0.64rem;
+            font-size: var(--fs-micro);
             letter-spacing: 0.1em;
             color: var(--accent);
             font-variant-numeric: tabular-nums;
         }
+        /* Krok pipeline'u to podsekcja, więc czyta się jak podsekcja: ten sam
+           stopień co "co się ostatnio działo" obok. Wcześniej brał --fs-lead
+           I rozszerzony krój, czyli był większy ORAZ mocniejszy niż "Pipeline"
+           nad nim - podrzędne wygrywało z nadrzędnym. */
         .wx-title {
             margin-top: 0.2rem;
             font-family: var(--font-head);
-            font-stretch: var(--head-stretch);
-            font-size: 1.08rem;
+            font-size: var(--fs-body);
             font-weight: 600;
             letter-spacing: -0.01em;
-            color: var(--text-bright);
+            color: var(--text);
         }
         .wx-desc {
-            margin-top: 0.35rem;
-            font-size: 0.77rem;
-            line-height: 1.55;
+            margin-top: 0.3rem;
+            font-size: var(--fs-small);
+            line-height: 1.45;
             color: var(--muted);
         }
         .wx-meta {
-            margin-top: 0.45rem;
+            margin-top: 0.35rem;
             font-family: var(--font-mono);
-            font-size: 0.63rem;
-            line-height: 1.55;
+            font-size: var(--fs-micro);
+            line-height: 1.4;
             color: var(--faint);
         }
         .wx-stat {
@@ -1558,25 +1879,74 @@ def inject_workspace_css():
             padding: 0.44rem 0.15rem;
             border-bottom: 1px solid rgba(255, 255, 255, 0.03);
         }
-        .wx-stat-lbl { font-size: 0.75rem; color: var(--muted); }
+        .wx-stat-lbl { font-size: var(--fs-small); color: var(--muted); }
         .wx-stat-val {
             font-family: var(--font-mono);
-            font-size: 0.85rem;
+            font-size: var(--fs-body);
             font-weight: 600;
             color: var(--text-bright);
         }
         .wx-stat-val.is-on { color: var(--accent); }
         .wx-stat-val.is-off { color: var(--clay); }
+        /* ---------- luki kompetencyjne ----------
+           Pasek jest tu miarą częstości, nie oceny, więc świadomie nie używa
+           palety wyników (zielony/żółty/czerwony): nic tu nie jest „dobre"
+           ani „złe", jedno jest tylko częstsze od drugiego. */
+        .wg-row {
+            display: grid;
+            grid-template-columns: 1.6rem minmax(0, 1fr) 6.5rem 2.2rem 2.6rem;
+            align-items: center;
+            column-gap: 0.75rem;
+            padding: 0.5rem 0.15rem;
+            border-bottom: 1px solid var(--line-soft);
+        }
+        .wg-rank {
+            font-family: var(--font-mono);
+            font-size: var(--fs-micro);
+            color: var(--faint);
+        }
+        .wg-name {
+            font-size: var(--fs-body);
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .wg-track {
+            height: 0.28rem;
+            border-radius: 0.14rem;
+            background: var(--line-soft);
+            overflow: hidden;
+        }
+        .wg-track i {
+            display: block;
+            height: 100%;
+            background: var(--accent-dim);
+            transform-origin: left center;
+        }
+        .wg-n, .wg-avg {
+            font-family: var(--font-mono);
+            font-size: var(--fs-small);
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .wg-n { color: var(--text); }
+        .wg-avg { color: var(--faint); }
+        .wg-row.is-fresh .wg-track i {
+            animation: ws-bar-grow .8s cubic-bezier(.16, 1, .3, 1) forwards;
+            animation-delay: calc(var(--i, 0) * 34ms + 130ms);
+        }
+
         .wx-file {
             font-family: var(--font-mono);
-            font-size: 0.72rem;
+            font-size: var(--fs-small);
             color: var(--text);
             word-break: break-all;
         }
         .wx-path {
             margin-top: 0.15rem;
             font-family: var(--font-mono);
-            font-size: 0.62rem;
+            font-size: var(--fs-micro);
             color: var(--faint);
             word-break: break-all;
         }
@@ -1599,6 +1969,7 @@ def inject_workspace_css():
         .wr-row.is-fresh,
         .wl-line.is-fresh,
         .wl-dec.is-fresh,
+        .wg-row.is-fresh,
         .wx-step.is-fresh {
             opacity: 0;
             animation: ws-row-in .44s cubic-bezier(.16, 1, .3, 1) forwards;
@@ -1638,8 +2009,8 @@ def inject_workspace_css():
         @media (max-width: 640px) {
             .wt-rail { gap: 1.1rem; }
             .wr-row { grid-template-columns: 1.3rem minmax(0, 1fr) 2.8rem; }
-            .wd-score { font-size: 1.75rem; }
-            .wd-title { font-size: 1.18rem; }
+            .wd-score { font-size: var(--fs-head); }
+            .wd-title { font-size: var(--fs-num); }
         }
         </style>
     """, unsafe_allow_html=True)
@@ -1649,7 +2020,7 @@ def inject_workspace_css():
 # =============================================================================
 
 WS_TABS = ["Dopasowane", "Wszystkie", "Ocenione", "Zapisane", "Aspiracyjne", "Odrzucone"]
-WS_TOOLS = ["Tablica", "Dodaj z linku", "Panel sterowania"]
+WS_TOOLS = ["Czego brakuje", "Dodaj z linku", "Panel sterowania"]
 WS_ALL = WS_TABS + WS_TOOLS
 
 WS_TAB_HINT = {
@@ -1659,7 +2030,7 @@ WS_TAB_HINT = {
     "Zapisane":   "zapisane oraz te, gdzie aplikacja już poszła",
     "Aspiracyjne": "za wysoko na teraz, ale w tę stronę celujesz",
     "Odrzucone":  "odrzucone - profil uczy się, czego nie chcesz",
-    "Tablica":    "oferty, w których coś się dzieje - po lewej etap i decyzje",
+    "Czego brakuje": "umiejętności, przez które odpadają oferty skądinąd dopasowane",
     "Dodaj z linku": "wklej adres oferty; po lewej podgląd tego, co wpadnie do bazy",
     "Panel sterowania": "po lewej stan danych, po prawej to, co go zmienia",
 }
@@ -1865,6 +2236,18 @@ def ws_render_rows(page_items, fresh, selected, rank=True):
                 st.rerun(scope="fragment")
 
 
+def _ws_search_toggle(open_: bool):
+    """Rozwija lupkę albo ją chowa; schowanie czyści frazę, żeby lista wróciła."""
+    st.session_state.ws_search_open = open_
+    if not open_:
+        st.session_state.ws_search = ""
+
+
+def _ws_page_step(page_key: str, delta: int, total: int):
+    """Przewija stronę o jedną w bok, nie wychodząc poza zakres."""
+    st.session_state[page_key] = max(1, min(total, st.session_state.get(page_key, 1) + delta))
+
+
 def ws_render_list_panel(tab):
     """Prawy panel w całości: pasek narzędzi, wiersze, stronicowanie."""
     search = st.session_state.get("ws_search", "") or ""
@@ -1875,16 +2258,57 @@ def ws_render_list_panel(tab):
     if st.session_state.get(page_key, 1) > total_pages:
         st.session_state[page_key] = total_pages
 
+    # Lupka rozsuwa się w polu tekstowym w tym samym miejscu nagłówka, zamiast
+    # otwierać drugi wiersz: pole stoi dokładnie tam, gdzie przed chwilą był
+    # przycisk, więc wzrok nie musi go szukać. Sam wjazd robi CSS (wg-search-in),
+    # bo Streamlit rysuje widget od nowa, a nie zmienia jego szerokość.
+    open_search = bool(st.session_state.get("ws_search_open") or search)
+    page = max(1, min(st.session_state.get(page_key, 1), total_pages))
+    st.session_state[page_key] = page
+
     with st.container(key="wslisthead"):
-        ws_panel_head("oferty", fmt_n(len(items)))
-        c1, c2 = st.columns([3, 1], vertical_alignment="center")
-        with c1:
-            st.text_input("Szukaj", key="ws_search", placeholder="Stanowisko lub firma…",
-                          label_visibility="collapsed")
-        with c2:
-            page = st.number_input("Strona", min_value=1, max_value=total_pages,
-                                   value=min(st.session_state.get(page_key, 1), total_pages),
-                                   key=page_key, label_visibility="collapsed")
+        with st.container(key="wslistbar", horizontal=True,
+                          vertical_alignment="center", gap="small"):
+            # Przy otwartym szukaniu licznik znika: miejsca w pasku starcza
+            # na tytuł ALBO na liczbę, a liczba i tak mówiłaby wtedy o wyniku
+            # szukania, nie o zakładce - czyli o czym innym niż podpis obok.
+            count_html = ('' if open_search else
+                          f'<div class="wp-count">{fmt_n(len(items))}</div>')
+            st.markdown(f'<div class="wp-headline"><div class="wp-label">oferty</div>'
+                        f'{count_html}</div>',
+                        unsafe_allow_html=True, width="stretch")
+
+            # Przełącznik przez on_click, nie przez zwracaną wartość: callback
+            # wykonuje się PRZED przebiegiem skryptu, więc pole pojawia się
+            # w tym samym kliknięciu. Odczytanie wyniku st.button wymagałoby
+            # jawnego st.rerun w środku rysowania nagłówka.
+            if open_search:
+                with st.container(key="wssearch", horizontal=True,
+                                  vertical_alignment="center", gap="small"):
+                    st.text_input("Szukaj", key="ws_search",
+                                  placeholder="Stanowisko lub firma…",
+                                  label_visibility="collapsed")
+                    st.button("", icon=":material/close:", key="ws_search_hide",
+                              help="Zamyka szukanie i czyści frazę",
+                              on_click=_ws_search_toggle, args=(False,))
+            else:
+                st.button("", icon=":material/search:", key="ws_search_show",
+                          help="Szukanie po stanowisku albo firmie",
+                          on_click=_ws_search_toggle, args=(True,))
+
+            # Stronicowanie strzałkami: pole liczbowe wymagało kliknięcia w
+            # mikroskopijne +/- albo wpisania numeru, czyli świadomej wiedzy,
+            # ile jest stron.
+            with st.container(key="wspager", horizontal=True,
+                              vertical_alignment="center", gap="small"):
+                st.button("", icon=":material/chevron_left:", key=f"ws_prev_{tab}",
+                          help="Poprzednia strona", disabled=page <= 1,
+                          on_click=_ws_page_step, args=(page_key, -1, total_pages))
+                st.markdown(f'<div class="wp-pager">{page}<span>/</span>'
+                            f'{total_pages}</div>', unsafe_allow_html=True)
+                st.button("", icon=":material/chevron_right:", key=f"ws_next_{tab}",
+                          help="Następna strona", disabled=page >= total_pages,
+                          on_click=_ws_page_step, args=(page_key, 1, total_pages))
 
     if not items:
         st.markdown('<div class="wp-empty">Nic tu nie ma. '
@@ -1902,14 +2326,13 @@ def ws_render_list_panel(tab):
     page_items = list(enumerate(items[start:start + PAGE_SIZE], start=start))
     ws_render_rows(page_items, fresh, st.session_state.get("ws_selected"))
 
-    if total_pages > 1:
-        st.markdown(f'<div class="wp-foot">strona {page} z {total_pages}</div>',
-                    unsafe_allow_html=True)
+    # Numer strony stoi w nagłówku panelu; powtórka na dole nie dokładała nic
+    # poza pasem, który odbierał wierszom wysokość.
 
 
 # --- lewy panel: log -------------------------------------------------------
 
-def ws_activity_rows(limit=9):
+def ws_activity_rows(limit=6):
     """
     Co się ostatnio działo, zebrane z tego, co faktycznie leży na dysku.
 
@@ -1957,6 +2380,8 @@ def ws_render_activity():
     """Lewy panel, gdy nic nie jest wybrane: log i ostatnie decyzje."""
     ws_panel_head("co się ostatnio działo")
 
+    # Szesc wpisow, nie dziewiec: przy oknie 1536x864 dziewiec wypychalo
+    # panel 108 px poza ekran, a log jest tu kontekstem, nie praca.
     rows = ws_activity_rows()
     if not rows:
         st.markdown('<div class="wp-empty">Pusto - nic jeszcze nie chodziło. '
@@ -1980,7 +2405,8 @@ def ws_render_activity():
 
     shown = 0
     for link in reversed(list(st.session_state.user_decisions.keys())):
-        if shown >= 9:
+        # Siedem, nie dziewiec - z tego samego powodu co log wyzej.
+        if shown >= 7:
             break
         status, rating = get_decision(link)
         color, label = _ws_status_dot(status)
@@ -1992,14 +2418,18 @@ def ws_render_activity():
         if status == 'rated' and rating:
             label = f"ocena {rating}/10"
 
+        # Prawa kolumna trzyma jedną rzecz - firmę, tak samo jak w liście ofert.
+        # Wcześniej wchodziła tu data, gdy decyzja miała stempel, więc w jednym
+        # miejscu raz stała firma, raz godzina i nic tego nie rozróżniało.
         raw = st.session_state.user_decisions.get(link)
         stamp = raw.get("decided_at") or raw.get("applied_at") if isinstance(raw, dict) else None
-        right = _esc(stamp) if stamp else _esc(getattr(job, "company", "") or "")
+        right = _esc(getattr(job, "company", "") or "")
+        stamp_attr = f' title="{_esc(stamp)}"' if stamp else ''
 
         row_key = f"wsdec_{hashlib.md5(link.encode()).hexdigest()[:12]}"
         with st.container(key=row_key):
             st.markdown(
-                f'<div class="wl-dec is-fresh" style="--i:{shown}">'
+                f'<div class="wl-dec is-fresh" style="--i:{shown}"{stamp_attr}>'
                 f'<span class="wl-badge" style="color:{color};border-color:{color}44">'
                 f'{_esc(label)}</span>'
                 f'<span class="wl-title">{_esc(job.title)}</span>'
@@ -2045,11 +2475,14 @@ def ws_render_detail(link, stage_ctl=False):
     # wysokości co nagłówek prawego panelu.
     with st.container(key="wshead", horizontal=True, vertical_alignment="center",
                       gap="small"):
-        st.markdown('<div class="wp-label">szczegóły oferty</div>',
+        # Ten sam blok, co w nagłówku listy ofert - .wp-headline centruje
+        # napis względem paska. Goły .wp-label wisiałby na górnej krawędzi.
+        st.markdown('<div class="wp-headline"><div class="wp-label">'
+                    'szczegóły oferty</div></div>',
                     unsafe_allow_html=True, width="stretch")
         st.link_button("Otwórz", job.link, icon=":material/open_in_new:",
                        help="Otwiera ofertę na portalu, w nowej karcie")
-        if st.button("Zamknij", icon=":material/close:", key="ws_close",
+        if st.button("", icon=":material/close:", key="ws_close",
                      help="Wraca do logu ostatnich zdarzeń"):
             st.session_state.ws_selected = None
             st.rerun(scope="fragment")
@@ -2235,55 +2668,102 @@ def ws_board_stages():
     return stages
 
 
-def ws_tool_board(left, right):
-    stages = ws_board_stages()
-    total = sum(len(v) for v in stages.values())
-    selected = st.session_state.get("ws_selected")
+def ws_gaps_data(threshold):
+    """
+    Braki policzone z ocen, które interfejs i tak trzyma w pamięci.
+
+    `skill_gaps.py` czyta te same dane z dysku - tutaj wchodzą gotowe obiekty
+    JobMatch, więc zamiast 36 MB JSON-a przy każdym przeładowaniu strony
+    przepisujemy je na kształt, którego oczekuje `collect`. Logika liczenia
+    zostaje jedna, w skill_gaps: dwie kopie rozjechałyby się po pierwszej
+    poprawce, a wtedy raport z konsoli i zakładka pokazywałyby co innego.
+    """
+    # Przepisanie 17 tys. ocen kosztuje ułamek sekundy, ale suwak progu wywołuje
+    # przeliczenie przy każdym drgnięciu - stąd pamięć na ostatni wynik.
+    sig = (threshold,) + _ws_fingerprint()
+    cache = st.session_state.setdefault("_ws_gap_cache", {})
+    if cache.get("sig") != sig:
+        entries = [
+            {
+                "job": {"link": m.job.link},
+                "match_percentage": m.match_percentage,
+                "missing_skills": m.missing_skills,
+                "learnable_in_month": m.learnable_in_month,
+            }
+            for m in st.session_state.analyzed_matches
+        ]
+        cache["sig"] = sig
+        cache["data"] = skill_gaps.collect(entries, threshold, skill_gaps.dismissed_links())
+    return cache["data"]
+
+
+def ws_tool_gaps(left, right):
+    threshold = st.session_state.get("ws_gap_threshold", 50)
+    gaps, considered, skipped = ws_gaps_data(threshold)
+    rows = skill_gaps.rank(gaps, 14)
 
     with right:
         with st.container(key="wsright"):
-            ws_panel_head("tablica", fmt_n(total))
-            if total == 0:
+            ws_panel_head("czego brakuje", fmt_n(len(gaps)))
+
+            if not rows:
                 st.markdown(
-                    '<div class="wp-note">Tablica jest pusta. Trafiają tu oferty '
-                    'oznaczone jako <em>Zapisz</em> albo <em>Wysłane</em> - a potem '
-                    'przesuwasz je między etapami, gdy dostaniesz odpowiedź. '
-                    'Odrzucone przy przeglądaniu tu nie wchodzą, mają własną '
-                    'zakładkę.</div>', unsafe_allow_html=True)
+                    '<div class="wp-note">Nic nad tym progiem. Obniż go po lewej '
+                    'albo poczekaj, aż pipeline oceni świeże oferty.</div>',
+                    unsafe_allow_html=True)
             else:
-                sig = f"tablica|{total}"
-                fresh = st.session_state.get("_ws_sig") != sig
-                st.session_state["_ws_sig"] = sig
-                i = 0
-                for key, label in WS_STAGE_NAMES.items():
-                    items = stages[key]
-                    if not items:
-                        continue
-                    st.markdown(f'<div class="wr-stage"><span>{_esc(label)}</span>'
-                                f'<span>{len(items)}</span></div>',
-                                unsafe_allow_html=True)
-                    ws_render_rows(list(enumerate(items, start=i)), fresh, selected,
-                                   rank=False)
-                    i += len(items)
+                top = rows[0]["count"]
+                out = []
+                for i, row in enumerate(rows):
+                    # Szerokość paska względem pierwszej pozycji, nie względem
+                    # liczby ofert - inaczej przy 18 trafieniach na 1240 ofert
+                    # wszystkie paski byłyby niewidoczną kreską.
+                    width = max(4, round(100 * row["count"] / top))
+                    out.append(
+                        f'<div class="wg-row is-fresh" style="--i:{min(i, 24)}">'
+                        f'<div class="wg-rank">{i + 1:02d}</div>'
+                        f'<div class="wg-name">{_esc(row["skill"])}</div>'
+                        f'<div class="wg-track"><i style="width:{width}%"></i></div>'
+                        f'<div class="wg-n">{row["count"]}</div>'
+                        f'<div class="wg-avg">{row["mean_match"]:.0f}%</div>'
+                        f'</div>'
+                    )
+                st.markdown("".join(out), unsafe_allow_html=True)
+                st.markdown('<div class="wp-foot">ile ofert &middot; '
+                            'średnie dopasowanie</div>', unsafe_allow_html=True)
 
     with left:
         with st.container(key="wsleft"):
-            on_board = any(job.link == selected
-                           for items in stages.values() for job, *_ in items)
-            if selected and on_board:
-                ws_render_detail(selected, stage_ctl=True)
-            else:
-                ws_panel_head("etapy")
-                for key, label in WS_STAGE_NAMES.items():
-                    n = len(stages[key])
-                    st.markdown(
-                        f'<div class="wx-stat"><span class="wx-stat-lbl">{_esc(label)}'
-                        f'</span><span class="wx-stat-val'
-                        f'{" is-off" if n == 0 else ""}">{n}</span></div>',
-                        unsafe_allow_html=True)
-                st.markdown('<div class="wp-hint">Kliknij ofertę z tablicy, żeby '
-                            'zobaczyć szczegóły i przestawić jej etap.</div>',
-                            unsafe_allow_html=True)
+            ws_panel_head("jak to czytać")
+            st.markdown(
+                '<div class="wp-note">Ranking mówi, w co aplikować dzisiaj. '
+                'To zestawienie odpowiada na inne pytanie: <em>czego się nauczyć, '
+                'żeby ranking miał z czego wybierać</em>. Liczy się tylko to, czego '
+                'zabrakło w ofertach, które poza tym pasowały.</div>',
+                unsafe_allow_html=True)
+
+            st.slider("Próg dopasowania", min_value=30, max_value=80, step=5,
+                      value=50, key="ws_gap_threshold", format="%d%%",
+                      help="Od jakiego dopasowania oferta wchodzi do zestawienia")
+
+            st.markdown(
+                f'<div class="wx-stat"><span class="wx-stat-lbl">ofert nad progiem'
+                f'</span><span class="wx-stat-val is-on">{fmt_n(considered)}</span></div>'
+                f'<div class="wx-stat"><span class="wx-stat-lbl">pominiętych jako '
+                f'odrzucone</span><span class="wx-stat-val'
+                f'{" is-off" if skipped == 0 else ""}">{fmt_n(skipped)}</span></div>'
+                f'<div class="wx-stat"><span class="wx-stat-lbl">różnych braków'
+                f'</span><span class="wx-stat-val">{fmt_n(len(gaps))}</span></div>',
+                unsafe_allow_html=True)
+
+            st.markdown(
+                '<div class="wp-hint">Próg ma znaczenie i dlatego nie da się go '
+                'pominąć. Bez niego na czoło wychodzi „wykształcenie medyczne” '
+                'i „uprawnienia SEP” - braki prawdziwe, tylko względem ofert, '
+                'których i tak nie tkniesz.<br><br>Odrzucone przez Ciebie oferty '
+                'nie wchodzą do rachunku: ich braki nie mówią nic o kierunku nauki, '
+                'bo tę drogę już świadomie odrzuciłeś.</div>',
+                unsafe_allow_html=True)
 
 
 def ws_tool_add(left, right):
@@ -2426,24 +2906,20 @@ def ws_save_manual_job(data):
 
 def ws_tool_pipeline(left, right):
     base = Path(__file__).parent
-    db_path = base / "jobs_database.json"
     analyzed_path = base / "analyzed_jobs_waterfall.json"
     profile_path = base / "preference_profile.json"
-    decisions_path = base / "user_decisions.json"
 
     # Liczymy na ZBIORACH linków, nie na długościach list. Poprzednia wersja
     # robiła `baza - oceny_AI - decyzje`, a decyzje dotyczą ofert, które już
     # mają ocenę AI - ta sama oferta była odejmowana dwa razy i "czeka na ocenę"
     # potrafiło pokazać 0 przy tysiącach nieprzeanalizowanych ofert.
-    db_links = _read_links(db_path)
-    analyzed_links = _read_links(analyzed_path, nested=True)
-    decided_links = set()
-    if decisions_path.exists():
-        try:
-            with open(decisions_path, "r", encoding="utf-8") as f:
-                decided_links = set(json.load(f).keys())
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Nie udało się odczytać decyzji: {e}")
+    # Te same dane siedza juz w pamieci sesji - wczytane raz przy starcie.
+    # Wczesniej kazde przeladowanie tej zakladki parsowalo 64 MB JSON-a
+    # z dysku (0,56 s zmierzone), zeby policzyc dlugosci trzech zbiorow.
+    # Po kroku pipeline'u UI i tak przeladowuje dane, wiec liczby sa swieze.
+    db_links = {canonical_link(j.link) for j in st.session_state.raw_jobs}
+    analyzed_links = {canonical_link(m.job.link) for m in st.session_state.analyzed_matches}
+    decided_links = {canonical_link(l) for l in st.session_state.user_decisions}
 
     db_count = len(db_links)
     analyzed_count = len(analyzed_links)
@@ -2493,7 +2969,7 @@ def ws_tool_pipeline(left, right):
                         f'{_esc(next_up)}</div>', unsafe_allow_html=True)
 
             ws_panel_head("co się ostatnio działo", mid=True)
-            rows = ws_activity_rows(limit=8)
+            rows = ws_activity_rows(limit=4)
             if not rows:
                 st.markdown('<div class="wp-empty">Nic jeszcze nie chodziło.</div>',
                             unsafe_allow_html=True)
@@ -2739,11 +3215,19 @@ def ws_render_env_keys():
 # --- pasek u gory i sklejenie calosci --------------------------------------
 
 def ws_render_topbar(active):
-    """Pasek u góry: marka, listwa liczb, zakładki."""
+    """Pasek u góry: marka, listwa liczb, lejek aplikacji, zakładki."""
     n_raw = len(st.session_state.raw_jobs)
     n_analyzed = len(st.session_state.analyzed_matches)
-    n_active = sum(1 for l in st.session_state.user_decisions
-                   if get_decision(l)[0] in ('apply', 'save'))
+
+    # Lejek stoi tutaj, a nie w osobnej zakładce: "Tablica" pokazywała te same
+    # oferty, które są w zakładkach obok, tylko pogrupowane - a jedyne, czego
+    # nie dało się odczytać skądinąd, to ile ich jest na którym etapie.
+    stages = ws_board_stages()
+    funnel = "".join(
+        f'<div class="wt-stage{"" if stages[key] else " is-off"}">'
+        f'<b>{len(stages[key])}</b><span>{_esc(label.lower())}</span></div>'
+        for key, label in WS_STAGE_NAMES.items()
+    )
 
     # Marka i liczby jednym blokiem: kolumny Streamlita mierzyly wlasna
     # wysokosc inaczej niz tresc i wlosowa kreska przechodzila przez cyfry.
@@ -2753,7 +3237,8 @@ def ws_render_topbar(active):
         f'<div class="wt-rail">'
         f'<div class="wt-item"><b>{fmt_n(n_raw)}</b><span>w bazie</span></div>'
         f'<div class="wt-item"><b>{fmt_n(n_analyzed)}</b><span>ocen AI</span></div>'
-        f'<div class="wt-item"><b>{fmt_n(n_active)}</b><span>zapisanych</span></div>'
+        f'<div class="wt-sep"></div>'
+        f'<div class="wt-funnel">{funnel}</div>'
         f'</div></div>',
         unsafe_allow_html=True
     )
@@ -2790,8 +3275,8 @@ def render_workspace():
     with st.container(key="wscols"):
         left, right = st.columns([1, 1.08], gap="medium")
 
-        if active == "Tablica":
-            ws_tool_board(left, right)
+        if active == "Czego brakuje":
+            ws_tool_gaps(left, right)
         elif active == "Dodaj z linku":
             ws_tool_add(left, right)
         elif active == "Panel sterowania":
@@ -2807,7 +3292,10 @@ def render_workspace():
                 with st.container(key="wsleft"):
                     selected = st.session_state.get("ws_selected")
                     if selected:
-                        ws_render_detail(selected)
+                        # Etap rekrutacji był wcześniej wyłącznie na Tablicy.
+                        # Sam pilnuje, żeby pokazać się tylko dla oferty,
+                        # która ma jakąkolwiek decyzję.
+                        ws_render_detail(selected, stage_ctl=True)
                     else:
                         ws_render_activity()
 

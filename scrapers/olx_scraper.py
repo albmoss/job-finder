@@ -8,14 +8,20 @@ te oferty wyłącznie po tytule.
 """
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
+import time
 from typing import List
-
-import requests
 
 from scrapers.base_scraper import BaseScraper
 from utils.data_models import Job
 from utils.olx_details import fetch_offer_details, normalize_olx_link
+
+# Odstep miedzy podstronami ofert. Zmierzone na 15 ofertach kazde:
+#   0,50 s -> 14 opisow, 0 blokad
+#   0,25 s -> 9 opisow, juz 1 blokada
+#   0,00 s -> 0 opisow, 15 blokad (portal odcina natychmiast)
+# Ponizej 0,5 s OLX zaczyna odmawiac takze przegladarce, wiec to nie jest
+# pokretlo do krecenia "dla szybkosci" - to granica, ktora portal wyznaczyl.
+OPIS_PRZERWA = 0.5
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +218,7 @@ class OLXScraper(BaseScraper):
 
     def enrich_descriptions(self, jobs: List[Job]) -> List[Job]:
         """
-        Dociągnij pełne opisy z podstron ofert (HTTP, bez przeglądarki).
+        Dociągnij pełne opisy z podstron ofert (przez przeglądarkę - patrz niżej).
         Oferty wygasłe są odrzucane - i tak nie da się na nie zaaplikować.
 
         Oferty, które są już w bazie, pomijamy w całości: `record_scrape` nie
@@ -238,41 +244,114 @@ class OLXScraper(BaseScraper):
             return []
 
         logger.info(f"OLX: fetching descriptions for {len(jobs)} offers...")
-        session = requests.Session()
-        stats = {"ok": 0, "expired": 0, "error": 0}
+        if not self.page:
+            logger.warning("OLX: brak otwartej przegladarki - pomijam opisy")
+            return jobs
 
-        def work(job: Job) -> Job:
-            result = fetch_offer_details(job.link, session=session)
+        from utils.olx_details import parse_offer_html
+        from utils.text_cleaner import clean_job_description
+
+        # Opisy ida przez przegladarke, nie przez `requests`: OLX odpowiada
+        # golemu klientowi 403 na kazdy adres, takze na strone glowna, i nie
+        # ratuja tego pelne naglowki - blokada siedzi nizej, na odcisku TLS.
+        # Skutkiem byly przebiegi typu "ok: 0, errors: 1272" konczace sie
+        # napisem "Successfully scraped", a w bazie 1819 ofert z zaslepka.
+        # Przegladarka wchodzi bez problemu; zeby nie placic za to czasem,
+        # odcinamy obrazy, media i czcionki - opis siedzi w HTML.
+        stats = {"ok": 0, "expired": 0, "error": 0, "blocked": 0}
+        page = self.page
+        try:
+            page.route(
+                "**/*",
+                lambda route: route.abort()
+                if route.request.resource_type in ("image", "media", "font")
+                else route.continue_(),
+            )
+        except Exception as e:
+            logger.debug(f"OLX: nie udalo sie odciac zasobow: {e}")
+
+        enriched = []
+        for job in jobs:
+            html, status_http = "", None
+            try:
+                resp = page.goto(job.link, wait_until="domcontentloaded",
+                                 timeout=self.timeout)
+                status_http = resp.status if resp else None
+                if status_http == 404:
+                    stats["expired"] += 1
+                    continue
+                if status_http == 403:
+                    # Osobny licznik, zeby blokada nie ginela w worku "error" -
+                    # to jedyny stan, ktory znaczy "przestalo dzialac w ogole".
+                    stats["blocked"] += 1
+                    continue
+                if status_http != 200:
+                    stats["error"] += 1
+                    enriched.append(job)
+                    continue
+                html = page.content()
+            except Exception as e:
+                logger.debug(f"OLX: {job.link} - {type(e).__name__}: {e}")
+                stats["error"] += 1
+                enriched.append(job)
+                continue
+
+            result = parse_offer_html(html)
             status = result.get("status")
-            stats[status if status in stats else "error"] += 1
-
             if status == "ok":
                 # Podmieniamy opis po utworzeniu obiektu, więc __post_init__
                 # (które czyści opis) już się nie wykona - czyścimy ręcznie
-                from utils.text_cleaner import clean_job_description
                 job.description = clean_job_description(result["description"])
                 if result.get("company"):
                     job.company = result["company"]
                 if result.get("posted_date"):
                     job.posted_date = result["posted_date"]
+                stats["ok"] += 1
+                enriched.append(job)
             elif status == "expired":
-                return None
-            return job
+                stats["expired"] += 1
+            else:
+                stats["error"] += 1
+                enriched.append(job)
+
+            time.sleep(OPIS_PRZERWA)
 
         try:
-            with ThreadPoolExecutor(max_workers=4) as ex:
-                enriched = [j for j in ex.map(work, jobs) if j is not None]
-        finally:
-            session.close()
+            page.unroute("**/*")
+        except Exception:
+            pass
 
+        self.enrich_stats = stats
         logger.info(
             f"OLX: descriptions fetched - ok: {stats['ok']}, expired (dropped): {stats['expired']}, "
-            f"errors: {stats['error']}"
+            f"errors: {stats['error']}, blocked (403): {stats['blocked']}"
         )
+        if stats["blocked"] and stats["ok"] == 0:
+            logger.error(
+                "OLX: kazde zapytanie o opis dostalo 403 - portal blokuje ten "
+                "sposob pobierania. Oferty ida do bazy z zaslepka."
+            )
         return enriched
 
     def get_job_description(self, job_url: str) -> str:
-        """Pojedynczy opis - używane przez ręczne dodawanie ofert."""
+        """
+        Pojedynczy opis - używane przez ręczne dodawanie ofert.
+
+        Przez przeglądarkę, jeśli jest otwarta; `fetch_offer_details` po
+        HTTP zostaje jako zapasowa droga, choć dziś OLX odpowiada na nią 403.
+        """
+        if self.page:
+            try:
+                from utils.olx_details import parse_offer_html
+                resp = self.page.goto(job_url, wait_until="domcontentloaded",
+                                      timeout=self.timeout)
+                if resp and resp.status == 200:
+                    result = parse_offer_html(self.page.content())
+                    if result.get("status") == "ok":
+                        return result.get("description", "")
+            except Exception as e:
+                logger.debug(f"OLX: pojedynczy opis przez przegladarke nie wyszedl: {e}")
+
         result = fetch_offer_details(job_url)
         return result.get("description", "") if result.get("status") == "ok" else ""
 

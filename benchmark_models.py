@@ -27,7 +27,8 @@ from google.genai import types
 from config import GEMINI_API_KEYS
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
-from waterfall_analysis import JobEval, build_active_learning_context, create_prompt, load_cv
+from waterfall_analysis import (BATCH_SIZE, JobEval, build_active_learning_context,
+                                create_prompt, load_cv)
 
 CANDIDATES = [
     "gemini-3.6-flash",
@@ -121,6 +122,38 @@ def run_model(model_name, api_key, prompt, expected_n):
         return {"ok": False, "elapsed": time.time() - started, "error": str(e)[:200]}
 
 
+def run_model_batched(model_name, api_key, jobs, cv, context, batch_size=BATCH_SIZE):
+    """
+    To samo co `run_model`, ale zbiorem podzielonym na paczki.
+
+    Caly zbior w jednym wywolaniu miesci sie dopoki jest maly: przy ~65 tys.
+    tokenow wyjscia i 60-90 tokenach na oferte odpowiedz urywa sie w polowie
+    JSON-a gdzies kolo 700-900 ofert, a wtedy `json.loads` rzuca i przepada
+    KOSZT CALEGO WEJSCIA - takze tych ofert, ktore model zdazyl ocenic.
+    Produkcyjna kaskada dzieli po `BATCH_SIZE` wlasnie z tego powodu; tutaj
+    dzielimy tak samo, zeby zbior testowy mogl rosnac razem z ocenami.
+
+    Identyfikatory w odpowiedzi sa lokalne dla paczki (`create_prompt`
+    numeruje od zera), wiec przy sklejaniu przesuwamy je o poczatek paczki.
+    """
+    items, elapsed, in_tok, out_tok = [], 0.0, 0, 0
+    for start in range(0, len(jobs), batch_size):
+        chunk = jobs[start:start + batch_size]
+        res = run_model(model_name, api_key, create_prompt(cv, chunk, context), len(chunk))
+        if not res["ok"]:
+            res["elapsed"] += elapsed
+            return res
+        for item in res["items"]:
+            i = item.get("id")
+            if isinstance(i, int) and 0 <= i < len(chunk):
+                items.append({**item, "id": start + i})
+        elapsed += res["elapsed"]
+        in_tok += res["in_tokens"] or 0
+        out_tok += res["out_tokens"] or 0
+    return {"ok": True, "elapsed": elapsed, "items": items, "returned": len(items),
+            "expected": len(jobs), "in_tokens": in_tok, "out_tokens": out_tok}
+
+
 def main():
     labeled = build_labeled_set()
     if len(labeled) < 15:
@@ -134,15 +167,16 @@ def main():
 
     cv = load_cv()
     context = build_active_learning_context(jobs)
-    prompt = create_prompt(cv, jobs, context)
-    print(f"Prompt: {len(prompt):,} characters\n")
+    paczek = (len(jobs) + BATCH_SIZE - 1) // BATCH_SIZE
+    print(f"Prompt: {len(create_prompt(cv, jobs[:BATCH_SIZE], context)):,} "
+          f"characters per batch, {paczek} batch(es)\n")
 
     results = {}
     for idx, model in enumerate(CANDIDATES):
         key = GEMINI_API_KEYS[idx % len(GEMINI_API_KEYS)]
         print(f"▶ {model} (klucz #{idx % len(GEMINI_API_KEYS)}) ...", flush=True)
 
-        res = run_model(model, key, prompt, len(jobs))
+        res = run_model_batched(model, key, jobs, cv, context)
 
         if not res["ok"]:
             print(f"   FAILED after {res['elapsed']:.0f}s: {res['error']}\n")
