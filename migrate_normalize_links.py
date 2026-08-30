@@ -48,8 +48,11 @@ def migrate_jobs():
         return
 
     by_link = {}
+    zmienione = 0
     for job in jobs:
         link = normalize(job.get("link", ""))
+        if link != job.get("link"):
+            zmienione += 1
         job["link"] = link
         prev = by_link.get(link)
         if prev is None or len(job.get("description") or "") > len(prev.get("description") or ""):
@@ -57,7 +60,11 @@ def migrate_jobs():
 
     merged = list(by_link.values())
     print(f"  {JOBS_DB}: {len(jobs)} -> {len(merged)} (scalono {len(jobs) - len(merged)})")
-    save_json_atomic(JOBS_DB, merged, backup=True)
+    # Zapis tylko przy realnej zmianie: przy juz znormalizowanej bazie
+    # ten etap przepisywal caly plik razem z kopia zapasowa, zeby
+    # odtworzyc go bajt w bajt.
+    if zmienione or len(merged) != len(jobs):
+        save_json_atomic(JOBS_DB, merged, backup=True)
 
 
 def migrate_analyzed():
@@ -67,9 +74,12 @@ def migrate_analyzed():
         return
 
     by_link = {}
+    zmienione = 0
     for item in data:
         job = item.get("job") or {}
         link = normalize(job.get("link", ""))
+        if link != job.get("link"):
+            zmienione += 1
         job["link"] = link
         # Przy duplikacie zostaw ten z dłuższym uzasadnieniem (zwykle pełniejsza analiza)
         prev = by_link.get(link)
@@ -78,7 +88,11 @@ def migrate_analyzed():
 
     merged = list(by_link.values())
     print(f"  {ANALYZED_DB}: {len(data)} -> {len(merged)} (scalono {len(data) - len(merged)})")
-    save_json_atomic(ANALYZED_DB, merged, backup=True)
+    # Zapis tylko przy realnej zmianie: przy juz znormalizowanej bazie
+    # ten etap przepisywal caly plik razem z kopia zapasowa, zeby
+    # odtworzyc go bajt w bajt.
+    if zmienione or len(merged) != len(data):
+        save_json_atomic(ANALYZED_DB, merged, backup=True)
 
 
 def migrate_decisions():

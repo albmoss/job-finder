@@ -209,7 +209,10 @@ Bądź krytyczny - lepiej odrzucić wątpliwe oferty niż zaproponować nieodpow
 UI_CONFIG = {
     "page_title": "Job Search Analytics",
     "page_icon": "💼",
-    "page_size": 25,
+    # Tyle ofert mieści się w prawym panelu, żeby kończył się na tej samej
+    # wysokości co lewy (log zdarzeń + ostatnie decyzje). Przy 25 prawa kolumna
+    # była dwa razy dłuższa od lewej i całe zestawienie się rozjeżdżało.
+    "page_size": 10,
     "match_color_thresholds": {
         "high": 70,  # od 70% zielony
         "medium": 40,  # 40-69% żółty

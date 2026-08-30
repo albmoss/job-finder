@@ -248,6 +248,127 @@ def test_record_scrape(tmp_name="_test_record_scrape.json"):
                 stale.unlink()
 
 
+def test_scraper_health():
+    print("\n[9] Silent scraper failure")
+    from utils import scraper_health as health
+
+    history = [{"date": "2026-08-1%d" % i, "count": c}
+               for i, c in enumerate([1200, 1100, 1250, 1180, 1300])]
+    ok_job = {"title": "Kucharz", "company": "Bar Mleczny",
+              "description": "opis", "link": "https://praca.pl/of/1"}
+
+    check("zero results after a productive history is a failure",
+          health.check("praca.pl", 0, history=history)["verdict"] == "broken")
+    check("a run far below the median is flagged",
+          health.check("praca.pl", 12, jobs=[ok_job], history=history)["verdict"] == "weak")
+    check("a healthy run says nothing",
+          health.check("praca.pl", 1200, jobs=[ok_job] * 3, history=history,
+                       domain="praca.pl") is None)
+    check("a young source is not judged against a median it has not got",
+          health.check("nowy.pl", 3, jobs=[ok_job], history=history[:2]) is None)
+
+    empty_company = dict(ok_job, company="")
+    check("an empty field in every record is a broken parser",
+          health.check("praca.pl", 200, jobs=[empty_company] * 3)["verdict"] == "degraded")
+    check("a single record without a company is not",
+          health.check("praca.pl", 1200, jobs=[ok_job, ok_job, empty_company],
+                       history=history) is None)
+    check("undecoded entities in the title are caught",
+          "HTML" in health.check("praca.pl", 200,
+                                 jobs=[dict(ok_job, title="Kucharz &amp; pomoc")] * 3)["detail"])
+    check("links leaving the portal's domain are caught",
+          health.check("praca.pl", 200, jobs=[dict(ok_job, link="https://reklama.example/x")] * 3,
+                       domain="praca.pl")["verdict"] == "degraded")
+
+    check("a rate limit is never read as breakage",
+          health.check("Indeed", 0, error="HTTP 429 Too Many Requests")["verdict"] == "inconclusive")
+    check("a parser exception is",
+          health.check("Indeed", 0, error="AttributeError: NoneType")["verdict"] == "broken")
+
+    check("a healthy run produces no report at all",
+          health.format_report([]) == "")
+    check("a source skipped on purpose is still reported",
+          "Adzuna" in health.format_report([], skipped_no_key=["Adzuna"]))
+
+    check("dociaganie opisow bez ani jednego opisu to awaria",
+          (health.check("OLX Praca", 1272,
+                        enrich={"ok": 0, "expired": 0, "error": 0, "blocked": 1272}) or {})
+          .get("verdict") == "broken")
+    check("403 na wszystkich podstronach jest nazwane wprost",
+          "403" in (health.check("OLX Praca", 1272,
+                                 enrich={"ok": 0, "expired": 0, "error": 0, "blocked": 9}) or {})
+          .get("detail", ""))
+    check("czesc opisow pobrana - to nie awaria",
+          health.check("OLX Praca", 1272,
+                       enrich={"ok": 900, "expired": 10, "error": 362, "blocked": 0}) is None)
+    check("brak statystyk opisow niczego nie psuje",
+          health.check("OLX Praca", 1272, enrich=None) is None)
+
+
+def test_idempotent_writes(tmp_name="_test_idempotent.json"):
+    """
+    Etapy bazodanowe nie przepisują pliku, gdy nie mają czego zmienić.
+
+    Przed poprawką `clean_db`, `migrate_normalize_links` i `deduplicate_db`
+    zapisywały oba pliki (63,7 MB) razem z kopią zapasową przy KAŻDYM
+    przebiegu, także wtedy, gdy liczba zmian wynosiła zero - czyli ~380 MB
+    ruchu na dysku po to, żeby odtworzyć pliki bajt w bajt.
+    """
+    print("\n[10] Zapis tylko przy realnej zmianie")
+    import clean_db
+    import deduplicate_db
+    import migrate_normalize_links as migrate
+
+    path = ROOT / tmp_name
+    bdir = ROOT / "backups"
+
+    def kopie():
+        return len(list(bdir.glob(f"{tmp_name}.*.bak"))) if bdir.exists() else 0
+
+    # Rekordy już czyste i już znormalizowane - nie ma czego poprawiać.
+    czyste = [{"link": "https://a.pl/of/1", "title": "A", "company": "F",
+               "location": "Warszawa", "description": "Opis oferty bez smieci."},
+              {"link": "https://a.pl/of/2", "title": "B", "company": "G",
+               "location": "Kraków", "description": "Drugi opis, tez czysty."}]
+    try:
+        save_json_atomic(path, czyste)
+        przed = kopie()
+
+        clean_db.reduce_file(path)
+        check("clean_db nie przepisuje juz czystego pliku", kopie() == przed,
+              f"kopii przybylo: {kopie() - przed}")
+
+        stare_jobs = migrate.JOBS_DB
+        migrate.JOBS_DB = str(path)
+        try:
+            migrate.migrate_jobs()
+        finally:
+            migrate.JOBS_DB = stare_jobs
+        check("migrate nie przepisuje znormalizowanych linkow", kopie() == przed,
+              f"kopii przybylo: {kopie() - przed}")
+
+        keep = {canonical_link(j["link"]) for j in czyste}
+        deduplicate_db._apply(path, False, keep, {}, set())
+        check("deduplicate nie przepisuje pliku bez duplikatow", kopie() == przed,
+              f"kopii przybylo: {kopie() - przed}")
+
+        # A gdy zmiana JEST, zapis ma nastąpić.
+        brudne = list(czyste) + [{"link": "https://a.pl/of/1?utm_source=x", "title": "A",
+                                  "company": "F", "location": "Warszawa",
+                                  "description": "Duplikat tej samej oferty."}]
+        save_json_atomic(path, brudne)
+        przed = kopie()
+        deduplicate_db._apply(path, False, keep, {}, set())
+        check("deduplicate zapisuje, gdy duplikat faktycznie jest", kopie() > przed)
+        check("duplikat zniknal z pliku", len(load_json_safe(path, default=[])) == 2)
+    finally:
+        for f in (path, Path(str(path) + ".tmp")):
+            if f.exists():
+                f.unlink()
+        if bdir.exists():
+            for stale in bdir.glob(f"{tmp_name}.*.bak"):
+                stale.unlink()
+
 def main():
     print("=" * 62)
     print("  INTEGRATION TESTS (no API calls)")
@@ -255,7 +376,8 @@ def main():
 
     for test in (test_canonical_link, test_text_cleaning, test_stale_detection,
                  test_safe_io, test_data_consistency, test_model_rotation,
-                 test_api_keys_configured, test_record_scrape):
+                 test_api_keys_configured, test_record_scrape, test_scraper_health,
+                 test_idempotent_writes):
         try:
             test()
         except Exception as e:

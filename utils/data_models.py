@@ -296,13 +296,44 @@ class ScraperStatusManager:
         now = datetime.now()
         with self._lock:
             data = self._read()
-            data[source_name] = {
+            entry = data.get(source_name, {})
+            entry.update({
                 'last_run_date': now.date().isoformat(),
                 'status': 'success',
                 'jobs_count': jobs_count,
                 'timestamp': now.isoformat(),
-            }
+            })
+            data[source_name] = entry
             self._write(data)
+
+    def record_yield(self, source_name: str, jobs_count: int):
+        """
+        Dopisz wynik przebiegu do historii źródła.
+
+        Osobno od mark_as_completed, bo tamto odnotowuje TYLKO przebiegi powyżej
+        progu - a przebieg, który przyniósł zero ofert, jest dokładnie tym, co
+        chcemy zapamiętać. Bez tego awaria nie zostawia po sobie żadnego śladu.
+
+        Historia jest polem dokładanym: wpisy sprzed jej wprowadzenia go nie mają
+        i nie uzupełniamy ich wstecz - liczby z tamtych przebiegów nie istnieją,
+        a zmyślone popsułyby medianę, na której stoi cała diagnoza.
+        """
+        from datetime import datetime
+        from utils.scraper_health import HISTORY_LEN
+
+        now = datetime.now()
+        with self._lock:
+            data = self._read()
+            entry = data.setdefault(source_name, {})
+            history = entry.get('history') or []
+            history.append({'date': now.date().isoformat(), 'count': jobs_count})
+            entry['history'] = history[-HISTORY_LEN:]
+            self._write(data)
+
+    def get_history(self, source_name: str) -> list:
+        """Ostatnie przebiegi źródła; pusta lista, gdy nic o nim nie wiemy."""
+        with self._lock:
+            return (self._read().get(source_name, {}) or {}).get('history') or []
 
     # --- jedyne miejsce dotykające pliku -------------------------------------
 

@@ -160,11 +160,15 @@ def run_all_scrapers(only=None, force=False, refresh=False):
         (JoobleAPIScraper, ("jooble_api_key",)),
         (CareerjetAPIScraper, ("careerjet_api_key",)),
     ]
+    # Źródła pominięte z braku klucza trafiają do raportu na końcu przebiegu:
+    # świadoma rezygnacja i awaria portalu wyglądają w logu tak samo - brakiem ofert.
+    skipped_no_key = []
     for scraper_cls, required_keys in optional_scrapers:
         if all(scraper_config.get(k) for k in required_keys):
             api_scrapers.append(scraper_cls(scraper_config))
             logger.info(f"Enabled optional scraper: {scraper_cls.__name__}")
         else:
+            skipped_no_key.append(scraper_cls.__name__.replace("APIScraper", ""))
             logger.debug(f"Skipped {scraper_cls.__name__} - missing keys: {', '.join(required_keys)}")
 
     # === Etap 2: scrapery przeglądarkowe - wolniejsze, wymagają Playwrighta ===
@@ -184,10 +188,14 @@ def run_all_scrapers(only=None, force=False, refresh=False):
         name for name, key in SOURCE_CONFIG_KEYS.items()
         if scraper_config.get(key, {}).get("enabled", True) is False
     }
+    # Do raportu trafiają tylko te, których faktycznie nie uruchomiono; przy --only
+    # wyłączenie z konfiguracji nie obowiązuje i wypisanie go byłoby nieprawdą.
+    disabled_reported = []
     if disabled and not only:
         skipped = [s for s in api_scrapers + browser_scrapers
                    if s.get_source_name() in disabled]
         if skipped:
+            disabled_reported = sorted(s.get_source_name() for s in skipped)
             api_scrapers = [s for s in api_scrapers if s.get_source_name() not in disabled]
             browser_scrapers = [s for s in browser_scrapers if s.get_source_name() not in disabled]
             logger.info(
@@ -247,6 +255,14 @@ def run_all_scrapers(only=None, force=False, refresh=False):
             # Za sukces uznajemy dopiero sensowną liczbę ofert, nie sam brak wyjątku
             MIN_JOBS_THRESHOLD = 5
             
+            # Normę tego źródła czytamy PRZED dopisaniem dzisiejszego wyniku -
+            # inaczej chudy przebieg sam sobie obniża medianę, z którą go
+            # porównujemy, i przy kilku takich pod rząd awaria staje się normą.
+            history_before = status_manager.get_history(source_name)
+            # Historia idzie do pliku ZAWSZE, także przy zerze - to właśnie zero
+            # jest wpisem, którego szuka później diagnoza (utils/scraper_health.py).
+            status_manager.record_yield(source_name, len(jobs))
+
             if len(jobs) >= MIN_JOBS_THRESHOLD:
                 status_manager.mark_as_completed(source_name, len(jobs))
                 logger.info(f"✓ {source_name}: Scrape COMPLETE (Threshold {MIN_JOBS_THRESHOLD} met)")
@@ -259,7 +275,8 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 'source': source_name,
                 'success': True,
                 'jobs': jobs,
-                'status': 'scraped'
+                'status': 'scraped',
+                'history_before': history_before,
             }
             
         except Exception as e:
@@ -303,6 +320,11 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                     'success': True,
                     'jobs_count': len(new_jobs),
                     'status': result['status'],
+                    # Próbka wystarczy: objawy, których szukamy, dotyczą całych
+                    # pól naraz, więc widać je na pięćdziesięciu rekordach tak
+                    # samo dobrze jak na pięciu tysiącach.
+                    'sample': new_jobs[:50],
+                    'history_before': result.get('history_before') or [],
                 }
 
                 # Zapis przyrostowy - przerwany przebieg nie traci tego, co zebrał.
@@ -310,6 +332,16 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 # mamy), idą jednym zapisem: bez odnotowania tych drugich sygnał
                 # "wisi od X dni" nigdy by nie ruszył.
                 seen_again = getattr(scraper, "seen_again_links", None) or ()
+                # Źródło, które pobrało zero NOWYCH ofert, ale rozpoznało setki
+                # znanych, działa poprawnie - po prostu nic nowego nie wisi.
+                # Bez tej liczby diagnoza uznałaby je za martwe.
+                scraper_results[source]['also_seen'] = len(seen_again)
+                # Statystyki dociagania opisow. Bez nich przebieg, w ktorym
+                # KAZDA podstrona odmowila, konczyl sie napisem "Successfully
+                # scraped" - liczba ofert byla w porzadku, bo braklo tylko
+                # tresci. Tak przez tydzien wchodzilo do bazy 1272 ofert
+                # z zaslepka zamiast opisu.
+                scraper_results[source]['enrich'] = getattr(scraper, "enrich_stats", None)
                 if new_jobs or seen_again:
                     added, touched = db.record_scrape(new_jobs, seen_again)
                     logger.info(f"{source}: saved {added} new offers, "
@@ -345,8 +377,49 @@ def run_all_scrapers(only=None, force=False, refresh=False):
     
     print(f"\nJobs database: {JOBS_DATABASE_PATH}")
     print("="*60)
-    
+
+    _report_health(scraper_results, db, skipped_no_key, disabled_reported)
+
     return all_jobs
+
+
+def _report_health(scraper_results, db, skipped_no_key, disabled):
+    """
+    Diagnoza źródeł na podstawie tego, co przebieg już ma - bez dodatkowych zapytań.
+
+    Wynik idzie na stdout razem z podsumowaniem, a nie do logu: log czyta się po
+    awarii, a o cichej awarii trzeba się dowiedzieć, zanim się jej poszuka.
+    """
+    from utils import scraper_health
+
+    known_jobs = db.load_jobs()
+    findings = []
+
+    for source, result in scraper_results.items():
+        if result.get('status') == 'skipped':
+            continue  # nie było przebiegu, nie ma czego oceniać
+
+        if not result.get('success'):
+            finding = scraper_health.check(source, 0, error=result.get('error', ''))
+        else:
+            count = result.get('jobs_count', 0)
+            if count == 0 and result.get('also_seen'):
+                continue  # portal odpowiedział, tyle że samymi znanymi ofertami
+            finding = scraper_health.check(
+                source,
+                count,
+                jobs=result.get('sample', ()),
+                history=result.get('history_before', ()),
+                domain=scraper_health.expected_domain(known_jobs, source),
+                enrich=result.get('enrich'),
+            )
+
+        if finding:
+            findings.append(finding)
+
+    report = scraper_health.format_report(findings, skipped_no_key, disabled)
+    if report:
+        print(report)
 
 
 if __name__ == "__main__":

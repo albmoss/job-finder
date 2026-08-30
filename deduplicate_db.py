@@ -128,11 +128,14 @@ def _decided_links() -> set:
     return {canonical_link(k) for k in decisions}
 
 
-def _merge_provenance(winner: dict, losers: list) -> None:
+def _merge_provenance(winner: dict, losers: list) -> bool:
     """
     Dopisz do zachowanego rekordu, gdzie jeszcze wisi ta sama oferta.
     Scala się z tym, co już tam było - deduplikacja bywa uruchamiana wielokrotnie
     i wcześniejsze wystąpienia nie mogą wyparować.
+
+    Zwraca True, gdy rekord faktycznie się zmienił - `_apply` po tym poznaje,
+    czy plik trzeba w ogóle przepisać.
     """
     entries = list(winner.get("also_on") or [])
     seen = {e.get("link") for e in entries if isinstance(e, dict)}
@@ -151,7 +154,11 @@ def _merge_provenance(winner: dict, losers: list) -> None:
                 seen.add(nlink)
                 entries.append(nested)
 
-    winner["also_on"] = entries or None
+    nowe = entries or None
+    if nowe == winner.get("also_on") and "also_on" in winner:
+        return False
+    winner["also_on"] = nowe
+    return True
 
 
 def _plan(all_jobs: dict, decided: set) -> tuple:
@@ -228,7 +235,7 @@ def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: 
         return item["job"] if is_analyzed else item
 
     initial = len(data)
-    final, seen_links, nan_fixed = [], set(), 0
+    final, seen_links, nan_fixed, scalone = [], set(), 0, 0
 
     for item in data:
         job = job_of(item)
@@ -240,8 +247,8 @@ def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: 
         seen_links.add(link)
 
         extra = provenance.get(link)
-        if extra:
-            _merge_provenance(job, extra)
+        if extra and _merge_provenance(job, extra):
+            scalone += 1
         final.append(item)
 
     # Sanity check: żadna oceniona oferta nie mogła zniknąć
@@ -257,8 +264,14 @@ def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: 
     if nan_fixed:
         logger.info(f"   {path.name}: fixed {nan_fixed} NaN fields (invalid JSON) -> null")
 
-    save_json_atomic(path, final, backup=True)
-    logger.info(f"{path.name}: {initial} -> {len(final)} (removed {initial - len(final)})")
+    # Zapis tylko przy realnej zmianie. Przy bazie bez duplikatow ten etap
+    # przepisywal caly plik razem z kopia zapasowa, zeby odtworzyc go bajt
+    # w bajt - a rotacja i tak kasowala te kopie w tym samym przebiegu.
+    if len(final) != initial or nan_fixed or scalone:
+        save_json_atomic(path, final, backup=True)
+        logger.info(f"{path.name}: {initial} -> {len(final)} (removed {initial - len(final)})")
+    else:
+        logger.info(f"{path.name}: {initial} ofert, brak duplikatow - plik bez zmian")
 
 
 def deduplicate_file(filepath, is_analyzed=False):
