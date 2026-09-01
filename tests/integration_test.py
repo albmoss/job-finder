@@ -461,6 +461,46 @@ def test_olx_tempo_przy_blokadzie():
           wejscia < 40, f"wejsc: {wejscia}")
 
 
+
+def test_zdjete_z_portalu():
+    """
+    Oferta pominięta przez najnowszy przebieg swojego źródła jest zdjęta.
+
+    `purge_stale_offers` patrzy wyłącznie na wiek, więc oferta zdjęta z portalu
+    trzy dni po zescrapowaniu zostawała w bazie razem ze swoją oceną. 1 września
+    2026 połowa pierwszej dziesiątki „Dopasowanych" była martwa. Sprawdzone
+    wtedy na dwóch portalach: 18 z 18 ofert pominiętych przez ostatni przebieg
+    było zdjętych, 18 z 18 widzianych - żywych.
+    """
+    print(chr(10) + "[12] Oferty zdjete z portalu")
+
+    from utils.liveness import zdjete_z_portalu, dni_scrapowania
+
+    baza = [
+        {"link": "a", "source": "X", "last_seen": "2026-09-01T10:00:00"},
+        {"link": "b", "source": "X", "last_seen": "2026-08-23T10:00:00"},
+        {"link": "c", "source": "X", "last_seen": None},
+        {"link": "d", "source": "Y", "last_seen": "2026-08-23T10:00:00"},
+        {"link": "e", "source": "Z", "last_seen": None},
+    ]
+    zdjete = zdjete_z_portalu(baza)
+
+    check("oferta z ostatniego przebiegu zostaje", "a" not in zdjete)
+    check("oferta pominieta przez nowszy przebieg jest zdjeta", "b" in zdjete)
+    check("brak last_seen przy historii zrodla tez liczy sie jako zdjeta",
+          "c" in zdjete)
+    check("zrodlo z jednym przebiegiem nie kasuje wlasnych ofert",
+          "d" not in zdjete, "Y ma tylko 2026-08-23")
+    check("zrodlo bez ani jednego stempla nie da sie ocenic",
+          "e" not in zdjete)
+
+    dni = dni_scrapowania(baza)
+    check("dni scrapowania czytane z ofert, nie z historii scrapera",
+          dni["X"] == {"2026-09-01", "2026-08-23"} and dni["Y"] == {"2026-08-23"},
+          str(dict(dni)))
+    check("zrodlo bez stempli nie ma wpisu", "Z" not in dni)
+
+
 def main():
     print("=" * 62)
     print("  INTEGRATION TESTS (no API calls)")
@@ -469,7 +509,8 @@ def main():
     for test in (test_canonical_link, test_text_cleaning, test_stale_detection,
                  test_safe_io, test_data_consistency, test_model_rotation,
                  test_api_keys_configured, test_record_scrape, test_scraper_health,
-                 test_idempotent_writes, test_olx_tempo_przy_blokadzie):
+                 test_idempotent_writes, test_olx_tempo_przy_blokadzie,
+                 test_zdjete_z_portalu):
         try:
             test()
         except Exception as e:
