@@ -22,6 +22,11 @@ from utils.olx_details import fetch_offer_details, normalize_olx_link
 # Ponizej 0,5 s OLX zaczyna odmawiac takze przegladarce, wiec to nie jest
 # pokretlo do krecenia "dla szybkosci" - to granica, ktora portal wyznaczyl.
 OPIS_PRZERWA = 0.5
+# Po blokadzie odstep rosnie geometrycznie; po BLOKADY_LIMIT z rzedu
+# przerywamy dociaganie, bo kazde kolejne wejscie tylko pograza sesje.
+BLOKADA_MNOZNIK = 2.0
+BLOKADA_SUFIT = 8.0
+BLOKADY_LIMIT = 12
 
 logger = logging.getLogger(__name__)
 
@@ -271,7 +276,16 @@ class OLXScraper(BaseScraper):
             logger.debug(f"OLX: nie udalo sie odciac zasobow: {e}")
 
         enriched = []
-        for job in jobs:
+        przerwa = OPIS_PRZERWA
+        blokady_z_rzedu = 0
+        for nr, job in enumerate(jobs):
+            # Odstep PRZED wejsciem, nie po udanym: wczesniej `time.sleep` stal
+            # na koncu petli, za wszystkimi `continue`, wiec przy 403 byl
+            # pomijany. Pierwsza blokada kasowala odstep, kolejne wejscia szly
+            # 20 razy na sekunde i blokada sie utrwalala - przebieg z 1 wrzesnia
+            # 2026 zrobil 1164 zapytania w 58 s i skonczyl na 1137 blokadach.
+            if nr:
+                time.sleep(przerwa)
             html, status_http = "", None
             try:
                 resp = page.goto(job.link, wait_until="domcontentloaded",
@@ -284,6 +298,14 @@ class OLXScraper(BaseScraper):
                     # Osobny licznik, zeby blokada nie ginela w worku "error" -
                     # to jedyny stan, ktory znaczy "przestalo dzialac w ogole".
                     stats["blocked"] += 1
+                    blokady_z_rzedu += 1
+                    przerwa = min(przerwa * BLOKADA_MNOZNIK, BLOKADA_SUFIT)
+                    if blokady_z_rzedu >= BLOKADY_LIMIT:
+                        logger.warning(
+                            f"OLX: {blokady_z_rzedu} blokad z rzedu - przerywam "
+                            f"dociaganie opisow po {nr + 1} z {len(jobs)} ofert"
+                        )
+                        break
                     continue
                 if status_http != 200:
                     stats["error"] += 1
@@ -307,14 +329,14 @@ class OLXScraper(BaseScraper):
                 if result.get("posted_date"):
                     job.posted_date = result["posted_date"]
                 stats["ok"] += 1
+                blokady_z_rzedu = 0
+                przerwa = OPIS_PRZERWA
                 enriched.append(job)
             elif status == "expired":
                 stats["expired"] += 1
             else:
                 stats["error"] += 1
                 enriched.append(job)
-
-            time.sleep(OPIS_PRZERWA)
 
         try:
             page.unroute("**/*")

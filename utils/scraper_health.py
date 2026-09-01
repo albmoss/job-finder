@@ -153,6 +153,11 @@ def error_verdict(error: str) -> tuple[str, str]:
     return "broken", f"wyjątek: {error[:120]}"
 
 
+# Udział blokad, powyżej którego dociąganie opisów uznajemy za zepsute,
+# nawet jeśli część opisów wróciła.
+BLOKADY_PROG = 0.5
+
+
 def enrich_verdict(enrich) -> str | None:
     """
     Dociaganie opisow, ktore nie przyniosło ani jednego opisu, to awaria -
@@ -165,12 +170,21 @@ def enrich_verdict(enrich) -> str | None:
     if not isinstance(enrich, dict):
         return None
     ok = enrich.get("ok", 0)
-    proby = ok + enrich.get("error", 0) + enrich.get("blocked", 0)
-    if proby == 0 or ok:
+    blocked = enrich.get("blocked", 0)
+    proby = ok + enrich.get("error", 0) + blocked
+    if proby == 0:
         return None
-    if enrich.get("blocked"):
-        return f"portal odrzucił wszystkie {proby} zapytań o opis (403)"
-    return f"żadne z {proby} zapytań o opis nie zwróciło treści"
+    if not ok:
+        if blocked:
+            return f"portal odrzucił wszystkie {proby} zapytań o opis (403)"
+        return f"żadne z {proby} zapytań o opis nie zwróciło treści"
+    # Sam fakt, że COKOLWIEK wróciło, nie znaczy, że dociąganie działa.
+    # Przebieg z 1 września 2026 miał ok: 24 przy blocked: 1137 i nie dostał
+    # ani jednej linijki w raporcie, bo warunek pytał wyłącznie o zero.
+    if blocked / proby >= BLOKADY_PROG:
+        return (f"portal odrzucił {blocked} z {proby} zapytań o opis (403) - "
+                f"opisy wróciły tylko dla {ok}")
+    return None
 
 
 def check(source_name: str, count: int, jobs=(), history=(), error=None,
