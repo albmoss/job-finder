@@ -304,6 +304,21 @@ def test_scraper_health():
     check("brak statystyk opisow niczego nie psuje",
           health.check("OLX Praca", 1272, enrich=None) is None)
 
+    # Warunek pytal wylacznie o zero, wiec 24 opisy na 1137 blokad przechodzily
+    # bez jednej linijki w raporcie - dokladnie ta cicha awaria, przed ktora
+    # ten modul mial chronic.
+    check("przewaga blokad to awaria, nawet gdy czesc opisow wrocila",
+          (health.check("OLX Praca", 1338,
+                        enrich={"ok": 24, "expired": 0, "error": 3, "blocked": 1137}) or {})
+          .get("verdict") == "broken")
+    check("raport podaje, ile zapytan odrzucono",
+          "1137 z 1164" in (health.check("OLX Praca", 1338,
+                                         enrich={"ok": 24, "expired": 0, "error": 3,
+                                                 "blocked": 1137}) or {}).get("detail", ""))
+    check("pojedyncze blokady nie robia alarmu",
+          health.check("OLX Praca", 1272,
+                       enrich={"ok": 900, "expired": 0, "error": 10, "blocked": 40}) is None)
+
 
 def test_idempotent_writes(tmp_name="_test_idempotent.json"):
     """
@@ -369,6 +384,83 @@ def test_idempotent_writes(tmp_name="_test_idempotent.json"):
             for stale in bdir.glob(f"{tmp_name}.*.bak"):
                 stale.unlink()
 
+
+def test_olx_tempo_przy_blokadzie():
+    """
+    Odstęp między wejściami musi obowiązywać także wtedy, gdy portal odmawia.
+
+    `time.sleep(OPIS_PRZERWA)` stał na końcu pętli, za wszystkimi `continue`,
+    więc każde 403 pomijało przerwę. Pierwsza blokada kasowała odstęp, kolejne
+    wejścia szły ~20 razy na sekundę i blokada się utrwalała: przebieg
+    z 1 września 2026 zrobił 1164 zapytania w 58 s i skończył na 1137 blokadach.
+    Odstęp działał tylko tam, gdzie nie był potrzebny.
+    """
+    print(chr(10) + "[11] OLX: tempo dociagania opisow")
+
+    import scrapers.olx_scraper as olx
+    from utils.data_models import Job
+
+    class FikcyjnaOdpowiedz:
+        def __init__(self, status):
+            self.status = status
+
+    class FikcyjnaStrona:
+        """Zawsze 403 - dokładnie ten stan, który kasował przerwę."""
+        def __init__(self):
+            self.wejscia = 0
+
+        def route(self, *a, **k):
+            pass
+
+        def unroute(self, *a, **k):
+            pass
+
+        def goto(self, url, **k):
+            self.wejscia += 1
+            return FikcyjnaOdpowiedz(403)
+
+        def content(self):
+            return ""
+
+    drzemki = []
+    prawdziwy_sleep = olx.time.sleep
+    prawdziwe_known = None
+    import utils.known_links as kl
+    prawdziwe_known = kl.known_links
+    try:
+        olx.time.sleep = lambda s: drzemki.append(s)
+        kl.known_links = lambda: set()
+
+        scraper = object.__new__(olx.OLXScraper)
+        scraper.page = FikcyjnaStrona()
+        scraper.timeout = 1000
+        scraper.seen_again_links = []
+
+        oferty = [Job(title=f"t{i}", company="c", location="Warszawa",
+                      link=f"https://www.olx.pl/oferta/x-ID{i}.html",
+                      description="x", source="OLX Praca")
+                  for i in range(40)]
+        scraper.enrich_descriptions(oferty)
+    finally:
+        olx.time.sleep = prawdziwy_sleep
+        kl.known_links = prawdziwe_known
+
+    wejscia = scraper.page.wejscia
+    check("przerwa nie jest pomijana przy 403",
+          len(drzemki) >= wejscia - 1,
+          f"{len(drzemki)} drzemek na {wejscia} wejsc")
+    check("odstep rosnie po kolejnych blokadach",
+          len(drzemki) > 1 and drzemki[-1] > drzemki[0],
+          f"{drzemki[0]} -> {drzemki[-1]}")
+    check("odstep nie przekracza sufitu",
+          all(d <= olx.BLOKADA_SUFIT for d in drzemki))
+    check("po serii blokad dociaganie sie przerywa",
+          wejscia <= olx.BLOKADY_LIMIT,
+          f"{wejscia} wejsc przy limicie {olx.BLOKADY_LIMIT}")
+    check("nie probuje wszystkich 40 ofert",
+          wejscia < 40, f"wejsc: {wejscia}")
+
+
 def main():
     print("=" * 62)
     print("  INTEGRATION TESTS (no API calls)")
@@ -377,7 +469,7 @@ def main():
     for test in (test_canonical_link, test_text_cleaning, test_stale_detection,
                  test_safe_io, test_data_consistency, test_model_rotation,
                  test_api_keys_configured, test_record_scrape, test_scraper_health,
-                 test_idempotent_writes):
+                 test_idempotent_writes, test_olx_tempo_przy_blokadzie):
         try:
             test()
         except Exception as e:
