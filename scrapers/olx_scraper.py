@@ -81,6 +81,14 @@ class OLXScraper(BaseScraper):
         state_file = "olx_category_state.json"
         
         completed_categories = []
+        if getattr(self, "force", False) and os.path.exists(state_file):
+            # Przy --force to wlasnie checkpoint blokuje ponowne przejscie:
+            # znacznik "zescrapowane dzisiaj" flaga omija, a ten - nie.
+            logger.info("OLX: --force - kasuje checkpoint kategorii")
+            try:
+                os.remove(state_file)
+            except OSError as e:
+                logger.warning(f"OLX: nie udalo sie skasowac {state_file}: {e}")
         if os.path.exists(state_file):
             try:
                 with open(state_file, 'r') as f:

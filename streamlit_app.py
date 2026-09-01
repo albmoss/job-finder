@@ -33,6 +33,7 @@ from utils.data_models import JobDatabase, Job, JobMatch
 from utils.text_cleaner import detect_work_mode, strip_html
 from utils.safe_io import save_json_atomic, load_json_safe
 from utils.links import canonical_link
+from utils.liveness import zdjete_z_portalu
 from utils.offer_age import ghost_signals, ghost_label
 import skill_gaps
 import ui_theme
@@ -556,6 +557,7 @@ def init_session_state():
     # Indeksy po linku - budowane raz przy wczytaniu danych, patrz _load_data_impl
     if 'job_lookup' not in st.session_state: st.session_state.job_lookup = {}
     if 'match_lookup' not in st.session_state: st.session_state.match_lookup = {}
+    if 'zdjete' not in st.session_state: st.session_state.zdjete = set()
 
     # Pulpit: ktora zakladka i ktora oferta jest otwarta w lewym panelu
     if 'ws_view' not in st.session_state: st.session_state.ws_view = "Dopasowane"
@@ -615,6 +617,10 @@ def _load_data_impl():
             lookup[j.link] = j
     st.session_state.job_lookup = lookup
     st.session_state.match_lookup = matches
+    # Oferty, ktorych portal juz nie wystawia. Nie kasujemy ich - schodza na
+    # dol listy z plakietka, bo 1 wrzesnia 2026 polowa pierwszej dziesiatki
+    # "Dopasowanych" byla martwa i to ona zjadala uwage.
+    st.session_state.zdjete = zdjete_z_portalu(st.session_state.raw_jobs)
 
     st.session_state.data_loaded = True
 
@@ -1966,6 +1972,20 @@ def inject_workspace_css():
             from { opacity: 0; transform: translateY(7px); }
             to   { opacity: 1; transform: none; }
         }
+        /* Oferta, ktorej portal juz nie wystawia. Przygaszona i na dole listy,
+           ale widoczna - regula jest heurystyka (patrz utils/liveness.py),
+           wiec chowanie takiej oferty kosztowaloby okazje, a nie tylko halas. */
+        .wr-row.is-gone { opacity: 0.5; }
+        .wr-row.is-gone .wr-score,
+        .wr-row.is-gone .wr-title { text-decoration: line-through; }
+        .wr-gone {
+            font-size: var(--fs-micro);
+            color: var(--clay);
+            border: 1px solid color-mix(in srgb, var(--clay) 34%, transparent);
+            border-radius: 0.3rem;
+            padding: 0 0.28rem;
+            white-space: nowrap;
+        }
         .wr-row.is-fresh,
         .wl-line.is-fresh,
         .wl-dec.is-fresh,
@@ -2091,13 +2111,17 @@ def ws_collect(tab, search):
             if status in DECIDED_STATUSES:
                 continue
             out.append((m.job, m, status, rating))
-        out.sort(key=lambda t: t[1].match_percentage if t[1] else -1, reverse=True)
+        zdjete = st.session_state.zdjete
+        out.sort(key=lambda t: (t[0].link not in zdjete,
+                                t[1].match_percentage if t[1] else -1), reverse=True)
 
     elif tab == "Wszystkie":
         for j in st.session_state.raw_jobs:
             status, rating = get_decision(j.link)
             out.append((j, matches_by_link.get(j.link), status, rating))
-        out.sort(key=lambda t: (t[1].match_percentage if t[1] else -1,
+        zdjete = st.session_state.zdjete
+        out.sort(key=lambda t: (t[0].link not in zdjete,
+                                t[1].match_percentage if t[1] else -1,
                                 getattr(t[0], "scraped_at", "") or ""), reverse=True)
 
     else:
@@ -2199,6 +2223,7 @@ def ws_render_rows(page_items, fresh, selected, rank=True):
         bar_html = (f'<div class="wr-bar"><i style="width:{pct}%;background:{color}"></i>'
                     f'</div>') if pct is not None else '<div class="wr-bar"></div>'
 
+        zdjeta = job.link in st.session_state.zdjete
         source = getattr(job, "source", "") or "—"
         location = getattr(job, "location", "") or "Warszawa"
 
@@ -2206,9 +2231,14 @@ def ws_render_rows(page_items, fresh, selected, rank=True):
                 f'<span class="wr-sep">·</span>'
                 f'<span class="wr-src">{src_dot(source)}</span>'
                 f'<span class="wr-sep">·</span>'
-                f'<span>{_esc(location)}</span>')
+                f'<span>{_esc(location)}</span>'
+                + ('<span class="wr-sep">·</span>'
+                   '<span class="wr-gone" title="portal nie wystawia jej '
+                   'w najnowszym listingu">zdjęta</span>' if zdjeta else ''))
 
         cls = "wr-row"
+        if zdjeta:
+            cls += " is-gone"
         if fresh:
             cls += " is-fresh"
         if selected == job.link:

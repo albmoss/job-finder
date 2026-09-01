@@ -245,6 +245,13 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 'status': 'skipped'
             }
             
+        # --force ma znaczyc "puszczaj od nowa". OLX trzyma wlasny checkpoint
+        # kategorii (zeby przerwany bieg wznawial sie od miejsca zatrzymania),
+        # ktorego flaga wczesniej nie dotykala - po naprawie scrapera tego
+        # samego dnia przebieg konczyl sie "Successfully scraped 0 jobs",
+        # bo pomijal wszystkie 37 kategorii.
+        scraper.force = force
+
         logger.info(f"\n{'='*60}")
         logger.info(f"Running {source_name} scraper...")
         logger.info(f"{'='*60}")
