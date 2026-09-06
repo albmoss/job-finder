@@ -1,13 +1,22 @@
 """
 OLX Praca Scraper
 
-Listing zbierany przez Playwright (OLX renderuje wyniki po stronie klienta),
-ale opisy dociągane są zwykłym HTTP z podstron ofert - patrz utils/olx_details.
-Wcześniej opis był zaślepką "Oferta z OLX (kategoria: X)", przez co AI oceniało
-te oferty wyłącznie po tytule.
+Listing zbierany przez Playwright - OLX renderuje wyniki po stronie klienta.
+
+Opisy nie ida ani zwyklym HTTP (OLX odpowiada 403 na kazdy adres, blokada
+siedzi na odcisku TLS), ani przez wejscie na kazda oferte osobno - tylko przez
+`fetch` wolany WEWNATRZ otwartej strony OLX. To samo origin, te same
+ciasteczka, ten sam odcisk, a przy okazji zadnego renderowania i zadnych
+30-sekundowych timeoutow nawigacji. Rozbieranie HTML-a zostaje jedno,
+w utils/olx_details.
+
+Wczesniej opis byl zaslepka "Oferta z OLX (kategoria: X)", przez co AI ocenialo
+te oferty wylacznie po tytule.
 """
 
+import json
 import logging
+import re
 import time
 from typing import List
 
@@ -27,8 +36,70 @@ OPIS_PRZERWA = 0.5
 BLOKADA_MNOZNIK = 2.0
 BLOKADA_SUFIT = 8.0
 BLOKADY_LIMIT = 12
+# Co ile ofert petla melduje, gdzie jest. Bez tego dociaganie 975 opisow to
+# godzina ciszy w logu i nie da sie odroznic pracy od zawieszenia - przebieg
+# z 6 wrzesnia 2026 stal 60 minut na jednej linijce "fetching descriptions".
+POSTEP_CO = 50
+# Opisy leca teraz przez `fetch` wywolany WEWNATRZ otwartej strony OLX, a nie
+# przez `page.goto` na kazda oferte. Zysk jest podwojny: nie placimy za render
+# (goto parsuje HTML, odpala skrypty i czeka na domcontentloaded), a nieudane
+# wejscie wraca od razu, zamiast wisiec do 30-sekundowego timeoutu nawigacji.
+# Zmierzone 7 wrzesnia 2026 na tej samej puli ofert, po 20-30 na proba:
+#   goto sekwencyjnie, 0.5 s   ->  50 ofert/min, 0 blokad
+#   fetch 3 naraz,     0.5 s   ->  68 ofert/min, 0 blokad
+#   fetch 8 naraz,     0.5 s   ->  68 ofert/min, 0 blokad  (wiecej nie pomaga)
+#   fetch 6 naraz,     0.3 s   ->  20 blokad na 20 ofert   (portal odcina)
+# Rownoleglosc powyzej 3 nic nie daje - waskim gardlem jest OLX, nie my.
+# ODSTEP ZOSTAJE 0.5 s: to ta sama granica portalu co przy goto, sprawdzona
+# ponownie przy fetchu. Tresc opisu obiema drogami jest identyczna (porownane
+# znak w znak na ofertach po 3218 i 5340 znakow).
+KARTY = 3
+# Ile ofert idzie w jednym wywolaniu `evaluate`. Kazda to ~200 kB HTML-a
+# przechodzacego przez CDP, wiec paczka wiekszej mocy nie przyspiesza,
+# a zjada pamiec. Przy okazji wyznacza takt meldunkow o postepie.
+PACZKA = 25
 
 logger = logging.getLogger(__name__)
+
+# Strona kategorii niesie w sobie caly listing jako JSON - z pelnym opisem
+# kazdego ogloszenia. Scraper i tak te strone pobiera, wiec opis jest gratis:
+# sprawdzone 7 wrzesnia 2026, opis zlozony ze stanu i opis ze strony oferty
+# maja identyczna dlugosc co do znaku (2186 = 2186) i te sama tresc.
+# Dlatego wchodzenie na kazda oferte z osobna zniknelo - bylo 975 zapytan
+# i kwadrans, jest zero zapytan i tyle, ile trwa sam listing.
+STAN_RE = re.compile(r'window\.__PRERENDERED_STATE__\s*=\s*("(?:[^"\\]|\\.)*")')
+
+# Pobieranie idzie z wnetrza strony OLX, wiec z tego samego origin, z tymi
+# samymi ciasteczkami i tym samym odciskiem TLS co przegladarka. `ctx.request`
+# i gole `requests` dostaja 403 wlasnie dlatego, ze tego nie maja.
+# `nastepny` jest wspolnym zegarem wszystkich robotnikow: odstep obowiazuje
+# miedzy ZAPYTANIAMI, nie w kazdym watku z osobna.
+JS_OPISY = """
+async ([adresy, rownolegle, odstep]) => {
+  const wyniki = [];
+  let i = 0, nastepny = 0;
+  async function slot() {
+    const teraz = Date.now();
+    const czekaj = Math.max(0, nastepny - teraz);
+    nastepny = Math.max(teraz, nastepny) + odstep;
+    if (czekaj) await new Promise(r => setTimeout(r, czekaj));
+  }
+  async function robotnik() {
+    while (i < adresy.length) {
+      const nr = i++;
+      await slot();
+      try {
+        const odp = await fetch(adresy[nr], {credentials: 'include'});
+        wyniki[nr] = {status: odp.status, html: await odp.text()};
+      } catch (e) {
+        wyniki[nr] = {status: 0, html: '', blad: String(e)};
+      }
+    }
+  }
+  await Promise.all(Array.from({length: rownolegle}, robotnik));
+  return wyniki;
+}
+"""
 
 
 class OLXScraper(BaseScraper):
@@ -41,6 +112,86 @@ class OLXScraper(BaseScraper):
         # Linki ofert, których stron nie pobierano - main_scraper odnotuje na
         # nich last_seen/times_seen (patrz JobDatabase.record_scrape).
         self.seen_again_links = []
+        # Linki ofert, które dostały opis prosto z listingu - te nie mają po co
+        # wchodzić na własną stronę.
+        self.opisy_ze_stanu = set()
+
+    def _wejdz_i_wez_html(self, url: str):
+        """
+        Wejdź na listing i oddaj HTML, który przyszedł z serwera.
+
+        `page.content()` tu nie wystarcza: OLX po hydracji **usuwa z DOM-u
+        skrypt ze stanem**. Zmierzone 7 września 2026 na tej samej stronie:
+        przy `domcontentloaded` stan ma 46 ogłoszeń, dwie sekundy później
+        zero, a `window.__PRERENDERED_STATE__` nie zostaje w żadnej zmiennej
+        globalnej. `navigate_with_retry` czeka po wejściu `self.delay` sekund,
+        więc czytanie DOM-u po nim daje zawsze pustą mapę - i właśnie dlatego
+        pierwszy przebieg z opisami z listingu wrócił do drogi zapasowej.
+        Surowa odpowiedź nawigacji ma stan zawsze.
+
+        Zwraca `None`, gdy wejście się nie udało (wtedy kategoria leci dalej),
+        i pusty napis, gdy weszło, ale treści nie ma.
+        """
+        for proba in range(1, self.max_retries + 1):
+            try:
+                logger.info(f"{self.get_source_name()}: Navigating to {url} "
+                            f"(attempt {proba}/{self.max_retries})")
+                resp = self.page.goto(url, wait_until="domcontentloaded",
+                                      timeout=self.timeout)
+                # Treść czytamy od razu - dopiero potem przerwa na dorysowanie listy.
+                html = resp.text() if resp else ""
+                time.sleep(self.delay)
+                return html
+            except Exception as e:
+                logger.warning(f"{self.get_source_name()}: Navigation attempt {proba} failed: {e}")
+                if proba < self.max_retries:
+                    time.sleep(self.delay * proba)
+        logger.error(f"{self.get_source_name()}: All navigation attempts failed")
+        return None
+
+    def _ogloszenia_ze_stanu(self, html: str) -> dict:
+        """
+        Mapa `link -> ogloszenie` z JSON-a wbudowanego w strone listingu.
+
+        Pusta mapa nie jest bledem - znaczy tylko, ze tej strony nie da sie
+        przeczytac tym sposobem i opisy pojda droga zapasowa.
+        """
+        m = STAN_RE.search(html or "")
+        if not m:
+            return {}
+        try:
+            stan = json.loads(json.loads(m.group(1)))
+        except ValueError as e:
+            logger.debug(f"OLX: nie rozbieram stanu listingu: {e}")
+            return {}
+        ogloszenia = ((stan.get("listing") or {}).get("listing") or {}).get("ads") or []
+        mapa = {}
+        for ad in ogloszenia:
+            adres = ad.get("url") or ""
+            if adres:
+                mapa[normalize_olx_link(adres)] = ad
+        return mapa
+
+    def _z_ogloszenia(self, job, ad) -> bool:
+        """Przepisz opis, firme i date z ogloszenia w listingu. False = nie da sie."""
+        from utils.olx_details import build_description, extract_company
+        from utils.text_cleaner import clean_job_description
+
+        if not ad or ad.get("status") not in (None, "active"):
+            return False
+        opis = build_description(ad)
+        if not opis.strip():
+            return False
+        # Opis podmieniamy po utworzeniu obiektu, wiec __post_init__ juz nie
+        # zadziala - czyscimy recznie, tak samo jak przy drodze zapasowej.
+        job.description = clean_job_description(opis)
+        firma = extract_company(ad, fallback="")
+        if firma:
+            job.company = firma
+        data = ad.get("createdTime") or ad.get("lastRefreshTime")
+        if data:
+            job.posted_date = data
+        return True
 
     def get_source_name(self) -> str:
         return "OLX Praca"
@@ -117,7 +268,8 @@ class OLXScraper(BaseScraper):
             search_url = f"https://www.olx.pl/praca/{category}/{location}/?search%5Border%5D=created_at%3Adesc&search%5Bdist%5D={radius}"
             logger.info(f"Navigating to OLX Category URL (Sorted by Newest): {search_url}")
             
-            if not self.navigate_with_retry(search_url):
+            html_strony = self._wejdz_i_wez_html(search_url)
+            if html_strony is None:
                 logger.error(f"{self.get_source_name()}: Failed to navigate to {category}")
                 continue
                 
@@ -150,6 +302,8 @@ class OLXScraper(BaseScraper):
                 except Exception:
                     break  # Zwykle znaczy koniec ofert albo timeout
                 
+                # Stan strony niesie opisy - czytamy go raz na strone
+                ogloszenia = self._ogloszenia_ze_stanu(html_strony)
                 cards = self.page.query_selector_all('div[data-cy="l-card"]')
                 page_found = 0
                 
@@ -180,7 +334,6 @@ class OLXScraper(BaseScraper):
                         if href in seen_links: continue
                         seen_links.add(href)
 
-                        # Opis dociągany jest w drugiej fazie (enrich_descriptions)
                         job = Job(
                             title=title,
                             company=company,
@@ -189,6 +342,10 @@ class OLXScraper(BaseScraper):
                             source=self.get_source_name(),
                             location="Warszawa"
                         )
+                        # Opis prosto z listingu; jesli go tam nie ma, oferta
+                        # zostaje z zaslepka i dobiera ja enrich_descriptions.
+                        if self._z_ogloszenia(job, ogloszenia.get(href)):
+                            self.opisy_ze_stanu.add(href)
                         jobs.append(job)
                         page_found += 1
                     except Exception:
@@ -198,14 +355,16 @@ class OLXScraper(BaseScraper):
                 
                 if page_found == 0: break
                     
+                # Wejscie na kolejna strone URL-em, nie kliknieciem: klikniecie
+                # przerysowuje liste po stronie klienta i stan strony zostaje
+                # ten z pierwszej - a to w nim siedza opisy.
                 try:
-                    next_btn = self.page.query_selector('a[data-cy="pagination-forward"]')
-                    if next_btn:
-                        next_btn.click()
-                        self.page.wait_for_timeout(1500)
-                        page_num += 1
-                    else:
+                    if not self.page.query_selector('a[data-cy="pagination-forward"]'):
                         break  # Koniec listy
+                    page_num += 1
+                    html_strony = self._wejdz_i_wez_html(f"{search_url}&page={page_num}")
+                    if html_strony is None:
+                        break
                 except Exception:
                     break
                     
@@ -256,6 +415,17 @@ class OLXScraper(BaseScraper):
         if not jobs:
             return []
 
+        # Oferty z opisem z listingu nie maja po co wchodzic na strone.
+        ze_stanu = getattr(self, "opisy_ze_stanu", set())
+        gotowe = [j for j in jobs if j.link in ze_stanu]
+        jobs = [j for j in jobs if j.link not in ze_stanu]
+        if gotowe:
+            logger.info(f"OLX: {len(gotowe)} opisow prosto z listingu (bez wchodzenia na oferty)")
+        if not jobs:
+            self.enrich_stats = {"ok": 0, "expired": 0, "error": 0, "blocked": 0,
+                                 "ze_stanu": len(gotowe)}
+            return gotowe
+
         logger.info(f"OLX: fetching descriptions for {len(jobs)} offers...")
         if not self.page:
             logger.warning("OLX: brak otwartej przegladarki - pomijam opisy")
@@ -283,10 +453,163 @@ class OLXScraper(BaseScraper):
         except Exception as e:
             logger.debug(f"OLX: nie udalo sie odciac zasobow: {e}")
 
+        # Droga podstawowa to fetch z wnetrza strony; `goto` zostaje jako
+        # zapasowa - wchodzi, gdy fetch padnie w polowie albo gdy strona nie
+        # umie `evaluate` (tak wchodzi tu test tempa).
+        enriched = []
+        pozostale = jobs
+        if hasattr(page, "evaluate"):
+            enriched, pozostale = self._opisy_przez_fetch(page, jobs, stats)
+        if pozostale:
+            enriched += self._opisy_przez_goto(page, pozostale, stats,
+                                               zrobione=len(jobs) - len(pozostale),
+                                               wszystkich=len(jobs))
+
+        try:
+            page.unroute("**/*")
+        except Exception:
+            pass
+
+        stats["ze_stanu"] = len(gotowe)
+        self.enrich_stats = stats
+        enriched = gotowe + enriched
+        logger.info(
+            f"OLX: descriptions - z listingu: {stats['ze_stanu']}, dociagniete: {stats['ok']}, "
+            f"expired (dropped): {stats['expired']}, errors: {stats['error']}, "
+            f"blocked (403): {stats['blocked']}"
+        )
+        if stats["blocked"] and stats["ok"] == 0:
+            logger.error(
+                "OLX: kazde zapytanie o opis dostalo 403 - portal blokuje ten "
+                "sposob pobierania. Oferty ida do bazy z zaslepka."
+            )
+        return enriched
+
+    def _melduj(self, zrobione, wszystkich, stats, start):
+        """
+        Gdzie jest dociaganie opisow.
+
+        Przebieg z 6 wrzesnia 2026 stal godzine na jednej linijce "fetching
+        descriptions": petla nie wypisywala nic az do konca, wiec z zewnatrz
+        nie dalo sie odroznic pracy od zawieszenia. Zgadywanie po zuzyciu CPU
+        procesu przegladarki nie jest odpowiedzia.
+        """
+        minelo = time.monotonic() - start
+        tempo = (zrobione / minelo) if minelo else 0
+        zostalo = ((wszystkich - zrobione) / tempo) if tempo else 0
+        logger.info(
+            f"OLX: {zrobione}/{wszystkich} opisow "
+            f"(ok: {stats['ok']}, wygasle: {stats['expired']}, "
+            f"bledy: {stats['error']}, blokady: {stats['blocked']}) - "
+            f"{tempo * 60:.0f} ofert/min, zostalo ~{zostalo / 60:.0f} min"
+        )
+
+    def _zapisz_opis(self, job, wynik, stats, enriched):
+        """Wspolne dla obu drog: co zrobic z rozebranym HTML-em oferty."""
+        from utils.text_cleaner import clean_job_description
+
+        status = wynik.get("status")
+        if status == "ok":
+            # Podmieniamy opis po utworzeniu obiektu, wiec __post_init__
+            # (ktore czysci opis) juz sie nie wykona - czyscimy recznie
+            job.description = clean_job_description(wynik["description"])
+            if wynik.get("company"):
+                job.company = wynik["company"]
+            if wynik.get("posted_date"):
+                job.posted_date = wynik["posted_date"]
+            stats["ok"] += 1
+            enriched.append(job)
+            return True
+        if status == "expired":
+            stats["expired"] += 1
+            return False
+        stats["error"] += 1
+        enriched.append(job)
+        return False
+
+    def _opisy_przez_fetch(self, page, jobs, stats):
+        """
+        Opisy przez `fetch` wolany w otwartej stronie OLX - patrz JS_OPISY.
+
+        Zwraca `(uzupelnione, do_zrobienia_inaczej)`. Druga lista jest niepusta
+        tylko wtedy, gdy fetch przestal dzialac technicznie; przy blokadzie
+        portalu jest pusta, bo dobijanie sie tam jeszcze przez `goto` nie ma sensu.
+        """
+        from utils.olx_details import parse_offer_html
+
+        # fetch musi wyjsc z origin olx.pl, inaczej przegladarka utnie go na CORS
+        try:
+            if not (page.url or "").startswith("https://www.olx.pl"):
+                page.goto(f"{self.BASE_URL}/praca/", wait_until="domcontentloaded",
+                          timeout=self.timeout)
+        except Exception as e:
+            logger.warning(f"OLX: nie wchodze na strone do fetchowania ({e}) - wracam do goto")
+            return [], jobs
+
         enriched = []
         przerwa = OPIS_PRZERWA
         blokady_z_rzedu = 0
+        start = time.monotonic()
+        for poczatek in range(0, len(jobs), PACZKA):
+            paczka = jobs[poczatek:poczatek + PACZKA]
+            try:
+                wyniki = page.evaluate(
+                    JS_OPISY, [[j.link for j in paczka], KARTY, int(przerwa * 1000)]
+                ) or []
+            except Exception as e:
+                logger.warning(
+                    f"OLX: fetch w stronie padl po {poczatek} ofertach "
+                    f"({type(e).__name__}: {e}) - reszta idzie przez goto"
+                )
+                return enriched, jobs[poczatek:]
+
+            blokady_w_paczce = 0
+            for job, wynik in zip(paczka, wyniki):
+                wynik = wynik or {}
+                kod = wynik.get("status")
+                html = wynik.get("html") or ""
+                if kod == 404:
+                    stats["expired"] += 1
+                    continue
+                if kod == 403:
+                    # Osobny licznik: to jedyny stan znaczacy "przestalo dzialac
+                    # w ogole", i nie moze ginac w worku "error".
+                    stats["blocked"] += 1
+                    blokady_z_rzedu += 1
+                    blokady_w_paczce += 1
+                    continue
+                if kod != 200 or not html:
+                    stats["error"] += 1
+                    enriched.append(job)
+                    continue
+                if self._zapisz_opis(job, parse_offer_html(html), stats, enriched):
+                    blokady_z_rzedu = 0
+
+            # Odstep rosnie geometrycznie, dopoki portal odmawia, i wraca do
+            # zmierzonej granicy, gdy przestal.
+            przerwa = (min(przerwa * BLOKADA_MNOZNIK, BLOKADA_SUFIT)
+                       if blokady_w_paczce else OPIS_PRZERWA)
+            self._melduj(min(poczatek + PACZKA, len(jobs)), len(jobs), stats, start)
+            if blokady_z_rzedu >= BLOKADY_LIMIT:
+                logger.warning(
+                    f"OLX: {blokady_z_rzedu} blokad z rzedu - przerywam dociaganie "
+                    f"opisow po {poczatek + len(paczka)} z {len(jobs)} ofert"
+                )
+                break
+        return enriched, []
+
+    def _opisy_przez_goto(self, page, jobs, stats, zrobione=0, wszystkich=None):
+        """Droga zapasowa: wejscie na kazda oferte osobno. Wolniejsza o ~1/3."""
+        from utils.olx_details import parse_offer_html
+
+        wszystkich = wszystkich or len(jobs)
+        enriched = []
+        przerwa = OPIS_PRZERWA
+        blokady_z_rzedu = 0
+        start = time.monotonic()
         for nr, job in enumerate(jobs):
+            if nr and nr % POSTEP_CO == 0:
+                self._melduj(zrobione + nr, wszystkich, stats, start)
             # Odstep PRZED wejsciem, nie po udanym: wczesniej `time.sleep` stal
             # na koncu petli, za wszystkimi `continue`, wiec przy 403 byl
             # pomijany. Pierwsza blokada kasowala odstep, kolejne wejscia szly
@@ -311,7 +634,7 @@ class OLXScraper(BaseScraper):
                     if blokady_z_rzedu >= BLOKADY_LIMIT:
                         logger.warning(
                             f"OLX: {blokady_z_rzedu} blokad z rzedu - przerywam "
-                            f"dociaganie opisow po {nr + 1} z {len(jobs)} ofert"
+                            f"dociaganie opisow po {zrobione + nr + 1} z {wszystkich} ofert"
                         )
                         break
                     continue
@@ -326,41 +649,10 @@ class OLXScraper(BaseScraper):
                 enriched.append(job)
                 continue
 
-            result = parse_offer_html(html)
-            status = result.get("status")
-            if status == "ok":
-                # Podmieniamy opis po utworzeniu obiektu, więc __post_init__
-                # (które czyści opis) już się nie wykona - czyścimy ręcznie
-                job.description = clean_job_description(result["description"])
-                if result.get("company"):
-                    job.company = result["company"]
-                if result.get("posted_date"):
-                    job.posted_date = result["posted_date"]
-                stats["ok"] += 1
+            if self._zapisz_opis(job, parse_offer_html(html), stats, enriched):
                 blokady_z_rzedu = 0
                 przerwa = OPIS_PRZERWA
-                enriched.append(job)
-            elif status == "expired":
-                stats["expired"] += 1
-            else:
-                stats["error"] += 1
-                enriched.append(job)
 
-        try:
-            page.unroute("**/*")
-        except Exception:
-            pass
-
-        self.enrich_stats = stats
-        logger.info(
-            f"OLX: descriptions fetched - ok: {stats['ok']}, expired (dropped): {stats['expired']}, "
-            f"errors: {stats['error']}, blocked (403): {stats['blocked']}"
-        )
-        if stats["blocked"] and stats["ok"] == 0:
-            logger.error(
-                "OLX: kazde zapytanie o opis dostalo 403 - portal blokuje ten "
-                "sposob pobierania. Oferty ida do bazy z zaslepka."
-            )
         return enriched
 
     def get_job_description(self, job_url: str) -> str:

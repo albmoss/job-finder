@@ -501,6 +501,211 @@ def test_zdjete_z_portalu():
     check("zrodlo bez stempli nie ma wpisu", "Z" not in dni)
 
 
+def test_olx_fetch_rownolegly():
+    """
+    Opisy ida przez `fetch` w stronie, a blokada nadal przerywa dociąganie.
+
+    Przebieg z 6 września 2026 dociągał opisy przez `page.goto` na każdą ofertę
+    z osobna: 50 ofert/min i godzina ciszy w logu. `fetch` wołany wewnątrz
+    otwartej strony OLX daje 68 ofert/min przy tym samym odstępie 0,5 s
+    i identycznej treści opisu (porównane znak w znak). Zmierzone 7 września
+    2026; przy 6 równoległych i 0,3 s odstępu portal odciął 20 na 20, więc
+    odstęp zostaje granicą, nie pokrętłem.
+    """
+    print(chr(10) + "[13] OLX: dociaganie opisow przez fetch")
+
+    import scrapers.olx_scraper as olx
+    from utils.data_models import Job
+    import utils.known_links as kl
+
+    # OLX wkleja stan strony jako JSON w JSON-ie - parser czyta wlasnie to
+    stan = {"jobAd": {"job": {
+        "status": "active",
+        "description": "<p>Praca w sklepie. Kasa fiskalna, wykladanie towaru.</p>",
+        "postingComponent": {"companyName": "Sklep Test"},
+        "addedAt": "2026-09-07T10:00:00+02:00",
+    }}}
+    OPIS = ("<html><script>window.__PRERENDERED_STATE__ = "
+            + json.dumps(json.dumps(stan)) + ";</script></html>")
+
+    class StronaFetch:
+        """Strona, ktora umie `evaluate` - czyli droga podstawowa."""
+        url = "https://www.olx.pl/praca/warszawa/"
+
+        def __init__(self, kody):
+            self.kody = kody          # kod HTTP zwracany po kolei
+            self.zapytania = []
+            self.odstepy = []
+
+        def route(self, *a, **k):
+            pass
+
+        def unroute(self, *a, **k):
+            pass
+
+        def goto(self, *a, **k):
+            raise AssertionError("droga fetch nie ma prawa wchodzic przez goto")
+
+        def evaluate(self, js, arg):
+            adresy, rownolegle, odstep = arg
+            self.odstepy.append(odstep)
+            wyniki = []
+            for adres in adresy:
+                self.zapytania.append(adres)
+                kod = self.kody(len(self.zapytania))
+                wyniki.append({"status": kod, "html": OPIS if kod == 200 else ""})
+            return wyniki
+
+    def zbuduj(ile):
+        return [Job(title=f"t{i}", company="c", location="Warszawa",
+                    link=f"https://www.olx.pl/oferta/x-ID{i}.html",
+                    description="x", source="OLX Praca")
+                for i in range(ile)]
+
+    prawdziwe_known = kl.known_links
+    try:
+        kl.known_links = lambda: set()
+
+        # 1. wszystko sie udaje - opisy wchodza, goto nie jest wolane
+        scraper = object.__new__(olx.OLXScraper)
+        scraper.page = StronaFetch(lambda n: 200)
+        scraper.timeout = 1000
+        scraper.seen_again_links = []
+        oferty = zbuduj(30)
+        wynik = scraper.enrich_descriptions(oferty)
+
+        check("fetch dociaga opisy zamiast wchodzic na kazda oferte",
+              scraper.enrich_stats["ok"] == 30, str(scraper.enrich_stats))
+        check("opis trafia do oferty",
+              all("kasa fiskalna" in (j.description or "").lower() for j in wynik),
+              (wynik[0].description or "")[:60])
+        check("firma nadpisana z ogloszenia",
+              wynik[0].company == "Sklep Test", wynik[0].company)
+        check("paczkowanie nie gubi ofert",
+              len(scraper.page.zapytania) == 30, str(len(scraper.page.zapytania)))
+
+        # 2. portal odmawia - po serii blokad dociaganie ma sie przerwac
+        scraper = object.__new__(olx.OLXScraper)
+        scraper.page = StronaFetch(lambda n: 403)
+        scraper.timeout = 1000
+        scraper.seen_again_links = []
+        scraper.enrich_descriptions(zbuduj(200))
+
+        check("blokady licza sie osobno, nie jako bledy",
+              scraper.enrich_stats["blocked"] > 0 and scraper.enrich_stats["error"] == 0,
+              str(scraper.enrich_stats))
+        check("po serii blokad fetch przerywa dociaganie",
+              len(scraper.page.zapytania) <= olx.PACZKA * 2,
+              f"{len(scraper.page.zapytania)} zapytan na 200 ofert")
+        # 3. portal odmawia czesciowo - odstep ma urosnac, a nie ciagnac dalej
+        #    tym samym tempem; przy pelnej blokadzie liczy sie przerwanie (2.)
+        scraper = object.__new__(olx.OLXScraper)
+        scraper.page = StronaFetch(lambda n: 403 if n <= 10 else 200)
+        scraper.timeout = 1000
+        scraper.seen_again_links = []
+        scraper.enrich_descriptions(zbuduj(75))
+
+        check("odstep rosnie po paczce z blokadami",
+              len(scraper.page.odstepy) > 1
+              and scraper.page.odstepy[1] > scraper.page.odstepy[0],
+              str(scraper.page.odstepy))
+        check("odstep wraca do granicy, gdy portal przestal odmawiac",
+              scraper.page.odstepy[-1] == int(olx.OPIS_PRZERWA * 1000),
+              str(scraper.page.odstepy))
+        check("odstep nie przekracza sufitu",
+              all(o <= olx.BLOKADA_SUFIT * 1000 for o in scraper.page.odstepy),
+              str(scraper.page.odstepy))
+        check("czesciowa blokada nie przerywa calosci",
+              scraper.enrich_stats["ok"] == 65,
+              str(scraper.enrich_stats))
+    finally:
+        kl.known_links = prawdziwe_known
+
+
+def test_olx_opis_z_listingu():
+    """
+    Opis ma przyjść ze strony kategorii, nie z 975 osobnych wejść.
+
+    Strona listingu niesie cały listing jako JSON (`__PRERENDERED_STATE__`),
+    z pełnym opisem każdego ogłoszenia - scraper i tak ją pobiera. Sprawdzone
+    7 września 2026: opis złożony ze stanu i opis ze strony oferty mają
+    identyczną długość co do znaku (2186 = 2186). Wcześniej ten sam opis
+    kosztował osobne wejście na każdą ofertę: kwadrans na przebieg.
+    """
+    print(chr(10) + "[14] OLX: opis prosto z listingu")
+
+    import scrapers.olx_scraper as olx
+    from utils.data_models import Job
+    import utils.known_links as kl
+
+    ad = {
+        "url": "https://www.olx.pl/oferta/praca/kasjer-CID4-ID9aa.html",
+        "status": "active",
+        "title": "Kasjer/ka",
+        "description": "<p>Obsluga kasy, wykladanie towaru, praca zmianowa.</p>",
+        "createdTime": "2026-09-07T08:30:00+02:00",
+        "user": {"name": "Market Test"},
+        "params": [{"name": "Wymiar pracy", "value": "Pelny etat"}],
+    }
+    stan = {"listing": {"listing": {"ads": [ad]}}}
+    html = ("<html><script>window.__PRERENDERED_STATE__ = "
+            + json.dumps(json.dumps(stan)) + ";</script></html>")
+
+    scraper = object.__new__(olx.OLXScraper)
+    mapa = scraper._ogloszenia_ze_stanu(html)
+    check("stan listingu daje mape ogloszen", len(mapa) == 1, str(list(mapa)[:1]))
+
+    job = Job(title="Kasjer/ka", company="OLX", location="Warszawa",
+              link=ad["url"], description="Oferta z OLX (kategoria: sprzedaz)",
+              source="OLX Praca")
+    wzialo = scraper._z_ogloszenia(job, mapa.get(ad["url"]))
+    check("opis z listingu trafia do oferty", wzialo and "kasy" in job.description.lower(),
+          (job.description or "")[:60])
+    check("firma z ogloszenia, nie zaslepka OLX", job.company == "Market Test", job.company)
+    check("data wystawienia przepisana", (job.posted_date or "").startswith("2026-09-07"),
+          str(job.posted_date))
+    check("parametry doklejone do opisu", "Pelny etat" in job.description,
+          (job.description or "")[-60:])
+
+    check("ogloszenie zdjete nie nadpisuje opisu",
+          scraper._z_ogloszenia(job, dict(ad, status="removed_by_user")) is False)
+    check("brak stanu na stronie to nie blad",
+          scraper._ogloszenia_ze_stanu("<html>nic tu nie ma</html>") == {})
+
+    # oferta z opisem z listingu nie ma po co wchodzic na wlasna strone
+    class StronaLicznik:
+        url = "https://www.olx.pl/praca/warszawa/"
+
+        def __init__(self):
+            self.wejscia = 0
+
+        def route(self, *a, **k):
+            pass
+
+        def unroute(self, *a, **k):
+            pass
+
+        def goto(self, *a, **k):
+            self.wejscia += 1
+            raise AssertionError("oferta z opisem nie ma po co wchodzic na strone")
+
+    prawdziwe_known = kl.known_links
+    try:
+        kl.known_links = lambda: set()
+        scraper.page = StronaLicznik()
+        scraper.timeout = 1000
+        scraper.seen_again_links = []
+        scraper.opisy_ze_stanu = {job.link}
+        wynik = scraper.enrich_descriptions([job])
+        check("oferta z listingu omija dociaganie",
+              len(wynik) == 1 and scraper.page.wejscia == 0,
+              f"{len(wynik)} ofert, {scraper.page.wejscia} wejsc")
+        check("statystyka liczy opisy z listingu osobno",
+              scraper.enrich_stats.get("ze_stanu") == 1, str(scraper.enrich_stats))
+    finally:
+        kl.known_links = prawdziwe_known
+
+
 def main():
     print("=" * 62)
     print("  INTEGRATION TESTS (no API calls)")
@@ -510,7 +715,8 @@ def main():
                  test_safe_io, test_data_consistency, test_model_rotation,
                  test_api_keys_configured, test_record_scrape, test_scraper_health,
                  test_idempotent_writes, test_olx_tempo_przy_blokadzie,
-                 test_zdjete_z_portalu):
+                 test_zdjete_z_portalu, test_olx_fetch_rownolegly,
+                 test_olx_opis_z_listingu):
         try:
             test()
         except Exception as e:
