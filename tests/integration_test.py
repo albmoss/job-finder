@@ -10,7 +10,9 @@ Uruchomienie:  python tests/integration_test.py
 """
 
 import json
+import io
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -706,6 +708,50 @@ def test_olx_opis_z_listingu():
         kl.known_links = prawdziwe_known
 
 
+def test_pipeline_final_status():
+    """PIPELINE COMPLETE moze powstac tylko wtedy, gdy kazdy etap sie udal."""
+    print(chr(10) + "[15] Koncowy status pipeline'u")
+
+    import run_final_pipeline as pipeline
+
+    output = io.StringIO()
+    with redirect_stdout(output):
+        result = pipeline._finish({"scraping": True, "analysis": True})
+    text = output.getvalue()
+    check("komplet etapow daje status COMPLETE",
+          result is True and "PIPELINE COMPLETE" in text and "INCOMPLETE" not in text)
+
+    output = io.StringIO()
+    with redirect_stdout(output):
+        result = pipeline._finish({"scraping": True, "analysis": False})
+    text = output.getvalue()
+    check("blad etapu daje status INCOMPLETE i niezerowy wynik",
+          result is False and "PIPELINE INCOMPLETE" in text and "PIPELINE COMPLETE" not in text)
+
+    check("etap bez jawnego wyniku pozostaje zgodny wstecz",
+          pipeline._phase("legacy", lambda: None) is True)
+    check("niezerowy kod etapu jest bledem",
+          pipeline._phase("failed", lambda: 1) is False)
+
+    import main_scraper
+
+    results = {
+        "zdrowy": {"success": True, "status": "scraped"},
+        "blad": {"success": False, "status": "failed"},
+        "pominiety": {"success": True, "status": "skipped"},
+    }
+    findings = [{"source": "uszkodzony", "verdict": "degraded", "detail": "brak pola"}]
+    blocking = main_scraper._blocking_scrape_sources(results, findings)
+    check("awaria i zdegradowane dane blokuja sukces scrapingu",
+          blocking == ["blad", "uszkodzony"], str(blocking))
+
+    warnings = [{"source": "maly", "verdict": "weak", "detail": "mniej ofert"}]
+    check("slaby wynik ostrzega, ale nie udaje awarii technicznej",
+          main_scraper._blocking_scrape_sources(
+              {"zdrowy": {"success": True, "status": "scraped"}}, warnings
+          ) == [])
+
+
 def main():
     print("=" * 62)
     print("  INTEGRATION TESTS (no API calls)")
@@ -716,7 +762,7 @@ def main():
                  test_api_keys_configured, test_record_scrape, test_scraper_health,
                  test_idempotent_writes, test_olx_tempo_przy_blokadzie,
                  test_zdjete_z_portalu, test_olx_fetch_rownolegly,
-                 test_olx_opis_z_listingu):
+                 test_olx_opis_z_listingu, test_pipeline_final_status):
         try:
             test()
         except Exception as e:

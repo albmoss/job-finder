@@ -385,9 +385,29 @@ def run_all_scrapers(only=None, force=False, refresh=False):
     print(f"\nJobs database: {JOBS_DATABASE_PATH}")
     print("="*60)
 
-    _report_health(scraper_results, db, skipped_no_key, disabled_reported)
+    findings = _report_health(scraper_results, db, skipped_no_key, disabled_reported)
+    blocking_sources = _blocking_scrape_sources(scraper_results, findings)
+    if blocking_sources:
+        raise RuntimeError(
+            "Scraping incomplete for: " + ", ".join(blocking_sources)
+        )
 
     return all_jobs
+
+
+def _blocking_scrape_sources(scraper_results, findings):
+    """Źródła, przez które cały etap nie może udawać pełnego sukcesu."""
+    blocking = {
+        source
+        for source, result in scraper_results.items()
+        if result.get("status") != "skipped" and not result.get("success")
+    }
+    blocking.update(
+        finding["source"]
+        for finding in findings
+        if finding.get("verdict") in {"broken", "degraded"}
+    )
+    return sorted(blocking)
 
 
 def _report_health(scraper_results, db, skipped_no_key, disabled):
@@ -427,6 +447,7 @@ def _report_health(scraper_results, db, skipped_no_key, disabled):
     report = scraper_health.format_report(findings, skipped_no_key, disabled)
     if report:
         print(report)
+    return findings
 
 
 if __name__ == "__main__":

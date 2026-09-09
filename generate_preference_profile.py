@@ -19,7 +19,6 @@ from google.genai import types
 import json
 import os
 import sys
-import random
 from datetime import datetime
 from pathlib import Path
 
@@ -424,7 +423,7 @@ def generate_profile(categories, cv_text):
                 # Sprawdzamy, czy wróciły wszystkie oczekiwane pola
                 required = ["preferred_role_types", "preferred_industries", "red_flags", "summary"]
                 if all(k in profile for k in required):
-                    print(f"   Profile generated successfully!")
+                    print("   Profile generated successfully!")
                     
                     # Pola wzbogacone z v2 i v3
                     new_fields = ["deal_breakers", "deal_makers", "borderline_signals", "rating_calibration",
@@ -499,7 +498,7 @@ def main():
             print(f"Error saving profile: {e}")
 
         print(f"\nProfile saved to {OUTPUT_FILE}")
-        print(f"\nSUMMARY:")
+        print("\nSUMMARY:")
         print(f"   {profile.get('summary', 'N/A')}")
         print(f"\nPreferred roles: {', '.join(profile.get('preferred_role_types', []))}")
         print(f"Preferred industries: {', '.join(profile.get('preferred_industries', []))}")
@@ -512,7 +511,7 @@ def main():
             print(f"Deal makers: {', '.join(profile.get('deal_makers', []))}")
         if "rating_calibration" in profile:
             cal = profile["rating_calibration"]
-            print(f"\nRating Calibration:")
+            print("\nRating Calibration:")
             for key in ["what_9_10_means", "what_7_8_means", "what_5_6_means", "what_3_4_means", "what_1_2_means"]:
                 if key in cal:
                     print(f"   {key}: {cal[key][:120]}...")

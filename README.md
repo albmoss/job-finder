@@ -72,10 +72,11 @@ streamlit run streamlit_app.py
 
 python eval_ranking.py                                    # is the ranking any good?
 python skill_gaps.py                                      # what to learn next
-PYTHONIOENCODING=utf-8 python tests/integration_test.py   # 74 tests, no API calls
+PYTHONIOENCODING=utf-8 python tests/integration_test.py   # 100+ checks, no API calls
 ```
 
-Exit code 0 does not mean the run succeeded - the log has to say `PIPELINE COMPLETE`.
+Success means both exit code 0 and `PIPELINE COMPLETE`; a failed stage produces
+`PIPELINE INCOMPLETE` and a non-zero exit code.
 
 ## Notes
 
@@ -173,10 +174,11 @@ streamlit run streamlit_app.py
 
 python eval_ranking.py                                    # czy ranking działa?
 python skill_gaps.py                                      # czego się nauczyć
-PYTHONIOENCODING=utf-8 python tests/integration_test.py   # 74 testy, bez API
+PYTHONIOENCODING=utf-8 python tests/integration_test.py   # ponad 100 testów, bez API
 ```
 
-Przebieg zakończony kodem 0 nie znaczy, że się udał - w logu musi być `PIPELINE COMPLETE`.
+Sukces oznacza jednocześnie kod wyjścia 0 i `PIPELINE COMPLETE`; błąd etapu daje
+`PIPELINE INCOMPLETE` oraz niezerowy kod wyjścia.
 
 ## Uwagi
 

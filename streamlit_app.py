@@ -11,7 +11,6 @@ import os
 import json
 import hashlib
 import math
-import time
 import subprocess
 import sys
 import re
@@ -23,18 +22,13 @@ def get_key(prefix, link):
 
 from config import (
     JOBS_DATABASE_PATH,
-    GEMINI_API_KEY,
-    GEMINI_MODEL,
-    AI_CONFIG,
     UI_CONFIG
 )
-from utils.cv_parser import CVParser
 from utils.data_models import JobDatabase, Job, JobMatch
 from utils.text_cleaner import detect_work_mode, strip_html
 from utils.safe_io import save_json_atomic, load_json_safe
 from utils.links import canonical_link
 from utils.liveness import zdjete_z_portalu
-from utils.offer_age import ghost_signals, ghost_label
 import skill_gaps
 import ui_theme
 

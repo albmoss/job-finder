@@ -581,7 +581,7 @@ def main():
     if not API_KEYS:
         print("ERROR: no Gemini API key configured "
               "- set GEMINI_API_KEY_PRIMARY in .env (see .env.example).")
-        return
+        return False
 
     cv_text = load_cv()
     all_jobs = load_jobs()
@@ -636,7 +636,7 @@ def main():
 
     if not remaining_jobs:
         print("Nothing left to do! All jobs analyzed.")
-        return
+        return True
 
     current_key_val, current_model_idx = load_api_state()
     # Stan z poprzedniego przebiegu może wskazywać klucz, którego już nie ma
@@ -710,6 +710,7 @@ def main():
               f"on Key {current_key_val}.")
 
     print(f"\nDONE. Queue empty! Processed {b_idx} batches total.")
+    return True
 
 def save_results(data):
     # Kopia zapasowa, bo to jedyny plik w projekcie, ktorego nie da sie

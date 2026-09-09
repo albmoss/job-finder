@@ -23,7 +23,7 @@ from config import GEMINI_API_KEYS
 from eval_ranking import precision_at_k as _precision_at_k
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe
-from waterfall_analysis import MODELS, build_active_learning_context, create_prompt, load_cv
+from waterfall_analysis import MODELS, build_active_learning_context, load_cv
 
 
 def precision_at_k(ranked, k, threshold=7):
