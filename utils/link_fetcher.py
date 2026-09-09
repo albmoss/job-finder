@@ -2,7 +2,7 @@ import logging
 import urllib.request
 import urllib.parse
 from bs4 import BeautifulSoup
-from typing import Dict, Any
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,6 @@ def extract_job_info_from_url(url: str) -> Dict[str, str]:
         import os
         import sys
         import subprocess
-        import tempfile
         logger.info(f"Link Fetcher: Falling back to Playwright subprocess for {target_url}")
         
         script = """

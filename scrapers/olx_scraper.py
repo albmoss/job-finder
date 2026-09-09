@@ -279,7 +279,7 @@ class OLXScraper(BaseScraper):
                 if cookie_button.count() > 0 and cookie_button.is_visible(timeout=1000):
                     cookie_button.click(timeout=1000)
                     self.page.wait_for_timeout(500)
-            except Exception as e:
+            except Exception:
                 pass
 
             try:
@@ -431,8 +431,6 @@ class OLXScraper(BaseScraper):
             logger.warning("OLX: brak otwartej przegladarki - pomijam opisy")
             return jobs
 
-        from utils.olx_details import parse_offer_html
-        from utils.text_cleaner import clean_job_description
 
         # Opisy ida przez przegladarke, nie przez `requests`: OLX odpowiada
         # golemu klientowi 403 na kazdy adres, takze na strone glowna, i nie

@@ -75,7 +75,6 @@ class PracujOptimizedScraper:
        return "Pracuj.pl"
     
     def build_search_url(self, page: int = 1) -> str:
-        import random
         from config import SCRAPER_CONFIG
         
         experience_levels = SCRAPER_CONFIG["pracuj_pl"]["experience_levels"]
@@ -222,7 +221,7 @@ class PracujOptimizedScraper:
         all_jobs = []
         
         # 1. Fetch first page to find pagination
-        logger.info(f"Fetching page 1 to discover pagination...")
+        logger.info("Fetching page 1 to discover pagination...")
         first_page_jobs = self.fetch_job_listings_page(1)
         all_jobs.extend(first_page_jobs)
         

@@ -15,7 +15,6 @@ Uruchomienie:
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -160,7 +159,7 @@ def main(argv=None):
     baseline = positives / len(common)
 
     print(f"\nHits (rating >= {args.threshold}): {positives}/{len(common)} = {baseline:.1%}")
-    print(f"This is the BASELINE - the hit rate of a random pick.\n")
+    print("This is the BASELINE - the hit rate of a random pick.\n")
 
     # Ranking wg wyniku AI, malejąco
     ranked = sorted(common, key=lambda x: -x[0])

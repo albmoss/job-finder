@@ -13,7 +13,6 @@ z bazy - a bez tytułu, opisu i wyniku AI ta ocena jest bezużyteczna do ewaluac
 rankingu i do budowy profilu preferencji. To jedyny zbiór treningowy, jaki mamy.
 """
 
-import json
 import os
 import sys
 from datetime import datetime
@@ -137,7 +136,7 @@ def main():
         # W przeciwnym razie leci z bazy
         removed_count += 1
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"   Kept (decided):   {kept_decided}")
     print(f"   Kept (last 14d): {kept_recent}")
     print(f"   REMOVED (stale):  {removed_count}")

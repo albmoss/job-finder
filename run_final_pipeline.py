@@ -40,7 +40,12 @@ def _phase(name, fn, critical=False):
     """Uruchom etap; niekrytyczny błąd nie zatrzymuje pipeline'u."""
     logger.info(f"── {name}")
     try:
-        fn()
+        result = fn()
+        failed_result = result is False or (
+            isinstance(result, int) and not isinstance(result, bool) and result != 0
+        )
+        if failed_result:
+            raise RuntimeError(f"stage returned failure status {result!r}")
         return True
     except Exception as e:
         logger.error(f"{name} failed: {e}")
@@ -49,51 +54,81 @@ def _phase(name, fn, critical=False):
         return False
 
 
+def _finish(phase_results):
+    """Wypisz prawdziwy stan calego przebiegu i zwroc kod sukcesu."""
+    failed = [name for name, ok in phase_results.items() if not ok]
+    complete = not failed
+
+    print("\n" + "=" * 60)
+    print("PIPELINE COMPLETE" if complete else "PIPELINE INCOMPLETE")
+    print("=" * 60)
+
+    if failed:
+        logger.error("Failed phases: %s", ", ".join(failed))
+
+    return complete
+
+
 def run_pipeline(skip_scraping=False):
     print("\n" + "=" * 60)
     print("PIPELINE: scraping -> analysis -> evaluation")
     print("=" * 60)
 
     # 0. Archiwizuj oceny i usuń przeterminowane oferty
-    _phase("PHASE 0: Archive ratings + drop offers older than 14 days", purge_stale_offers.main)
+    phase_results = {}
+    phase_results["PHASE 0: Archive ratings + drop offers older than 14 days"] = _phase(
+        "PHASE 0: Archive ratings + drop offers older than 14 days",
+        purge_stale_offers.main,
+    )
 
     # 1. Scraping
     if skip_scraping:
         logger.info("PHASE 1: skipped (--skip-scraping)")
+        phase_results["PHASE 1: Scrape sources"] = True
     else:
-        _phase("PHASE 1: Scrape sources", run_all_scrapers, critical=True)
+        phase_results["PHASE 1: Scrape sources"] = _phase(
+            "PHASE 1: Scrape sources", run_all_scrapers, critical=True
+        )
 
     # 1.5 Normalizacja linków (musi poprzedzać deduplikację)
-    _phase("PHASE 1.5: Link normalisation", migrate_normalize_links.main)
+    phase_results["PHASE 1.5: Link normalisation"] = _phase(
+        "PHASE 1.5: Link normalisation", migrate_normalize_links.main
+    )
 
     # 2. Deduplikacja i czyszczenie
-    _phase("PHASE 2: Database deduplication", deduplicate_db.run)
-    _phase("PHASE 2.5: Description cleanup (token diet)", clean_db.run)
+    phase_results["PHASE 2: Database deduplication"] = _phase(
+        "PHASE 2: Database deduplication", deduplicate_db.run
+    )
+    phase_results["PHASE 2.5: Description cleanup (token diet)"] = _phase(
+        "PHASE 2.5: Description cleanup (token diet)", clean_db.run
+    )
 
     jobs = JobDatabase(str(JOBS_DATABASE_PATH)).load_jobs()
     logger.info(f"The database holds {len(jobs)} offers.")
     if not jobs:
         logger.error("Database empty - aborting before AI analysis.")
-        return
+        phase_results["Database validation"] = False
+        return _finish(phase_results)
 
     # 3. Analiza AI
     def _analyze():
         import waterfall_analysis
-        waterfall_analysis.main()
+        return waterfall_analysis.main()
 
-    _phase("PHASE 3: AI analysis (waterfall)", _analyze)
+    phase_results["PHASE 3: AI analysis (waterfall)"] = _phase(
+        "PHASE 3: AI analysis (waterfall)", _analyze
+    )
 
     # 4. Ewaluacja - czy ranking faktycznie działa?
     def _eval():
         import eval_ranking
-        eval_ranking.main([])
+        return eval_ranking.main([])
 
-    _phase("PHASE 4: Ranking evaluation", _eval)
+    phase_results["PHASE 4: Ranking evaluation"] = _phase(
+        "PHASE 4: Ranking evaluation", _eval
+    )
 
-    print("\n" + "=" * 60)
-    print("PIPELINE COMPLETE")
-    print("=" * 60)
-
+    return _finish(phase_results)
 
 if __name__ == "__main__":
-    run_pipeline(skip_scraping="--skip-scraping" in sys.argv)
+    sys.exit(0 if run_pipeline(skip_scraping="--skip-scraping" in sys.argv) else 1)
