@@ -67,9 +67,16 @@ pip install -r requirements.txt
 playwright install chromium
 
 cp .env.example .env        # your own Gemini API key
-python run_final_pipeline.py
 streamlit run streamlit_app.py
+```
 
+The web interface includes a primary **pipeline launcher ("Uruchom pipeline")** where you can configure your CV (upload PDF/DOCX/TXT or paste text), verify API keys, and launch the full pipeline with live stage progress and real-time logs.
+
+Alternatively, run the pipeline directly via CLI:
+```bash
+python run_final_pipeline.py                    # full run
+python run_final_pipeline.py --skip-scraping      # score existing DB offers
+```
 python eval_ranking.py                                    # is the ranking any good?
 python skill_gaps.py                                      # what to learn next
 PYTHONIOENCODING=utf-8 python tests/integration_test.py   # 100+ checks, no API calls
@@ -169,9 +176,16 @@ pip install -r requirements.txt
 playwright install chromium
 
 cp .env.example .env        # własny klucz Gemini
-python run_final_pipeline.py
 streamlit run streamlit_app.py
+```
 
+W interfejsie dostępny jest **główny panel uruchamiania („Uruchom pipeline”)**, w którym skonfigurujesz CV (wgranie PDF/DOCX/TXT lub wklejenie tekstu), sprawdzisz wymagania i uruchomisz pipeline z podglądem etapów oraz logów na żywo.
+
+Pipeline można też uruchomić bezpośrednio z wiersza poleceń:
+```bash
+python run_final_pipeline.py                    # pełny przebieg
+python run_final_pipeline.py --skip-scraping      # od deduplikacji i analizy AI
+```
 python eval_ranking.py                                    # czy ranking działa?
 python skill_gaps.py                                      # czego się nauczyć
 PYTHONIOENCODING=utf-8 python tests/integration_test.py   # ponad 100 testów, bez API

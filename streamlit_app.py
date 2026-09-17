@@ -11,19 +11,24 @@ import os
 import json
 import hashlib
 import math
+import time
 import subprocess
 import sys
 import re
 import html
+import threading
+from collections import deque
 from datetime import datetime
-
 def get_key(prefix, link):
     return f"{prefix}_{hashlib.md5(link.encode()).hexdigest()[:10]}"
 
 from config import (
     JOBS_DATABASE_PATH,
+    GEMINI_API_KEYS,
+    _PLACEHOLDERS,
     UI_CONFIG
 )
+from utils.cv_parser import CVParser
 from utils.data_models import JobDatabase, Job, JobMatch
 from utils.text_cleaner import detect_work_mode, strip_html
 from utils.safe_io import save_json_atomic, load_json_safe
@@ -552,11 +557,18 @@ def init_session_state():
     if 'job_lookup' not in st.session_state: st.session_state.job_lookup = {}
     if 'match_lookup' not in st.session_state: st.session_state.match_lookup = {}
     if 'zdjete' not in st.session_state: st.session_state.zdjete = set()
+    if 'pipeline_running' not in st.session_state: st.session_state.pipeline_running = False
 
     # Pulpit: ktora zakladka i ktora oferta jest otwarta w lewym panelu
-    if 'ws_view' not in st.session_state: st.session_state.ws_view = "Dopasowane"
+    if 'ws_view' not in st.session_state:
+        mgr = PipelineProcessManager.get_instance()
+        if mgr.is_running():
+            st.session_state.ws_view = "Uruchom pipeline"
+        else:
+            db_path = JOBS_DATABASE_PATH
+            db_has_jobs = db_path.exists() and db_path.stat().st_size > 50
+            st.session_state.ws_view = "Dopasowane" if db_has_jobs else "Uruchom pipeline"
     if 'ws_selected' not in st.session_state: st.session_state.ws_selected = None
-
 def load_data():
     if st.session_state.data_loaded:
         return
@@ -667,28 +679,498 @@ def _delete_job_permanent(job_link: str):
 # =============================================================================
 
 
+def _get_cv_info():
+    """Zwraca słownik ze stanem CV: czy jest, ścieżka, liczba znaków, liczba słów."""
+    base = Path(__file__).parent
+    cv_txt_path = base / "final_cv_text.txt"
+    cv_pdf_path = base / "cv.pdf"
+
+    text = ""
+    # 1. Zawsze czytaj z final_cv_text.txt jako jedynego źródła prawdy dla modeli AI
+    if cv_txt_path.exists():
+        try:
+            with open(cv_txt_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content and not content.startswith("ERROR:"):
+                    text = content
+        except Exception as e:
+            logger.warning(f"Błąd odczytu {cv_txt_path}: {e}")
+
+    # 2. Tylko gdy final_cv_text.txt NIE ISTNIEJE lub jest pusty, spróbuj wyekstrahować z cv.pdf
+    if not text and cv_pdf_path.exists():
+        try:
+            extracted = CVParser.extract_from_pdf(str(cv_pdf_path))
+            if extracted and len(extracted.strip()) > 20:
+                text = CVParser.clean_text(extracted)
+                with open(cv_txt_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+        except Exception as e:
+            logger.warning(f"Błąd ekstrakcji z {cv_pdf_path}: {e}")
+
+    has_cv = bool(text and len(text.strip()) > 20)
+    chars = len(text)
+    words = len(text.split()) if text else 0
+    filename = "final_cv_text.txt" if cv_txt_path.exists() else ("cv.pdf" if cv_pdf_path.exists() else "Brak")
+
+    return {
+        "ready": has_cv,
+        "text": text,
+        "chars": chars,
+        "words": words,
+        "filename": filename,
+        "pdf_exists": cv_pdf_path.exists(),
+        "txt_exists": cv_txt_path.exists(),
+    }
+
+
+def _save_uploaded_cv(uploaded_file):
+    base = Path(__file__).parent
+    cv_txt_path = base / "final_cv_text.txt"
+    name = uploaded_file.name.lower()
+    content_bytes = uploaded_file.getvalue()
+    text = None
+
+    try:
+        if name.endswith(".pdf"):
+            pdf_path = base / "cv.pdf"
+            with open(pdf_path, "wb") as f:
+                f.write(content_bytes)
+            text = CVParser.extract_from_pdf(str(pdf_path))
+        elif name.endswith((".docx", ".doc")):
+            docx_path = base / "cv.docx"
+            with open(docx_path, "wb") as f:
+                f.write(content_bytes)
+            text = CVParser.extract_from_docx(str(docx_path))
+        else:
+            text = content_bytes.decode("utf-8", errors="replace")
+
+        if text and len(text.strip()) > 20:
+            cleaned = CVParser.clean_text(text)
+            with open(cv_txt_path, "w", encoding="utf-8") as f:
+                f.write(cleaned)
+            st.session_state.current_cv_path = "cv.pdf" if name.endswith(".pdf") else "final_cv_text.txt"
+            st.session_state.cv_text = cleaned
+            return True, f"Zapisano CV ({len(cleaned)} znaków)."
+        else:
+            return False, "Plik CV jest pusty lub nie udało się wyodrębnić tekstu."
+    except Exception as e:
+        logger.error(f"Błąd zapisu CV: {e}")
+        return False, f"Błąd przetwarzania pliku CV: {e}"
+
+
+def _save_pasted_cv_text(raw_text):
+    base = Path(__file__).parent
+    cv_txt_path = base / "final_cv_text.txt"
+    if not raw_text or len(raw_text.strip()) < 20:
+        return False, "Wklejona treść CV jest za krótka (minimum 20 znaków)."
+    try:
+        cleaned = CVParser.clean_text(raw_text)
+        with open(cv_txt_path, "w", encoding="utf-8") as f:
+            f.write(cleaned)
+        st.session_state.current_cv_path = "final_cv_text.txt"
+        st.session_state.cv_text = cleaned
+        return True, f"Zapisano treść CV ({len(cleaned)} znaków)."
+    except Exception as e:
+        logger.error(f"Błąd zapisu tekstu CV: {e}")
+        return False, f"Błąd zapisu tekstu CV: {e}"
+
+
+def _get_api_keys_info():
+    """Sprawdza stan kluczy Gemini API w .env oraz środowisku."""
+    base = Path(__file__).parent
+    env_path = base / ".env"
+    gemini_keys = []
+
+    if env_path.exists():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip()
+                    if k.startswith("GEMINI_API_KEY") and v and v not in _PLACEHOLDERS:
+                        gemini_keys.append((k, v))
+        except Exception as e:
+            logger.warning(f"Błąd czytania .env: {e}")
+
+    if not gemini_keys:
+        for k in ("GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY_1", "GEMINI_API_KEY"):
+            v = os.getenv(k, "").strip()
+            if v and v not in _PLACEHOLDERS:
+                gemini_keys.append((k, v))
+
+    primary_key = next((v for k, v in gemini_keys if k == "GEMINI_API_KEY_PRIMARY"), "")
+    if not primary_key and gemini_keys:
+        primary_key = gemini_keys[0][1]
+
+    has_key = bool(primary_key)
+    masked = f"{primary_key[:4]}…{primary_key[-4:]}" if len(primary_key) > 8 else ("skonfigurowany" if primary_key else "brak")
+
+    return {
+        "ready": has_key,
+        "count": len(gemini_keys),
+        "primary_masked": masked,
+    }
+
+
+def _save_quick_gemini_key(new_key):
+    env_path = Path(__file__).parent / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    written, out = False, []
+    for line in lines:
+        if "=" in line and not line.strip().startswith("#"):
+            k = line.split("=", 1)[0].strip()
+            if k == "GEMINI_API_KEY_PRIMARY":
+                out.append(f"GEMINI_API_KEY_PRIMARY={new_key}")
+                written = True
+                continue
+        out.append(line)
+    if not written:
+        out.append(f"GEMINI_API_KEY_PRIMARY={new_key}")
+    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.environ["GEMINI_API_KEY_PRIMARY"] = new_key
+
+
+def _check_playwright_chromium():
+    """Weryfikuje faktyczną instalację biblioteki Playwright i przeglądarki Chromium."""
+    try:
+        import playwright
+    except ImportError:
+        return False, "Brak Playwright (uruchom: pip install playwright)"
+
+    # Sprawdź obecność pobranej przeglądarki Chromium w katalogu ms-playwright
+    appdata = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData/Local")
+    pw_dir = Path(appdata) / "ms-playwright"
+    if pw_dir.exists():
+        chromes = list(pw_dir.glob("chromium-*/chrome-win64/chrome.exe")) + list(pw_dir.glob("chromium-*/chrome-linux/chrome"))
+        if chromes and any(c.exists() for c in chromes):
+            return True, "Gotowe"
+
+    return False, "Brak Chromium (uruchom: playwright install chromium)"
+
+
+def _check_pipeline_prerequisites():
+    cv_info = _get_cv_info()
+    api_info = _get_api_keys_info()
+    db_count = len(st.session_state.raw_jobs)
+    playwright_ready, playwright_msg = _check_playwright_chromium()
+
+    issues = []
+    if not cv_info["ready"]:
+        issues.append("Brak pliku CV — model AI musi wiedzieć, do czego dopasowywać oferty.")
+    if not api_info["ready"]:
+        issues.append("Brak klucza Gemini API — wymagany do etapu oceny AI (waterfall).")
+    if not playwright_ready:
+        issues.append(f"Środowisko scraperów: {playwright_msg}")
+
+    ready_full = cv_info["ready"] and api_info["ready"] and playwright_ready
+    ready_skip = cv_info["ready"] and api_info["ready"] and db_count > 0
+
+    return {
+        "cv": cv_info,
+        "api": api_info,
+        "db_count": db_count,
+        "playwright_ready": playwright_ready,
+        "playwright_msg": playwright_msg,
+        "ready_full": ready_full,
+        "ready_skip": ready_skip,
+        "issues": issues,
+    }
+
+
+STATE_LOCK_FILE = Path(__file__).parent / "pipeline_run_state.json"
+
+def _is_pid_alive(pid):
+    if not pid or pid <= 0:
+        return False
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        SYNCHRONIZE = 0x00100000
+        process = kernel32.OpenProcess(SYNCHRONIZE, 0, pid)
+        if process != 0:
+            kernel32.CloseHandle(process)
+            return True
+        return False
+    except Exception:
+        return False
+
+
+class PipelineProcessManager:
+    """
+    Niezależny od cyklu życia sesji Streamlita menedżer procesu pipeline'u.
+    Gwarantuje przetrwanie procesu przy rerunach, bezpieczny reattachment
+    oraz ochronę przed wielokrotnym uruchomieniem.
+    """
+    _singleton_lock = threading.RLock()
+
+    def __init__(self):
+        self._process = None
+        self._thread = None
+        self._lock = threading.RLock()
+        self._logs = deque(maxlen=300)
+        self._mode = "full"
+        self._stages = []
+        self._running = False
+        self._success = None
+        self._exit_code = None
+        self._error_message = None
+        self._active_stage_idx = 0
+        self._init_stages("full")
+
+    @classmethod
+    def get_instance(cls):
+        return get_pipeline_manager()
+
+    def _init_stages(self, mode):
+        stages_def = [
+            {"id": "phase0", "num": "00", "title": "Archiwizacja starych ofert", "pattern": r"PHASE 0\b"},
+            {"id": "phase1", "num": "01", "title": "Pobieranie ofert ze źródeł", "pattern": r"PHASE 1\b(?![\.\d])"},
+            {"id": "phase1_5", "num": "1.5", "title": "Normalizacja linków", "pattern": r"PHASE 1\.5\b"},
+            {"id": "phase2", "num": "02", "title": "Deduplikacja bazy ofert", "pattern": r"PHASE 2\b(?![\.\d])"},
+            {"id": "phase2_5", "num": "2.5", "title": "Czyszczenie opisów ofert", "pattern": r"PHASE 2\.5\b"},
+            {"id": "phase3", "num": "03", "title": "Analiza i ocena AI", "pattern": r"PHASE 3\b"},
+            {"id": "phase4", "num": "04", "title": "Ewaluacja rankingu", "pattern": r"PHASE 4\b"},
+        ]
+        self._stages = []
+        for s in stages_def:
+            status = "skipped" if (mode == "skip_scraping" and s["id"] == "phase1") else "pending"
+            self._stages.append({**s, "status": status})
+
+    def is_running(self):
+        with self._lock:
+            if self._process is not None:
+                poll = self._process.poll()
+                if poll is None:
+                    return True
+                self._running = False
+
+            if STATE_LOCK_FILE.exists():
+                try:
+                    with open(STATE_LOCK_FILE, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if data.get("exit_code") is not None or data.get("running") is False:
+                        return False
+                    pid = data.get("pid")
+                    if pid and _is_pid_alive(pid):
+                        return True
+                    else:
+                        STATE_LOCK_FILE.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return False
+
+    def start_pipeline(self, mode="full", cmd=None):
+        with self._lock:
+            if self.is_running():
+                active_pid = self._process.pid if (self._process and self._process.poll() is None) else "inny proces"
+                return False, f"Pipeline jest już uruchomiony (PID: {active_pid})."
+            self._mode = mode
+            self._init_stages(mode)
+            self._logs.clear()
+            self._running = True
+            self._success = None
+            self._exit_code = None
+            self._error_message = None
+            self._active_stage_idx = 0
+
+            cwd = str(Path(__file__).parent)
+            if cmd is None:
+                cmd = [sys.executable, "-u", "run_final_pipeline.py"]
+                if mode == "skip_scraping":
+                    cmd.append("--skip-scraping")
+
+            try:
+                env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+                self._process = subprocess.Popen(
+                    cmd,
+                    cwd=cwd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    env=env
+                )
+                try:
+                    self._sync_state_to_disk()
+                except Exception as le:
+                    logger.warning(f"Błąd zapisu locka: {le}")
+            except Exception as e:
+                self._running = False
+                self._success = False
+                self._error_message = str(e)
+                logger.error(f"Nie udało się uruchomić pipeline: {e}")
+                return False, f"Błąd uruchomienia procesu: {e}"
+
+            self._thread = threading.Thread(target=self._reader_loop, daemon=True)
+            self._thread.start()
+            return True, f"Uruchomiono proces (PID: {self._process.pid})."
+
+    def _sync_state_to_disk(self):
+        try:
+            state = {
+                "pid": self._process.pid if self._process else None,
+                "running": self._running,
+                "mode": self._mode,
+                "stages": [dict(s) for s in self._stages],
+                "logs": list(self._logs),
+                "current_stage_idx": self._active_stage_idx,
+                "current_stage_title": (self._stages[self._active_stage_idx]["title"]
+                                       if self._active_stage_idx < len(self._stages) else ""),
+                "success": self._success,
+                "exit_code": self._exit_code,
+                "error_message": self._error_message,
+            }
+            tmp = str(STATE_LOCK_FILE) + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False)
+            os.replace(tmp, str(STATE_LOCK_FILE))
+        except Exception as e:
+            logger.warning(f"Błąd zapisu stanu procesu: {e}")
+
+    def _reader_loop(self):
+        proc = self._process
+        stages = self._stages
+        pipeline_complete_seen = False
+        pipeline_incomplete_seen = False
+
+        try:
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip()
+                if not line:
+                    continue
+
+                with self._lock:
+                    self._logs.append(line)
+
+                    # 1. Wykrywanie błędu konkretnego etapu
+                    for s in stages:
+                        if re.search(s["pattern"], line) and ("failed" in line.lower() or "error" in line.lower()):
+                            s["status"] = "failed"
+
+                    # 2. Wykrywanie startu etapu (nagłówek)
+                    for idx, s in enumerate(stages):
+                        if re.search(s["pattern"], line) and "failed" not in line.lower() and "error" not in line.lower():
+                            for prev_idx in range(idx):
+                                if stages[prev_idx]["status"] not in ("skipped", "failed", "done"):
+                                    stages[prev_idx]["status"] = "done"
+                            if s["status"] != "skipped" and s["status"] != "failed":
+                                s["status"] = "running"
+                                self._active_stage_idx = idx
+                            break
+
+                    if "PIPELINE COMPLETE" in line:
+                        pipeline_complete_seen = True
+                    elif "PIPELINE INCOMPLETE" in line:
+                        pipeline_incomplete_seen = True
+
+                    self._sync_state_to_disk()
+
+            code = proc.wait()
+        except Exception as e:
+            code = -1
+            with self._lock:
+                self._error_message = str(e)
+
+        with self._lock:
+            self._running = False
+            self._exit_code = code
+
+            any_failed = any(s["status"] == "failed" for s in stages)
+            if code == 0 and pipeline_complete_seen and not any_failed and not pipeline_incomplete_seen:
+                self._success = True
+                for s in stages:
+                    if s["status"] not in ("skipped", "failed"):
+                        s["status"] = "done"
+            else:
+                self._success = False
+                if not any_failed and self._active_stage_idx < len(stages):
+                    stages[self._active_stage_idx]["status"] = "failed"
+
+            self._sync_state_to_disk()
+
+    def get_state(self):
+        with self._lock:
+            if self._process is not None:
+                is_alive = self._process.poll() is None
+                self._running = is_alive
+                current_title = (self._stages[self._active_stage_idx]["title"]
+                                 if self._active_stage_idx < len(self._stages) else "")
+                return {
+                    "running": is_alive,
+                    "pid": self._process.pid,
+                    "mode": self._mode,
+                    "stages": [dict(s) for s in self._stages],
+                    "logs": list(self._logs),
+                    "current_stage_idx": self._active_stage_idx,
+                    "current_stage_title": current_title,
+                    "success": self._success,
+                    "exit_code": self._exit_code,
+                    "error_message": self._error_message,
+                }
+
+            if STATE_LOCK_FILE.exists():
+                try:
+                    with open(STATE_LOCK_FILE, "r", encoding="utf-8") as f:
+                        disk_state = json.load(f)
+                    if disk_state.get("exit_code") is not None or disk_state.get("running") is False:
+                        disk_state["running"] = False
+                    else:
+                        pid = disk_state.get("pid")
+                        is_alive = bool(pid and _is_pid_alive(pid))
+                        disk_state["running"] = is_alive
+                        if not is_alive and disk_state.get("success") is None:
+                            disk_state["success"] = False
+                    return disk_state
+                except Exception as e:
+                    logger.warning(f"Błąd odczytu stanu procesu z dysku: {e}")
+
+            current_title = (self._stages[self._active_stage_idx]["title"]
+                             if self._active_stage_idx < len(self._stages) else "")
+            return {
+                "running": False,
+                "pid": None,
+                "mode": self._mode,
+                "stages": [dict(s) for s in self._stages],
+                "logs": list(self._logs),
+                "current_stage_idx": self._active_stage_idx,
+                "current_stage_title": current_title,
+                "success": self._success,
+                "exit_code": self._exit_code,
+                "error_message": self._error_message,
+            }
+
+
+@st.cache_resource
+def get_pipeline_manager():
+    """Oficjalny singleton Streamlita - zachowuje stan procesu między wszystkimi rerunami."""
+    return PipelineProcessManager()
+
+
 def _run_step(cmd, label, done_label, tail=14):
     """
-    Uruchom etap pipeline'u i pokazuj jego wyjście NA ŻYWO.
-
-    Wcześniej było `subprocess.run(capture_output=True)`, czyli interfejs stał
-    zamrożony bez jednego znaku informacji - przy pełnym scrapowaniu nawet
-    45 minut. Popen i czytanie linia po linii pokazuje, co się właśnie dzieje.
-
-    Flaga `-u` jest konieczna: Python przy przekierowanym wyjściu buforuje je
-    blokowo i bez niej podgląd na żywo pokazywałby pustkę aż do końca procesu.
+    Uruchom pojedynczy krok z zaawansowanych narzędzi.
     """
+    mgr = PipelineProcessManager.get_instance()
+    if mgr.is_running():
+        st.warning("Inny proces pipeline'u jest już w toku.")
+        return False
+
     from collections import deque
 
     with st.status(label, expanded=True) as status:
         view = st.empty()
         lines = deque(maxlen=tail)
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         try:
             proc = subprocess.Popen(
                 [sys.executable, "-u", *cmd],
                 cwd=str(Path(__file__).parent),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
+                env=env,
             )
             for line in proc.stdout:
                 line = line.rstrip()
@@ -708,8 +1190,6 @@ def _run_step(cmd, label, done_label, tail=14):
         status.update(label=f"{label} — nie powiodło się", state="error", expanded=True)
         st.error("Ostatnie linie:\n\n" + "\n".join(lines) if lines else f"Kod wyjścia {code}")
         return False
-
-
 # =============================================================================
 # PULPIT: WARSTWA WIZUALNA
 # =============================================================================
@@ -880,6 +1360,53 @@ def inject_workspace_css():
             color: var(--faint);
         }
         .wt-stage.is-off b { color: var(--accent-ash); }
+        .wt-live-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            padding: 0.28rem 0.65rem;
+            border-radius: 999px;
+            font-family: var(--font-mono);
+            font-size: var(--fs-micro);
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            border: 1px solid var(--line);
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.02);
+            align-self: center;
+        }
+        .wt-live-pill.is-running {
+            color: var(--accent);
+            border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+            background: var(--accent-soft);
+        }
+        .wt-live-pill.is-ready {
+            color: var(--moss);
+            border-color: color-mix(in srgb, var(--moss) 35%, transparent);
+            background: color-mix(in srgb, var(--moss) 8%, transparent);
+        }
+        .wt-live-pill.is-idle {
+            color: var(--muted);
+            border-color: var(--line-soft);
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .wt-live-pill.is-idle .wt-live-dot {
+            background: var(--faint);
+        }
+        .wt-live-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+            display: inline-block;
+        }
+        .wt-live-pill.is-running .wt-live-dot {
+            animation: wt-pulse 1.2s ease-in-out infinite;
+        }
+        @keyframes wt-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.3; transform: scale(0.8); }
+        }
 
         /* ---------- zakładki ---------- */
         [class*="st-key-wstabs"] { margin: 0; }
@@ -1299,7 +1826,8 @@ def inject_workspace_css():
         div:has(> [class^="wg-"]),
         div:has(> [class^="wx-"]),
         div:has(> [class^="wt-"]),
-        div:has(> [class^="wd-"]) {
+        div:has(> [class^="wd-"]),
+        div:has(> [class^="wz-"]) {
             margin-bottom: 0 !important;
         }
         [class*="st-key-wsrow_"]:hover,
@@ -1701,6 +2229,54 @@ def inject_workspace_css():
             opacity: 0.75;
         }
 
+        /* Główny przycisk akcji (primary): wyraźny, wysoki kontrast z tokenami motywu */
+        button[data-testid="stBaseButton-primary"],
+        button[kind="primary"],
+        .stButton button[kind="primary"] {
+            background: var(--accent) !important;
+            color: var(--ground) !important;
+            border: 1px solid var(--accent) !important;
+            font-weight: 600 !important;
+            letter-spacing: -0.01em !important;
+        }
+        button[data-testid="stBaseButton-primary"]:hover,
+        button[kind="primary"]:hover,
+        .stButton button[kind="primary"]:hover {
+            background: var(--text-bright) !important;
+            color: #0F1013 !important;
+            border-color: var(--text-bright) !important;
+        }
+        button[data-testid="stBaseButton-primary"]:disabled,
+        button[kind="primary"]:disabled,
+        .stButton button[kind="primary"]:disabled {
+            background: rgba(255, 255, 255, 0.05) !important;
+            color: var(--faint) !important;
+            border-color: var(--line-soft) !important;
+            opacity: 0.45 !important;
+        }
+        button[data-testid="stBaseButton-primary"] p,
+        button[kind="primary"] p,
+        .stButton button[kind="primary"] p {
+            color: var(--ground) !important;
+            font-weight: 600 !important;
+        }
+        button[data-testid="stBaseButton-primary"]:hover p,
+        button[kind="primary"]:hover p,
+        .stButton button[kind="primary"]:hover p {
+            color: #0F1013 !important;
+        }
+        button[data-testid="stBaseButton-primary"] [data-testid="stIconMaterial"],
+        button[kind="primary"] [data-testid="stIconMaterial"],
+        .stButton button[kind="primary"] [data-testid="stIconMaterial"] {
+            color: var(--ground) !important;
+            opacity: 1 !important;
+        }
+        button[data-testid="stBaseButton-primary"]:hover [data-testid="stIconMaterial"],
+        button[kind="primary"]:hover [data-testid="stIconMaterial"],
+        .stButton button[kind="primary"]:hover [data-testid="stIconMaterial"] {
+            color: #0F1013 !important;
+        }
+
         /* ---------- rząd decyzji ----------
            Cztery decyzje to nie cztery akcje - to jeden wybór stanu, w którym
            tylko jedna opcja może być prawdziwa. Wcześniej wyglądały jak cztery
@@ -1938,17 +2514,125 @@ def inject_workspace_css():
         }
 
         .wx-file {
-            font-family: var(--font-mono);
-            font-size: var(--fs-small);
-            color: var(--text);
-            word-break: break-all;
+            font-family: var(--font-body);
+            font-size: var(--fs-body);
+            font-weight: 500;
+            color: var(--text-bright);
+            line-height: 1.35;
+            word-break: break-word;
         }
         .wx-path {
             margin-top: 0.15rem;
+            font-family: var(--font-body);
+            font-size: var(--fs-small);
+            color: var(--muted);
+            line-height: 1.35;
+        }
+
+        /* ---------- etapy pipeline'u i wskaźnik postępu (rytm wiersza ofert) ---------- */
+        .wz-stage-list {
+            display: flex;
+            flex-direction: column;
+            border-top: 1px solid var(--line-soft);
+            margin: 0.6rem 0 0.8rem;
+        }
+        .wz-stage-item {
+            display: grid;
+            grid-template-columns: 2.2rem minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.52rem 0.5rem;
+            background: transparent;
+            border-bottom: 1px solid var(--line-soft);
+            font-size: var(--fs-small);
+            transition: background 0.15s ease, box-shadow 0.15s ease;
+        }
+        .wz-stage-item.is-running {
+            background: var(--accent-soft);
+            box-shadow: inset 2px 0 0 var(--accent);
+        }
+        .wz-stage-item.is-done {
+            background: transparent;
+            box-shadow: none;
+        }
+        .wz-stage-item.is-failed {
+            background: color-mix(in srgb, var(--clay) 8%, transparent);
+            box-shadow: inset 2px 0 0 var(--clay);
+        }
+        .wz-stage-item.is-skipped {
+            opacity: 0.45;
+        }
+        .wz-stage-num {
             font-family: var(--font-mono);
             font-size: var(--fs-micro);
+            font-weight: 500;
             color: var(--faint);
-            word-break: break-all;
+            font-variant-numeric: tabular-nums;
+        }
+        .wz-stage-item.is-running .wz-stage-num { color: var(--accent); }
+        .wz-stage-item.is-done .wz-stage-num { color: var(--muted); }
+        .wz-stage-item.is-failed .wz-stage-num { color: var(--clay); }
+        .wz-stage-name {
+            font-family: var(--font-body);
+            font-size: var(--fs-body);
+            color: var(--text-bright);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .wz-stage-item.is-done .wz-stage-name {
+            color: var(--text);
+        }
+        .wz-stage-item.is-skipped .wz-stage-name {
+            color: var(--faint);
+        }
+        .wz-stage-state {
+            font-family: var(--font-mono);
+            font-size: var(--fs-micro);
+            letter-spacing: 0.04em;
+            color: var(--faint);
+            text-transform: uppercase;
+        }
+        .wz-stage-item.is-running .wz-stage-state { color: var(--accent); font-weight: 600; }
+        .wz-stage-item.is-done .wz-stage-state { color: var(--muted); font-weight: 400; }
+        .wz-stage-item.is-failed .wz-stage-state { color: var(--clay); font-weight: 600; }
+
+        /* Wiersze stanu przygotowania (lewy panel) */
+        .wx-item {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 0.6rem;
+            padding: 0.45rem 0.15rem;
+            border-bottom: 1px solid var(--line-soft);
+        }
+        .wx-item-main {
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+        .wx-item-status {
+            flex: 0 0 auto;
+            font-family: var(--font-mono);
+            font-size: var(--fs-micro);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            font-weight: 600;
+            color: var(--muted);
+        }
+        .wx-item-status.is-ok {
+            color: var(--moss);
+        }
+        .wx-item-status.is-warn {
+            color: var(--clay);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .wt-live-pill.is-running .wt-live-dot {
+                animation: none;
+            }
+            .wz-stage-item {
+                transition: none;
+            }
         }
 
         /* ---------- wejście: rozciąganie i wjazd ----------
@@ -2034,7 +2718,7 @@ def inject_workspace_css():
 # =============================================================================
 
 WS_TABS = ["Dopasowane", "Wszystkie", "Ocenione", "Zapisane", "Aspiracyjne", "Odrzucone"]
-WS_TOOLS = ["Czego brakuje", "Dodaj z linku", "Panel sterowania"]
+WS_TOOLS = ["Uruchom pipeline", "Czego brakuje", "Dodaj z linku"]
 WS_ALL = WS_TABS + WS_TOOLS
 
 WS_TAB_HINT = {
@@ -2044,9 +2728,10 @@ WS_TAB_HINT = {
     "Zapisane":   "zapisane oraz te, gdzie aplikacja już poszła",
     "Aspiracyjne": "za wysoko na teraz, ale w tę stronę celujesz",
     "Odrzucone":  "odrzucone - profil uczy się, czego nie chcesz",
+    "Uruchom pipeline": "konfiguracja CV i kluczy, uruchomienie pełnego pipeline'u oraz postęp na żywo",
     "Czego brakuje": "umiejętności, przez które odpadają oferty skądinąd dopasowane",
     "Dodaj z linku": "wklej adres oferty; po lewej podgląd tego, co wpadnie do bazy",
-    "Panel sterowania": "po lewej stan danych, po prawej to, co go zmienia",
+    "Panel sterowania": "konfiguracja CV i kluczy, uruchomienie pełnego pipeline'u oraz postęp na żywo",
 }
 
 WS_STAGE_NAMES = {
@@ -2058,6 +2743,13 @@ WS_STAGE_NAMES = {
 }
 # Stare zapisy używały innych nazw etapu
 WS_STAGE_LEGACY = {"saved": "save", "reject": "archive", "rejected": "archive"}
+
+def _ws_switch_view(view_name):
+    """Zmienia aktywny widok programistycznie przez callback przycisku (on_click)."""
+    st.session_state.ws_view = view_name
+    st.session_state["ws_nav"] = view_name
+    st.session_state.ws_selected = None
+
 
 
 def _ws_touch():
@@ -2335,6 +3027,32 @@ def ws_render_list_panel(tab):
                           on_click=_ws_page_step, args=(page_key, 1, total_pages))
 
     if not items:
+        if tab == "Dopasowane":
+            db_count = len(st.session_state.raw_jobs)
+            if db_count == 0:
+                st.markdown(
+                    '<div class="wp-empty">'
+                    '<strong>Baza ofert jest pusta.</strong><br>'
+                    'Skonfiguruj swoje CV i uruchom pipeline, aby pobrać oferty z portali pracy i ocenić je przez model AI.'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+                st.button("Skonfiguruj i uruchom pipeline", icon=":material/rocket_launch:",
+                          type="primary", key="empty_goto_pipeline",
+                          on_click=_ws_switch_view, args=("Uruchom pipeline",))
+                return
+            elif len(st.session_state.analyzed_matches) == 0:
+                st.markdown(
+                    f'<div class="wp-empty">'
+                    f'<strong>W bazie jest {fmt_n(db_count)} ofert, ale żadna nie ma jeszcze oceny AI.</strong><br>'
+                    'Uruchom ocenianie ofert, aby pojawiły się na liście dopasowanych.'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+                st.button("Uruchom ocenianie ofert", icon=":material/play_arrow:",
+                          type="primary", key="empty_goto_pipeline_eval",
+                          on_click=_ws_switch_view, args=("Uruchom pipeline",))
+                return
         st.markdown('<div class="wp-empty">Nic tu nie ma. '
                     'Zmień zakładkę albo wyczyść szukanie.</div>',
                     unsafe_allow_html=True)
@@ -2409,7 +3127,7 @@ def ws_render_activity():
     rows = ws_activity_rows()
     if not rows:
         st.markdown('<div class="wp-empty">Pusto - nic jeszcze nie chodziło. '
-                    'Zajrzyj do „Panel sterowania”.</div>', unsafe_allow_html=True)
+                    'Zajrzyj do „Uruchom pipeline”.</div>', unsafe_allow_html=True)
     else:
         out = ['<div class="wl-block">']
         for i, (when, op, what, detail, bad) in enumerate(rows):
@@ -2933,14 +3651,6 @@ def ws_tool_pipeline(left, right):
     analyzed_path = base / "analyzed_jobs_waterfall.json"
     profile_path = base / "preference_profile.json"
 
-    # Liczymy na ZBIORACH linków, nie na długościach list. Poprzednia wersja
-    # robiła `baza - oceny_AI - decyzje`, a decyzje dotyczą ofert, które już
-    # mają ocenę AI - ta sama oferta była odejmowana dwa razy i "czeka na ocenę"
-    # potrafiło pokazać 0 przy tysiącach nieprzeanalizowanych ofert.
-    # Te same dane siedza juz w pamieci sesji - wczytane raz przy starcie.
-    # Wczesniej kazde przeladowanie tej zakladki parsowalo 64 MB JSON-a
-    # z dysku (0,56 s zmierzone), zeby policzyc dlugosci trzech zbiorow.
-    # Po kroku pipeline'u UI i tak przeladowuje dane, wiec liczby sa swieze.
     db_links = {canonical_link(j.link) for j in st.session_state.raw_jobs}
     analyzed_links = {canonical_link(m.job.link) for m in st.session_state.analyzed_matches}
     decided_links = {canonical_link(l) for l in st.session_state.user_decisions}
@@ -2955,235 +3665,482 @@ def ws_tool_pipeline(left, right):
     profile_built_from = profile.get("_metadata", {}).get("total_decisions_analyzed", 0) or 0
     new_decisions = max(0, decisions_count - profile_built_from)
 
-    if db_count == 0:
-        next_up = ("Zacznij od kroku 01 - baza jest pusta, więc nie ma czego "
-                   "oceniać. Pobranie ofert niczego nie kasuje.")
-    elif pending > 0:
-        next_up = (f"Przejdź do kroku 03 - {fmt_n(pending)} ofert czeka na ocenę AI. "
-                   f"Bez tego nie pojawią się w „Dopasowane”.")
-    elif not profile_exists and decisions_count >= 10:
-        next_up = (f"Przejdź do kroku 02 - masz {decisions_count} ocen, z których "
-                   f"da się zbudować profil i trafniej oceniać kolejne oferty.")
-    elif new_decisions >= 25:
-        next_up = (f"Warto odświeżyć krok 02 - od zbudowania profilu doszło "
-                   f"{new_decisions} nowych decyzji.")
-    else:
-        next_up = ("Wszystko policzone. Wróć do „Dopasowane” i oceniaj oferty - "
-                   "każda Twoja ocena poprawia kolejne.")
+    cv_info = _get_cv_info()
+    api_info = _get_api_keys_info()
+    prereqs = _check_pipeline_prerequisites()
 
-    # ---------------- lewy panel: stan i historia ----------------
+    mgr = PipelineProcessManager.get_instance()
+    is_running = mgr.is_running()
+    state = mgr.get_state()
+
+    # ---------------- lewy panel: Wymagania i konfiguracja ----------------
     with left:
         with st.container(key="wsleft"):
-            ws_panel_head("stan danych")
-            stats = [
-                ("ofert w bazie", fmt_n(db_count), ""),
-                ("z oceną AI", fmt_n(analyzed_count), ""),
-                ("czeka na ocenę", fmt_n(pending), "is-off" if pending else "is-on"),
-                ("Twoich decyzji", fmt_n(decisions_count), ""),
-                ("profil preferencji", "gotowy" if profile_exists else "brak",
-                 "is-on" if profile_exists else "is-off"),
-            ]
-            for label, val, cls in stats:
+            ws_panel_head("przygotowanie")
+
+            # Sekcja Twoje CV
+            ws_panel_head("twoje cv", mid=True)
+            if cv_info["ready"]:
                 st.markdown(
-                    f'<div class="wx-stat"><span class="wx-stat-lbl">{_esc(label)}'
-                    f'</span><span class="wx-stat-val {cls}">{_esc(val)}</span></div>',
-                    unsafe_allow_html=True)
+                    f'<div class="wx-item">'
+                    f'  <div class="wx-item-main">'
+                    f'    <div class="wx-file">{_esc(cv_info["filename"])}</div>'
+                    f'    <div class="wx-path">{fmt_n(cv_info["chars"])} znaków · ok. {fmt_n(cv_info["words"])} słów</div>'
+                    f'  </div>'
+                    f'  <div class="wx-item-status is-ok">gotowe</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+                with st.expander("Zmień plik lub podejrzyj treść", expanded=False):
+                    uploaded_cv = st.file_uploader(
+                        "Wgraj nowy plik CV (PDF, DOCX, TXT):",
+                        type=["pdf", "docx", "txt"],
+                        disabled=is_running,
+                        key="cv_file_uploader_input",
+                        help="Wyodrębnia tekst z pliku i zapisuje do bazy jako Twoje aktywne CV."
+                    )
+                    if uploaded_cv is not None and not is_running:
+                        upload_sig = f"{uploaded_cv.name}_{uploaded_cv.size}"
+                        if st.session_state.get("_last_processed_cv_upload") != upload_sig:
+                            ok, msg = _save_uploaded_cv(uploaded_cv)
+                            st.session_state["_last_processed_cv_upload"] = upload_sig
+                            if ok:
+                                st.toast(msg)
+                                st.rerun(scope="app")
+                            else:
+                                st.error(msg)
 
-            st.markdown(f'<div class="wp-note is-ok" style="margin-top:0.9rem">'
-                        f'{_esc(next_up)}</div>', unsafe_allow_html=True)
+                    pasted_text = st.text_area("Wklej treść CV bezpośrednio:", height=90, key="cv_paste_area", disabled=is_running)
+                    if st.button("Zapisz wklejony tekst", icon=":material/save:", disabled=is_running or not pasted_text.strip(), key="cv_save_pasted_btn"):
+                        ok, msg = _save_pasted_cv_text(pasted_text)
+                        if ok:
+                            st.toast(msg)
+                            st.rerun(scope="app")
+                        else:
+                            st.error(msg)
 
-            ws_panel_head("co się ostatnio działo", mid=True)
-            rows = ws_activity_rows(limit=4)
-            if not rows:
-                st.markdown('<div class="wp-empty">Nic jeszcze nie chodziło.</div>',
-                            unsafe_allow_html=True)
+                    cv_pdf_file = base / "cv.pdf"
+                    if cv_pdf_file.exists():
+                        if st.button("Otwórz lokalny plik cv.pdf", icon=":material/description:", key="open_cv_local_btn", disabled=is_running):
+                            try:
+                                os.startfile(str(cv_pdf_file))
+                                st.toast("Otwieram CV…")
+                            except Exception as e:
+                                st.error(f"Nie udało się otworzyć pliku: {e}")
+
+                    if cv_info["text"]:
+                        st.caption("Początek aktywnego CV:")
+                        preview_txt = cv_info["text"][:300] + ("…" if len(cv_info["text"]) > 300 else "")
+                        st.text(preview_txt)
             else:
-                out = ['<div class="wl-block">']
-                for i, (when, op, what, detail, bad) in enumerate(rows):
-                    out.append(
-                        f'<div class="wl-line is-fresh" style="--i:{i}">'
-                        f'<span class="wl-time">{when.strftime("%Y-%m-%d %H:%M:%S")}</span>'
-                        f'<span class="wl-op{" is-bad" if bad else ""}">{_esc(op)}</span>'
-                        f'<span class="wl-what">'
-                        f'{src_dot(what) if op == "pobieranie" else _esc(what)}</span>'
-                        f'<span class="wl-detail">{_esc(detail)}</span></div>')
-                out.append('</div>')
-                st.markdown("".join(out), unsafe_allow_html=True)
+                st.markdown(
+                    '<div class="wp-note is-warn">'
+                    'Nie znaleziono pliku CV. Wgraj plik PDF, DOCX lub TXT poniżej — '
+                    'model AI używa go jako wzorca do oceny ofert pracy.'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+                uploaded_cv = st.file_uploader(
+                    "Wgraj CV (PDF, DOCX, TXT):",
+                    type=["pdf", "docx", "txt"],
+                    disabled=is_running,
+                    key="cv_file_uploader_missing",
+                    help="Wyodrębnia tekst z pliku i zapisuje do bazy jako Twoje aktywne CV."
+                )
+                if uploaded_cv is not None and not is_running:
+                    upload_sig = f"{uploaded_cv.name}_{uploaded_cv.size}"
+                    if st.session_state.get("_last_processed_cv_upload") != upload_sig:
+                        ok, msg = _save_uploaded_cv(uploaded_cv)
+                        st.session_state["_last_processed_cv_upload"] = upload_sig
+                        if ok:
+                            st.toast(msg)
+                            st.rerun(scope="app")
+                        else:
+                            st.error(msg)
 
-            ws_panel_head("aplikacja", mid=True)
-            cv_path = Path(st.session_state.current_cv_path)
-            st.markdown(
-                f'<div class="wx-file">{_esc(cv_path.name)}</div>'
-                f'<div class="wx-path">{_esc(str(cv_path.absolute().parent))}</div>',
-                unsafe_allow_html=True)
-            with st.container(key="wstool_cv", horizontal=True, gap="small"):
-                if st.button("Otwórz CV", icon=":material/description:",
-                             key="wstool_cv_open"):
-                    if cv_path.exists():
-                        try:
-                            os.startfile(str(cv_path))
-                            st.toast("Otwieram CV…")
-                        except OSError as e:
-                            st.error(f"Nie udało się otworzyć pliku: {e}")
-                    else:
-                        st.error("Nie znaleziono pliku")
-                if st.button("Zmień CV", icon=":material/edit:",
-                             key="wstool_cv_pick"):
-                    import tkinter as tk
-                    from tkinter import filedialog
-                    root = tk.Tk()
-                    root.withdraw()
-                    root.wm_attributes('-topmost', 1)
-                    picked = filedialog.askopenfilename(
-                        title="Wybierz plik CV",
-                        filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")])
-                    root.destroy()
-                    if picked:
-                        st.session_state.current_cv_path = picked
-                        st.session_state.cv_text = None
+                with st.expander("Lub wklej treść CV ręcznie", expanded=False):
+                    pasted_text = st.text_area("Wklej treść CV:", height=90, key="cv_paste_missing_area", disabled=is_running)
+                    if st.button("Zapisz wklejony tekst", icon=":material/save:", disabled=is_running or not pasted_text.strip(), key="cv_save_pasted_missing_btn"):
+                        ok, msg = _save_pasted_cv_text(pasted_text)
+                        if ok:
+                            st.toast(msg)
+                            st.rerun(scope="app")
+                        else:
+                            st.error(msg)
+
+            # Sekcja Klucz Gemini API
+            ws_panel_head("klucz gemini api", mid=True)
+            if api_info["ready"]:
+                st.markdown(
+                    f'<div class="wx-item">'
+                    f'  <div class="wx-item-main">'
+                    f'    <div class="wx-file">Gemini API</div>'
+                    f'    <div class="wx-path">Pula rotacji: {api_info["count"]} klucz(e)</div>'
+                    f'  </div>'
+                    f'  <div class="wx-item-status is-ok">gotowy</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+                with st.expander("Zmień klucz lub edytuj .env", expanded=False):
+                    quick_key = st.text_input("Zmień klucz główny (GEMINI_API_KEY_PRIMARY):",
+                                             type="password", key="quick_gemini_input", disabled=is_running)
+                    if st.button("Zapisz nowy klucz", icon=":material/save:", disabled=is_running or not quick_key.strip(), key="save_quick_gemini_btn"):
+                        _save_quick_gemini_key(quick_key.strip())
+                        st.toast("Zapisano klucz Gemini w .env")
                         st.rerun(scope="app")
-                if st.button("Odśwież", icon=":material/refresh:",
-                             key="wstool_reload",
-                             help="Czyta pliki z dysku od nowa. Nic nie pobiera "
-                                  "z internetu i niczego nie usuwa."):
-                    st.session_state.data_loaded = False
-                    _ws_touch()
-                    st.toast("Wczytano dane z dysku od nowa.")
+                    with st.container(key="wstool_keys"):
+                        ws_render_env_keys(disabled=is_running)
+            else:
+                st.markdown(
+                    '<div class="wp-note is-warn">'
+                    'Brak skonfigurowanego klucza Gemini API. Podaj klucz poniżej, '
+                    'aby umożliwić ocenę ofert przez AI.'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+                quick_key = st.text_input("Klucz Gemini API (GEMINI_API_KEY_PRIMARY):",
+                                         type="password", key="quick_gemini_input_missing", disabled=is_running)
+                if st.button("Zapisz klucz w .env", icon=":material/save:", disabled=is_running or not quick_key.strip(), key="save_missing_gemini_btn"):
+                    _save_quick_gemini_key(quick_key.strip())
+                    st.toast("Zapisano klucz Gemini w .env")
                     st.rerun(scope="app")
+                with st.expander("Wszystkie klucze API i portale (.env)", expanded=False):
+                    with st.container(key="wstool_keys_missing"):
+                        ws_render_env_keys(disabled=is_running)
 
-    # ---------------- prawy panel: to, co zmienia stan ----------------
+            # Sekcja Środowisko i narzędzia
+            ws_panel_head("środowisko i narzędzia", mid=True)
+            if prereqs["playwright_ready"]:
+                st.markdown(
+                    '<div class="wx-item">'
+                    '  <div class="wx-item-main">'
+                    '    <div class="wx-file">Środowisko scraperów</div>'
+                    '    <div class="wx-path">Playwright + Chromium</div>'
+                    '  </div>'
+                    '  <div class="wx-item-status is-ok">gotowe</div>'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f'<div class="wp-note is-warn">'
+                    f'Środowisko scraperów nie jest gotowe: {_esc(prereqs["playwright_msg"])}. '
+                    f'Do pobierania ofert wymagana jest przeglądarka Playwright.'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+            # Narzędzia: odświeżenie danych z dysku
+            if st.button("Odśwież dane z dysku", icon=":material/refresh:",
+                         key="wstool_reload", disabled=is_running,
+                         help="Czyta pliki z dysku od nowa. Nic nie pobiera z internetu."):
+                st.session_state.data_loaded = False
+                _ws_touch()
+                st.toast("Wczytano dane z dysku od nowa.")
+                st.rerun(scope="app")
+
+            with st.expander("Ostatnia aktywność", expanded=False):
+                rows = ws_activity_rows(limit=4)
+                if not rows:
+                    st.markdown('<div class="wp-empty">Brak zarejestrowanych operacji.</div>',
+                                unsafe_allow_html=True)
+                else:
+                    out = ['<div class="wl-block">']
+                    for i, (when, op, what, detail, bad) in enumerate(rows):
+                        out.append(
+                            f'<div class="wl-line is-fresh" style="--i:{i}">'
+                            f'<span class="wl-time">{when.strftime("%Y-%m-%d %H:%M:%S")}</span>'
+                            f'<span class="wl-op{" is-bad" if bad else ""}">{_esc(op)}</span>'
+                            f'<span class="wl-what">'
+                            f'{src_dot(what) if op == "pobieranie" else _esc(what)}</span>'
+                            f'<span class="wl-detail">{_esc(detail)}</span></div>')
+                    out.append('</div>')
+                    st.markdown("".join(out), unsafe_allow_html=True)
+
+    # ---------------- prawy panel: Przebieg ----------------
     with right:
         with st.container(key="wsright"):
-            ws_panel_head("pipeline", "3 kroki")
-            with st.container(key="wstool_steps"):
+            ws_panel_head("przebieg")
+
+            # Wybór trybu
+            mode_choice = st.radio(
+                "Tryb:",
+                options=[
+                    "Pełny pipeline (od pobrania po ewaluację)",
+                    "Tylko analiza AI i deduplikacja (--skip-scraping)"
+                ],
+                index=0,
+                disabled=is_running,
+                key="pipeline_mode_selection",
+                label_visibility="collapsed",
+            )
+            mode_key = "full" if "Pełny pipeline" in mode_choice else "skip_scraping"
+            is_ready = prereqs["ready_skip"] if mode_key == "skip_scraping" else prereqs["ready_full"]
+
+            SHORT_STAGE_TITLES = {
+                "phase0": "Archiwizacja starych ofert",
+                "phase1": "Pobieranie ofert ze źródeł",
+                "phase1_5": "Normalizacja linków",
+                "phase2": "Deduplikacja bazy ofert",
+                "phase2_5": "Czyszczenie opisów ofert",
+                "phase3": "Analiza i ocena AI",
+                "phase4": "Ewaluacja rankingu",
+            }
+
+            def render_stages_html(stages, current_mode="full"):
+                items = []
+                for s in stages:
+                    status = s["status"]
+                    if not is_running and current_mode == "skip_scraping" and s.get("id") == "phase1" and status == "pending":
+                        status = "skipped"
+                    cls = f"wz-stage-item is-{status}"
+                    state_lbl = {
+                        "pending": "Oczekuje",
+                        "running": "W toku…",
+                        "done": "Ukończono",
+                        "skipped": "Pominięto",
+                        "failed": "Błąd"
+                    }.get(status, status)
+                    title = SHORT_STAGE_TITLES.get(s.get("id"), s.get("title", ""))
+                    items.append(
+                        f'<div class="{cls}">'
+                        f'<span class="wz-stage-num">{_esc(s["num"])}</span>'
+                        f'<span class="wz-stage-name">{_esc(title)}</span>'
+                        f'<span class="wz-stage-state">{_esc(state_lbl)}</span>'
+                        f'</div>'
+                    )
+                return f'<div class="wz-stage-list">{"".join(items)}</div>'
+
+            # 7 etapów jest ZAWSZE widocznych
+            stages_ph = st.empty()
+            status_ph = st.empty()
+            log_ph = st.empty()
+
+            # Jeśli proces działa lub ma zapisane logi z przebiegu (np. reattachment)
+            if state["running"]:
+                while mgr.is_running():
+                    cur_state = mgr.get_state()
+                    stages_ph.markdown(render_stages_html(cur_state["stages"], mode_key), unsafe_allow_html=True)
+                    status_ph.markdown(f'<div class="wp-note is-ok">Trwa etap: {_esc(SHORT_STAGE_TITLES.get(cur_state["stages"][cur_state["current_stage_idx"]]["id"], cur_state["current_stage_title"]))}…</div>', unsafe_allow_html=True)
+                    log_text = "\n".join(cur_state["logs"][-20:])
+                    with log_ph.container():
+                        with st.expander("Dziennik zdarzeń (na żywo)", expanded=False):
+                            st.code(log_text, language=None)
+                    time.sleep(0.4)
+
+                cur_state = mgr.get_state()
+                stages_ph.markdown(render_stages_html(cur_state["stages"], mode_key), unsafe_allow_html=True)
+                if cur_state["success"]:
+                    status_ph.markdown(
+                        '<div class="wp-note is-ok" style="margin-top:0.6rem;">'
+                        '<strong>PIPELINE COMPLETE</strong> — Wszystkie etapy zakończone pomyślnie. '
+                        'Baza ofert oraz oceny dopasowania zostały zaktualizowane.'
+                        '</div>',
+                        unsafe_allow_html=True
+                    )
+                    st.session_state.data_loaded = False
+                    _ws_touch()
+                    time.sleep(0.5)
+                    st.rerun(scope="app")
+                else:
+                    failed_s = next((SHORT_STAGE_TITLES.get(s["id"], s["title"]) for s in cur_state["stages"] if s["status"] == "failed"), "Nieznany etap")
+                    status_ph.markdown(
+                        f'<div class="wp-note is-warn" style="margin-top:0.6rem;">'
+                        f'<strong>PIPELINE INCOMPLETE (kod {cur_state["exit_code"]})</strong> — '
+                        f'Etap „{_esc(failed_s)}” nie powiódł się. Szczegóły w dzienniku zdarzeń.'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+                with log_ph.container():
+                    with st.expander("Dziennik zdarzeń", expanded=not cur_state["success"]):
+                        st.code("\n".join(cur_state["logs"][-20:]), language=None)
+
+            elif state["logs"]:
+                stages_ph.markdown(render_stages_html(state["stages"], mode_key), unsafe_allow_html=True)
+                if state["success"] is True:
+                    status_ph.markdown(
+                        '<div class="wp-note is-ok" style="margin-top:0.6rem;">'
+                        '<strong>PIPELINE COMPLETE</strong> — Wszystkie etapy zakończone pomyślnie. '
+                        'Baza ofert oraz oceny dopasowania zostały zaktualizowane.'
+                        '</div>',
+                        unsafe_allow_html=True
+                    )
+                    st.button("Przejdź do listy ofert (Dopasowane)", type="primary",
+                              key="pipeline_done_goto_matches",
+                              on_click=_ws_switch_view, args=("Dopasowane",))
+                elif state["success"] is False:
+                    failed_stage = next((SHORT_STAGE_TITLES.get(s["id"], s["title"]) for s in state["stages"] if s["status"] == "failed"), "Nieznany etap")
+                    status_ph.markdown(
+                        f'<div class="wp-note is-warn" style="margin-top:0.6rem;">'
+                        f'<strong>PIPELINE INCOMPLETE (kod {state["exit_code"]})</strong> — '
+                        f'Etap „{_esc(failed_stage)}” nie powiódł się. Szczegóły w dzienniku zdarzeń.'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+                with log_ph.container():
+                    with st.expander("Dziennik zdarzeń z ostatniego przebiegu", expanded=state["success"] is False):
+                        st.code("\n".join(state["logs"][-20:]), language=None)
+
+            else:
+                # Stan bezczynny (idle) - 7 etapów zawsze widocznych
+                stages_ph.markdown(render_stages_html(state["stages"], mode_key), unsafe_allow_html=True)
+
+            # Kontrolka startu (gdy proces nie trwa)
+            if not state["running"]:
+                if not is_ready:
+                    status_ph.markdown(
+                        '<div class="wp-note is-warn" style="margin-top:0.4rem;">'
+                        '<strong>Nie można uruchomić pipeline\'u:</strong><ul style="margin:0.25rem 0 0 1.2rem;padding:0;">'
+                        + "".join(f"<li>{_esc(m)}</li>" for m in prereqs["issues"])
+                        + '</ul></div>',
+                        unsafe_allow_html=True
+                    )
+                    st.button(
+                        "Uruchom pipeline",
+                        icon=":material/play_arrow:",
+                        disabled=True,
+                        key="run_pipeline_disabled_btn",
+                        help="Uzupełnij brakujące wymagania w lewym panelu."
+                    )
+                else:
+                    desc_text = (
+                        "Pobierze nowe oferty ze wszystkich portali, zdeduplikuje bazę, "
+                        "skróci opisy, oceni dopasowanie przez AI i zaktualizuje ranking."
+                        if mode_key == "full" else
+                        f"Pominie pobieranie ze stron. Zdeduplikuje bazę i oceni przez AI {fmt_n(pending)} oczekujących ofert."
+                    )
+                    st.markdown(f'<div class="wx-desc" style="margin:0.4rem 0 0.6rem;">{_esc(desc_text)}</div>', unsafe_allow_html=True)
+
+                    if st.button(
+                        "Uruchom pipeline",
+                        icon=":material/play_arrow:",
+                        type="primary",
+                        disabled=is_running,
+                        key="run_pipeline_active_btn"
+                    ):
+                        ok, msg = mgr.start_pipeline(mode=mode_key)
+                        if ok:
+                            stages_ph.empty()
+                            status_ph.empty()
+                            log_ph.empty()
+
+                            while mgr.is_running():
+                                cur_state = mgr.get_state()
+                                stages_ph.markdown(render_stages_html(cur_state["stages"], mode_key), unsafe_allow_html=True)
+                                status_ph.markdown(f'<div class="wp-note is-ok">Trwa etap: {_esc(SHORT_STAGE_TITLES.get(cur_state["stages"][cur_state["current_stage_idx"]]["id"], cur_state["current_stage_title"]))}…</div>', unsafe_allow_html=True)
+                                log_text = "\n".join(cur_state["logs"][-20:])
+                                with log_ph.container():
+                                    with st.expander("Dziennik zdarzeń (na żywo)", expanded=False):
+                                        st.code(log_text, language=None)
+                                time.sleep(0.4)
+
+                            cur_state = mgr.get_state()
+                            stages_ph.markdown(render_stages_html(cur_state["stages"], mode_key), unsafe_allow_html=True)
+                            if cur_state["success"]:
+                                status_ph.markdown(
+                                    '<div class="wp-note is-ok" style="margin-top:0.6rem;">'
+                                    '<strong>PIPELINE COMPLETE</strong> — Wszystkie etapy zakończone pomyślnie. '
+                                    'Baza ofert oraz oceny dopasowania zostały zaktualizowane.'
+                                    '</div>',
+                                    unsafe_allow_html=True
+                                )
+                                st.session_state.data_loaded = False
+                                _ws_touch()
+                            else:
+                                failed_s = next((SHORT_STAGE_TITLES.get(s["id"], s["title"]) for s in cur_state["stages"] if s["status"] == "failed"), "Nieznany etap")
+                                status_ph.markdown(
+                                    f'<div class="wp-note is-warn" style="margin-top:0.6rem;">'
+                                    f'<strong>PIPELINE INCOMPLETE (kod {cur_state["exit_code"]})</strong> — '
+                                    f'Etap „{_esc(failed_s)}” nie powiódł się. Szczegóły w dzienniku zdarzeń.'
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
+                            with log_ph.container():
+                                with st.expander("Dziennik zdarzeń", expanded=not cur_state["success"]):
+                                    st.code("\n".join(cur_state["logs"][-20:]), language=None)
+                            time.sleep(0.5)
+                            st.rerun(scope="app")
+                        else:
+                            st.error(msg)
+            with st.expander("Zaawansowane: poszczególne etapy i narzędzia", expanded=False, type="compact"):
                 st.markdown(
-                    '<div class="wx-step is-first is-fresh" style="--i:0">'
+                    '<div class="wx-desc" style="margin-bottom:0.6rem;">Możesz uruchomić wybrane etapy osobno, '
+                    'jeśli nie chcesz przeprowadzać pełnego przebiegu.</div>',
+                    unsafe_allow_html=True
+                )
+
+                # Krok 1: Scraping
+                st.markdown(
+                    '<div class="wx-step is-first">'
                     '<div class="wx-num">01</div>'
                     '<div class="wx-title">Pobierz oferty z portali</div>'
-                    '<div class="wx-desc">Odwiedza wszystkie portale i dopisuje do '
-                    'bazy oferty, których jeszcze nie masz. Istniejących ofert ani '
-                    'Twoich ocen nie rusza.</div>'
-                    '<div class="wx-meta">Pracuj.pl · OLX · aplikuj.pl · GoWork.pl · '
-                    'praca.pl · NoFluffJobs · JustJoin.it · RocketJobs · SOLID.Jobs · '
-                    'LinkedIn · Indeed<br>od kilku minut do ok. 45 min, zależnie od '
-                    'liczby nowych ofert</div></div>',
-                    unsafe_allow_html=True)
-                if st.button("Pobierz oferty", icon=":material/download:",
-                             width="stretch", key="run_scrapers_btn"):
-                    if _run_step(["main_scraper.py"], "Pobieram oferty z portali…",
-                                 "Pobieranie zakończone"):
-                        _run_step(["deduplicate_db.py"], "Scalam duplikaty…",
-                                  "Duplikaty scalone", tail=6)
-                        _run_step(["clean_db.py"], "Skracam opisy…",
-                                  "Opisy skrócone", tail=4)
+                    '<div class="wx-desc">Odwiedza portale pracy i dopisuje nowe oferty.</div></div>',
+                    unsafe_allow_html=True
+                )
+                if st.button("Pobierz oferty (scraping + dedup + clean)", icon=":material/download:",
+                             key="adv_scrapers_btn", disabled=is_running):
+                    if _run_step(["main_scraper.py"], "Pobieram oferty z portali…", "Pobieranie zakończone"):
+                        _run_step(["migrate_normalize_links.py"], "Normalizuję linki…", "Linki znormalizowane", tail=4)
+                        _run_step(["deduplicate_db.py"], "Scalam duplikaty…", "Duplikaty scalone", tail=6)
+                        _run_step(["clean_db.py"], "Skracam opisy…", "Opisy skrócone", tail=4)
                         st.session_state.data_loaded = False
                         _ws_touch()
                         st.rerun(scope="app")
 
+                # Krok 2: Profil preferencji
                 st.markdown(
-                    '<div class="wx-step is-fresh" style="--i:1">'
+                    '<div class="wx-step">'
                     '<div class="wx-num">02</div>'
                     '<div class="wx-title">Przebuduj profil preferencji</div>'
-                    '<div class="wx-desc">Czyta Twoje oceny i wyciąga z nich wzorzec: '
-                    'jakie role i branże Ci pasują, a co odrzucasz. Profil trafia do '
-                    'polecenia dla AI, więc kolejne oferty są oceniane trafniej.</div>'
-                    '<div class="wx-meta">uruchom po każdej większej porcji ocen<br>'
-                    'trwa poniżej minuty</div></div>',
-                    unsafe_allow_html=True)
-
+                    '<div class="wx-desc">Czyta Twoje oceny i uczy się, co lubisz a co odrzucasz.</div></div>',
+                    unsafe_allow_html=True
+                )
                 if profile_exists:
                     gen_at = profile.get("_metadata", {}).get("generated_at", "")
                     when = gen_at[:16].replace("T", ", ") if gen_at else "nieznana data"
-                    note = (f"Obecny profil: {when}, zbudowany z "
-                            f"{profile_built_from} Twoich decyzji.")
+                    note = f"Profil: {when}, z {profile_built_from} Twoich decyzji."
                     if new_decisions >= 25:
-                        st.markdown(
-                            f'<div class="wp-note is-warn">{_esc(note)} '
-                            f'<em>Od tego czasu doszło {new_decisions} nowych ocen - '
-                            f'przebudowanie poprawi trafność kolejnych.</em></div>',
-                            unsafe_allow_html=True)
+                        st.markdown(f'<div class="wp-note is-warn">{_esc(note)} Doszło {new_decisions} nowych ocen.</div>', unsafe_allow_html=True)
                     else:
-                        st.markdown(f'<div class="wp-note is-ok">{_esc(note)}</div>',
-                                    unsafe_allow_html=True)
-                    with st.expander("Co jest w profilu", expanded=False, type="compact"):
-                        def _list(key):
-                            return ", ".join(profile.get(key, [])) or "—"
-                        st.markdown(f"**Podsumowanie:** {profile.get('summary', '—')}")
-                        st.markdown(f"**Preferowane role:** {_list('preferred_role_types')}")
-                        st.markdown(f"**Preferowane branże:** {_list('preferred_industries')}")
-                        st.markdown(f"**Przyciąga Cię:** {_list('attractive_keywords')}")
-                        st.markdown(f"**Odrzucasz:** {_list('red_flags')}")
-                elif decisions_count < 10:
-                    st.markdown(
-                        f'<div class="wp-note">Masz {decisions_count} ocen. Profil '
-                        f'zbuduje się sensownie od jakichś dziesięciu - oceniaj dalej '
-                        f'oferty na liście.</div>', unsafe_allow_html=True)
-
-                if st.button("Przebuduj profil", icon=":material/autorenew:",
-                             width="stretch", key="gen_profile_btn"):
-                    if _run_step(["generate_preference_profile.py"],
-                                 "Buduję profil z Twoich ocen…",
-                                 "Profil przebudowany", tail=8):
+                        st.markdown(f'<div class="wp-note is-ok">{_esc(note)}</div>', unsafe_allow_html=True)
+                if st.button("Przebuduj profil preferencji", icon=":material/autorenew:",
+                             key="adv_profile_btn", disabled=is_running or decisions_count < 10):
+                    if _run_step(["generate_preference_profile.py"], "Buduję profil z ocen…", "Profil gotowy", tail=8):
                         st.rerun(scope="app")
 
+                # Krok 3: Analiza AI
                 st.markdown(
-                    f'<div class="wx-step is-fresh" style="--i:2">'
+                    f'<div class="wx-step">'
                     f'<div class="wx-num">03</div>'
                     f'<div class="wx-title">Oceń oferty przez AI</div>'
-                    f'<div class="wx-desc">Wysyła do Gemini oferty, które nie mają '
-                    f'jeszcze oceny, i dla każdej liczy procent dopasowania oraz '
-                    f'uzasadnienie. Dopiero po tym kroku oferta pojawia się '
-                    f'w „Dopasowane”.</div>'
-                    f'<div class="wx-meta">do policzenia teraz: {fmt_n(pending)} ofert<br>'
-                    f'około {max(1, round(pending / 180))} min · zużywa limit Gemini'
-                    f'</div></div>',
-                    unsafe_allow_html=True)
-                if st.button("Oceń oferty", icon=":material/play_arrow:",
-                             width="stretch", key="run_analysis_btn",
-                             disabled=pending == 0):
-                    if _run_step(["waterfall_analysis.py"], "Oceniam oferty przez AI…",
-                                 "Ocenianie zakończone"):
+                    f'<div class="wx-desc">Wysyła nieocenione oferty do Gemini (czeka: {fmt_n(pending)}).</div></div>',
+                    unsafe_allow_html=True
+                )
+                if st.button("Oceń oczekujące oferty", icon=":material/play_arrow:",
+                             key="adv_analysis_btn", disabled=is_running or pending == 0 or not api_info["ready"] or not cv_info["ready"]):
+                    if _run_step(["waterfall_analysis.py"], "Oceniam oferty przez AI…", "Ocenianie zakończone"):
                         st.session_state.data_loaded = False
                         _ws_touch()
                         st.rerun(scope="app")
-                if pending == 0 and db_count:
-                    st.markdown('<div class="wp-note is-ok">Wszystkie oferty w bazie '
-                                'mają już ocenę AI.</div>', unsafe_allow_html=True)
 
-            ws_panel_head("rzadziej używane", mid=True)
-
-            # Przeliczenie od zera jest nieodwracalne i kosztuje cały limit
-            # Gemini, więc siedzi osobno, a nie jako pole wyboru obok zwykłego
-            # przycisku, gdzie łatwo je kliknąć przez pomyłkę.
-            with st.expander("Policz wszystkie oceny AI od nowa", expanded=False,
-                             type="compact"):
-                with st.container(key="wstool_recalc"):
-                    st.markdown(
-                        f"Kasuje **{fmt_n(analyzed_count)}** dotychczasowych ocen AI "
-                        f"i liczy je od zera. Twoje własne oceny i decyzje zostają "
-                        f"nietknięte, ale przeliczenie zużyje limit Gemini na "
-                        f"wszystkie oferty w bazie (około "
-                        f"{max(1, round(db_count / 180))} min). Ma sens po zmianie "
-                        f"polecenia dla AI albo modelu.")
-                    confirm = st.text_input("Wpisz PRZELICZ, żeby odblokować",
-                                            key="confirm_recalc", placeholder="PRZELICZ")
-                    if st.button("Skasuj oceny AI i policz od nowa",
-                                 icon=":material/warning:", key="recalc_all_btn",
-                                 disabled=confirm.strip().upper() != "PRZELICZ"):
-                        save_json_atomic(str(analyzed_path), [], backup=True)
-                        st.toast("Skasowano dotychczasowe oceny AI (kopia w backups/).")
-                        if _run_step(["waterfall_analysis.py"], "Liczę wszystko od nowa…",
-                                     "Przeliczone"):
-                            st.session_state.data_loaded = False
-                            _ws_touch()
-                            st.rerun(scope="app")
-
-            with st.expander("Klucze API", expanded=False, type="compact"):
-                with st.container(key="wstool_keys"):
-                    ws_render_env_keys()
-
-
-def ws_render_env_keys():
+                # Policz od nowa
+                st.markdown(
+                    '<div class="wx-step">'
+                    '<div class="wx-num">04</div>'
+                    '<div class="wx-title">Policz wszystkie oceny AI od nowa</div>'
+                    '<div class="wx-desc">Kasuje dotychczasowe oceny AI i liczy je od zera.</div></div>',
+                    unsafe_allow_html=True
+                )
+                confirm = st.text_input("Wpisz PRZELICZ, żeby odblokować:", key="adv_confirm_recalc", disabled=is_running)
+                if st.button("Skasuj oceny AI i przelicz od zera", icon=":material/warning:",
+                             key="adv_recalc_btn", disabled=is_running or confirm.strip().upper() != "PRZELICZ"):
+                    save_json_atomic(str(analyzed_path), [], backup=True)
+                    st.toast("Skasowano dotychczasowe oceny AI (kopia w backups/).")
+                    if _run_step(["waterfall_analysis.py"], "Liczę wszystko od nowa…", "Przeliczone"):
+                        st.session_state.data_loaded = False
+                        _ws_touch()
+                        st.rerun(scope="app")
+def ws_render_env_keys(disabled=False):
     """Edycja kluczy w .env. Wartości nie opuszczają dysku."""
     fields = [
         ("GEMINI_API_KEY_PRIMARY", "Gemini - klucz główny", True),
@@ -3216,9 +4173,10 @@ def ws_render_env_keys():
     for name, label, secret in fields:
         new_vals[name] = st.text_input(label, value=current[name],
                                        type="password" if secret else "default",
-                                       key=f"env_{name}")
+                                       key=f"env_{name}",
+                                       disabled=disabled)
 
-    if st.button("Zapisz klucze", icon=":material/save:", key="save_env_keys_btn"):
+    if st.button("Zapisz klucze", icon=":material/save:", key="save_env_keys_btn", disabled=disabled):
         lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
         written, out = set(), []
         for line in lines:
@@ -3253,6 +4211,13 @@ def ws_render_topbar(active):
         for key, label in WS_STAGE_NAMES.items()
     )
 
+    is_running = PipelineProcessManager.get_instance().is_running()
+    status_pill = (
+        '<div class="wt-live-pill is-running"><span class="wt-live-dot"></span>pipeline w toku…</div>'
+        if is_running else
+        '<div class="wt-live-pill is-ready"><span class="wt-live-dot"></span>pipeline gotowy</div>'
+    )
+
     # Marka i liczby jednym blokiem: kolumny Streamlita mierzyly wlasna
     # wysokosc inaczej niz tresc i wlosowa kreska przechodzila przez cyfry.
     st.markdown(
@@ -3263,13 +4228,16 @@ def ws_render_topbar(active):
         f'<div class="wt-item"><b>{fmt_n(n_analyzed)}</b><span>ocen AI</span></div>'
         f'<div class="wt-sep"></div>'
         f'<div class="wt-funnel">{funnel}</div>'
+        f'<div class="wt-sep"></div>'
+        f'{status_pill}'
         f'</div></div>',
         unsafe_allow_html=True
     )
 
     with st.container(key="wstabs"):
+        default_choice = active if active in WS_ALL else "Uruchom pipeline"
         chosen = st.segmented_control(
-            "Widok", WS_ALL, default=active, key="ws_nav",
+            "Widok", WS_ALL, default=default_choice, key="ws_nav",
             label_visibility="collapsed"
         )
     return chosen or active
@@ -3285,14 +4253,23 @@ def render_workspace():
     z wczytywaniem danych z dysku. Stąd st.rerun(scope="app") przy tych
     nielicznych działaniach, które faktycznie zmieniają dane pod spodem.
     """
+    if not st.session_state.get("data_loaded", False):
+        load_data()
+
+    mgr = PipelineProcessManager.get_instance()
+    is_running = mgr.is_running()
+
     active = st.session_state.get("ws_view", "Dopasowane")
+    if is_running and not st.session_state.get("_nav_switched_manually"):
+        active = "Uruchom pipeline"
+
     chosen = ws_render_topbar(active)
 
-    if chosen != active:
+    if chosen and chosen != active:
         st.session_state.ws_view = chosen
+        st.session_state["_nav_switched_manually"] = True
         st.session_state.ws_selected = None
         active = chosen
-
     st.markdown(f'<div class="wp-hint-top">{_esc(WS_TAB_HINT.get(active, ""))}</div>',
                 unsafe_allow_html=True)
 
@@ -3303,7 +4280,7 @@ def render_workspace():
             ws_tool_gaps(left, right)
         elif active == "Dodaj z linku":
             ws_tool_add(left, right)
-        elif active == "Panel sterowania":
+        elif active in ("Uruchom pipeline", "Panel sterowania"):
             ws_tool_pipeline(left, right)
         else:
             # Prawy panel liczy się pierwszy, choć stoi po prawej: to on
