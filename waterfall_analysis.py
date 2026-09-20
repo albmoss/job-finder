@@ -467,6 +467,8 @@ def _classify(err: str) -> str:
         return "rate_limit"
     if "Expecting" in err or "Unterminated" in err or "JSON Validate Err" in err:
         return "truncated"
+    if "API_KEY_INVALID" in err or "API key not valid" in err:
+        return "invalid_key"
     return "other"
 
 
@@ -554,6 +556,9 @@ def score_batch(batch, prompt, model_idx, key_idx, profile_ver):
                         time.sleep(70)
                         continue
                     print("      Key exhausted. Moving to the next one...")
+                    break
+                if kind == "invalid_key":
+                    print(f"      API key invalid ({masked}). Moving to the next one...")
                     break
                 print(f"      General Error: {str(e)[:100]}...")
                 continue
