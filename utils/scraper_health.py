@@ -160,21 +160,22 @@ BLOKADY_PROG = 0.5
 
 def enrich_verdict(enrich) -> str | None:
     """
-    Dociaganie opisow, ktore nie przyniosło ani jednego opisu, to awaria -
-    nawet gdy sam przebieg zebral komplet ofert.
+    Dociąganie opisów, które nie przyniosło ani jednego opisu (ani z listingu,
+    ani z podstron ofert), to awaria - nawet gdy sam przebieg zebrał komplet ofert.
 
-    Liczba ofert wygladala wtedy normalnie i przebieg konczyl sie sukcesem,
-    a do bazy szly zaslepki zamiast tresci. `blocked` (403) wyroznione osobno,
-    bo tylko ono mowi wprost, ze portal odmawia tej drogi pobierania.
+    Liczba ofert wyglądała wtedy normalnie i przebieg kończył się sukcesem,
+    a do bazy szły zaślepki zamiast treści. `blocked` (403) wyróżnione osobno,
+    bo tylko ono mówi wprost, ze portal odmawia tej drogi pobierania.
     """
     if not isinstance(enrich, dict):
         return None
     ok = enrich.get("ok", 0)
     blocked = enrich.get("blocked", 0)
+    ze_stanu = enrich.get("ze_stanu", 0)
     proby = ok + enrich.get("error", 0) + blocked
     if proby == 0:
         return None
-    if not ok:
+    if not (ok + ze_stanu):
         if blocked:
             return f"portal odrzucił wszystkie {proby} zapytań o opis (403)"
         return f"żadne z {proby} zapytań o opis nie zwróciło treści"

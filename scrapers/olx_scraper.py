@@ -459,10 +459,15 @@ class OLXScraper(BaseScraper):
         if hasattr(page, "evaluate"):
             enriched, pozostale = self._opisy_przez_fetch(page, jobs, stats)
         if pozostale:
+            try:
+                if (not page or page.is_closed()) and self.context:
+                    page = self.context.new_page()
+                    self.page = page
+            except Exception:
+                pass
             enriched += self._opisy_przez_goto(page, pozostale, stats,
                                                zrobione=len(jobs) - len(pozostale),
                                                wszystkich=len(jobs))
-
         try:
             page.unroute("**/*")
         except Exception:
@@ -643,6 +648,13 @@ class OLXScraper(BaseScraper):
                 html = page.content()
             except Exception as e:
                 logger.debug(f"OLX: {job.link} - {type(e).__name__}: {e}")
+                err_msg = str(e).lower()
+                if ("crash" in err_msg or "closed" in err_msg) and self.context:
+                    try:
+                        page = self.context.new_page()
+                        self.page = page
+                    except Exception:
+                        pass
                 stats["error"] += 1
                 enriched.append(job)
                 continue

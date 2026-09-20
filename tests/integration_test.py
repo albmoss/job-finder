@@ -320,6 +320,13 @@ def test_scraper_health():
     check("pojedyncze blokady nie robia alarmu",
           health.check("OLX Praca", 1272,
                        enrich={"ok": 900, "expired": 0, "error": 10, "blocked": 40}) is None)
+    check("opisy ze stanu chronia przed falszywym alarmem awarii",
+          health.check("OLX Praca", 423,
+                       enrich={"ok": 0, "expired": 0, "error": 3, "blocked": 0, "ze_stanu": 420}) is None)
+    check("przewaga 403 z opisami ze stanu nadal jest awaria",
+          (health.check("OLX Praca", 423,
+                        enrich={"ok": 0, "expired": 0, "error": 1, "blocked": 2, "ze_stanu": 420}) or {})
+          .get("verdict") == "broken")
 
 
 def test_idempotent_writes(tmp_name="_test_idempotent.json"):
