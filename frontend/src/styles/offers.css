@@ -1,0 +1,1543 @@
+/* ==========================================================================
+   Offers Slice: Offer List, Offer Detail, Overview Panel, Decision Dock
+   Owned by OffersSlice. Class prefixes: .ol-*, .od-*, .ov-*
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Offer List Panel (.ol-*)
+   -------------------------------------------------------------------------- */
+.ol-panel {
+  width: var(--list-w);
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 26px 14px 14px;
+  position: relative;
+}
+
+.ol-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 12px;
+  gap: 12px;
+  flex: none;
+}
+
+.ol-head-main {
+  min-width: 0;
+}
+
+.ol-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ol-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.7px;
+  line-height: 1.1;
+  color: var(--ink);
+}
+
+.ol-cat-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--ink-3);
+  flex: none;
+}
+
+.ol-count {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.ol-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* Lupa: otwarta przejeżdża (`translate`, osobno od `transform` z `.press:active`) na miejsce
+   ikony pola szukania, tą samą krzywą co odsłanianie pola; traci tło i zostaje jego ikoną.
+   --glyph-x/y liczy OfferListPanel z układu. */
+.iconbtn.ol-search-btn {
+  position: relative;
+  z-index: 3;
+  transition: translate 200ms var(--ease-out), transform 160ms var(--ease-out), background-color 150ms ease, color 150ms ease;
+}
+
+.iconbtn.ol-search-btn.is-open {
+  translate: var(--glyph-x, 0) var(--glyph-y, 0);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: text;
+  transition-duration: 360ms, 160ms, 150ms, 150ms;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .iconbtn.ol-search-btn.is-open:hover {
+    background: transparent;
+    color: var(--ink-2);
+  }
+}
+
+/* Rozwijany pas pod nagłówkiem (szukanie): wysokość rośnie przez grid 0fr → 1fr, bez mierzenia
+   w JS. Zamknięty pas jest `inert`. */
+.ol-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  flex: none;
+  transition: grid-template-rows 200ms var(--ease-out);
+}
+
+.ol-reveal.is-open {
+  grid-template-rows: 1fr;
+  transition-duration: 300ms;
+}
+
+.ol-reveal-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Search bar: pole odsłania się od prawej, spod lupy (koło 44 px → pełna szerokość),
+   treść pola wyostrza się chwilę później. Zamykanie tą samą drogą, szybciej. */
+.ol-search-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 8px 0 16px;
+  border-radius: 22px;
+  background: var(--fill-3);
+  border: 1px solid var(--stroke-strong);
+  margin: 12px 12px 4px;
+  flex: none;
+  clip-path: inset(0 0 0 calc(100% - 44px) round 22px);
+  transition: clip-path 200ms var(--ease-out), border-color 150ms ease;
+}
+
+.ol-search-field > * {
+  opacity: 0;
+  filter: blur(4px);
+  transition: opacity 120ms ease, filter 120ms ease;
+}
+
+.ol-search-reveal.is-open .ol-search-field {
+  clip-path: inset(0 0 0 0 round 22px);
+  transition-duration: 360ms, 150ms;
+}
+
+.ol-search-reveal.is-open .ol-search-field > * {
+  opacity: 1;
+  filter: none;
+  transition-duration: 240ms;
+  transition-delay: 100ms;
+}
+
+.ol-search-field:focus-within {
+  border-color: var(--accent);
+}
+
+/* Miejsce, na które przyjeżdża lupa z nagłówka (.ol-search-btn). */
+.ol-search-slot {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.ol-search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--font);
+  font-size: 14px;
+  color: var(--ink);
+  caret-color: var(--accent);
+}
+
+/* Fokus pokazuje obramowanie całego pola (:focus-within), nie ramka samego inputu. */
+.ol-search-input:focus-visible {
+  outline: none;
+}
+
+.ol-search-input::placeholder {
+  color: var(--ink-3);
+}
+
+.ol-search-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  flex: none;
+}
+
+.ol-search-clear {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--fill-2);
+  border: 1px solid var(--stroke);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  cursor: pointer;
+  flex: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.ol-search-clear:hover {
+  background: var(--fill-3);
+  color: var(--ink);
+}
+
+/* Rows container */
+.ol-rows {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 0 4px;
+  scrollbar-width: none;
+}
+
+.ol-rows::-webkit-scrollbar {
+  display: none;
+}
+
+/* Zmiana strony myszą (useBlurSwap): rozmycie wierszy nie wychodzi poza listę. */
+.ol-rows:is(.swap-out, .swap-in, .swap-settle) {
+  clip-path: inset(0);
+}
+
+/* Single offer row */
+.ol-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 12px;
+  border-radius: var(--r-row);
+  text-align: left;
+  flex: none;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 150ms ease, box-shadow 150ms ease, transform 120ms var(--ease-out);
+  width: 100%;
+  position: relative;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ol-row:hover:not(.is-selected) {
+    background: rgba(255, 255, 255, 0.03);
+  }
+}
+
+.ol-row.is-selected {
+  background: var(--surface-solid);
+  box-shadow: 0 6px 18px var(--shadow);
+}
+
+/* Szeroki wiersz: nacisk ledwie widoczny — 0,97 na 470 px to 14 px skurczu przy każdym kliknięciu. */
+.ol-row.press:active:not(:disabled) { transform: scale(0.99); }
+
+/* Wiersz po decyzji z doku wyjeżdża w lewo i gaśnie; luka domyka się transformem (FLIP w JS). */
+.ol-row.is-exiting {
+  opacity: 0;
+  transform: translateX(-24px);
+  pointer-events: none;
+  transition: opacity 220ms var(--ease-out), transform 220ms var(--ease-out);
+}
+
+.ol-row-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.ol-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ol-row-title {
+  font-size: 15.5px;
+  font-weight: 500;
+  letter-spacing: -0.1px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.ol-row.is-selected .ol-row-title {
+  font-weight: 600;
+}
+
+.ol-row-meta {
+  font-size: 13px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ol-row-gone {
+  color: var(--ink-3);
+  margin-left: 4px;
+  font-size: 11px;
+}
+
+/* Oferta pierwszy raz zobaczona od startu ostatniego pobierania: neutralna kropka w lewym
+   marginesie wiersza (tytuły zostają w jednej linii), bez akcentu. */
+.ol-row-new {
+  position: absolute;
+  left: 5px;
+  top: 21px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-2);
+}
+
+/* Linia nad listą: ile nowych od ostatniego pobierania (na całej liście, nie na stronie). */
+.ol-fresh {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 16px 0;
+  font-size: 12px;
+  color: var(--ink-3);
+  flex: none;
+}
+
+.ol-fresh-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-2);
+  flex: none;
+}
+
+.ol-fresh-label {
+  white-space: nowrap;
+}
+
+.ol-fresh-label b {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.ol-fresh-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--stroke);
+}
+
+/* Filtr „Pokaż N ofert” z panelu braków. */
+.ol-filter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  margin: 10px 12px 0;
+  padding: 3px 3px 3px 12px;
+  border-radius: 999px;
+  background: var(--fill-2);
+  border: 1px solid var(--stroke);
+  font-size: 12.5px;
+  color: var(--ink-3);
+  flex: none;
+  max-width: calc(100% - 24px);
+}
+
+.ol-filter-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ol-filter-label b {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.ol-filter-clear {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  flex: none;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.ol-filter-clear:hover {
+  background: var(--fill-3);
+  color: var(--ink);
+}
+
+.ol-row-score {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--ink-2);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.ol-row-score.is-hi {
+  color: var(--ink);
+}
+
+.ol-row-score.is-muted {
+  color: var(--ink-3);
+}
+
+.ol-row-unit {
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-left: 1px;
+}
+
+/* Pasek dopasowania u dołu wiersza: 4 px jak tor suwaka (.range-slider), neutralne --level. */
+.ol-row-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--fill-2);
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+.ol-row-level {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--level);
+  transform-origin: left center;
+  transition: width 200ms ease;
+}
+
+/* Pager */
+.ol-pager {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 4px 0 12px;
+  border-top: 1px solid var(--stroke);
+  margin-top: 6px;
+  flex: none;
+}
+
+.ol-pager-range {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+/* Zakres stron jako przycisk skoku: tekst stoi tam, gdzie stał zwykły zakres. */
+.ol-jump-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  margin-left: -10px;
+  padding: 0 8px 0 10px;
+  border-radius: 14px;
+}
+
+.ol-jump-toggle svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ink-3);
+  transition: transform 300ms var(--ease-out), color 150ms ease;
+}
+
+.ol-jump-toggle.is-on {
+  background: var(--fill-active);
+  color: var(--ink);
+}
+
+.ol-jump-toggle.is-on svg {
+  transform: rotate(180deg);
+  color: var(--ink-2);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ol-jump-toggle:hover {
+    background: var(--fill-3);
+    color: var(--ink);
+  }
+}
+
+/* Skok o wiele stron: wyskakujące okno nad stopką, na wierzchu listy (lity kolor, mocniejsza
+   krawędź i cień — odcina się od wierszy). Rośnie od przełącznika w lewym dolnym rogu;
+   zamyka je Esc, przełącznik i klik obok (OfferListPanel). */
+.ol-jump {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px 14px;
+  border-radius: 22px;
+  background: var(--surface-solid);
+  border: 1px solid var(--stroke-strong);
+  box-shadow: 0 18px 44px var(--shadow);
+  transform-origin: 40px 100%;
+  opacity: 0;
+  scale: 0.96;
+  translate: 0 8px;
+  filter: blur(4px);
+  visibility: hidden;
+  transition: opacity 150ms ease, scale 150ms var(--ease-out), translate 150ms var(--ease-out),
+    filter 150ms ease, visibility 0s linear 150ms;
+}
+
+.ol-jump.is-open {
+  opacity: 1;
+  scale: 1;
+  translate: 0 0;
+  filter: none;
+  visibility: visible;
+  transition-duration: 220ms, 280ms, 280ms, 220ms, 0s;
+  transition-delay: 0s;
+}
+
+.ol-jump-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.ol-jump-page b {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.ol-jump-mark b {
+  margin-left: 4px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.ol-jump .range-tick {
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 4px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ol-jump .range-tick:hover {
+    color: var(--ink);
+  }
+}
+
+.ol-pager-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Empty list */
+.ol-empty {
+  border-radius: var(--r-row);
+  border: 1px solid var(--stroke);
+  padding: 40px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  align-items: center;
+  text-align: center;
+  margin: auto 0;
+}
+
+.ol-empty-well {
+  width: 44px;
+  height: 44px;
+  border-radius: 22px;
+  background: var(--fill-2);
+  display: grid;
+  place-items: center;
+  color: var(--ink-2);
+  flex: none;
+}
+
+.ol-empty-well svg {
+  width: 18px;
+  height: 18px;
+}
+
+.ol-empty-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ol-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.ol-empty-hint {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  max-width: 38ch;
+  line-height: 1.45;
+}
+
+
+/* --------------------------------------------------------------------------
+   2. Offer Detail Panel (.od-*)
+   -------------------------------------------------------------------------- */
+.od-pane {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.od-wash {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 300px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(90, 112, 255, 0.14), transparent);
+  z-index: 1;
+}
+
+.od-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 130px;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, #18181a 70%);
+  z-index: 5;
+}
+
+.od-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  padding: 34px 44px 140px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  z-index: 2;
+  /* Nowa oferta (klucz = link) wchodzi krótkim przenikaniem z 4 px — tylko po kliknięciu i tylko
+     tam, gdzie App nie gra rozmycia prawej karty (.is-detail-*, base.css); przy J/K treść
+     podmienia się od razu (data-input na <html>, App.tsx). */
+  animation: od-content-in 160ms var(--ease-out);
+}
+:root[data-input="keyboard"] .od-scroll { animation: none; }
+@keyframes od-content-in { from { opacity: 0; transform: translateY(4px); } }
+
+/* Source row */
+.od-src {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.od-src-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.od-chip-portal {
+  padding: 6px 12px;
+  border-radius: 14px;
+  background: var(--fill);
+  color: var(--ink-2);
+  font-weight: 500;
+  font-size: 12px;
+}
+
+.od-src-note {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.od-src-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Title & company */
+.od-title {
+  margin: 30px 0 10px;
+  font-size: 38px;
+  font-weight: 600;
+  letter-spacing: -1.3px;
+  line-height: 1.08;
+  color: var(--ink);
+}
+
+.od-title-tail {
+  white-space: nowrap;
+}
+
+.od-title .od-title-link {
+  display: inline-grid;
+  vertical-align: middle;
+  margin: -6px 0 0 12px;
+}
+
+.od-title-link svg {
+  width: 18px;
+  height: 18px;
+}
+
+.od-company-line {
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
+/* Match card */
+.od-match {
+  margin-top: 30px;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 18px 22px;
+  border-radius: 22px;
+  background: var(--fill-faint);
+  border: 1px solid var(--fill-2);
+}
+
+.od-match-score {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+}
+
+.od-match-val {
+  font-size: 72px;
+  font-weight: 300;
+  letter-spacing: -3px;
+  line-height: 0.9;
+  display: flex;
+  align-items: baseline;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.od-match-val.is-pending {
+  color: var(--ink-3);
+}
+
+.od-match-pct {
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--ink-3);
+  letter-spacing: 0;
+  margin-left: 2px;
+}
+
+.od-match-caption {
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-top: 4px;
+}
+
+.od-match-stream {
+  flex: 1;
+  height: 84px;
+  min-width: 0;
+  display: block;
+}
+
+/* Match pending note */
+.od-match-pending {
+  flex: 1;
+  border-left: 1px solid var(--stroke);
+  padding-left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.od-match-pending-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.od-match-pending-text {
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+/* Facts row */
+.od-facts {
+  margin-top: 30px;
+  display: flex;
+}
+
+.od-fact {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  border-left: 1px solid var(--stroke);
+}
+
+.od-fact:first-child {
+  padding-left: 0;
+  border-left: none;
+}
+
+.od-fact-well {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-well);
+  background: var(--fill);
+  display: grid;
+  place-items: center;
+  color: var(--ink-2);
+  flex: none;
+}
+
+.od-fact-well svg {
+  width: 16px;
+  height: 16px;
+}
+
+.od-fact-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.od-fact-label {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.od-fact-val {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1.3;
+}
+
+/* Reason */
+.od-why {
+  margin-top: 30px;
+  padding: 2px 0 2px 24px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--ink);
+  border-left: 2px solid var(--accent-soft);
+}
+
+/* Keywords / Gaps */
+.od-kw {
+  margin-top: 30px;
+}
+
+.od-kw-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+.od-kw-legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 400;
+  font-size: 11px;
+}
+
+.od-kw-legend svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Recruitment stage switch row */
+.od-stage-section {
+  margin-top: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.od-stage-label {
+  font-size: 12px;
+  color: var(--ink-3);
+  font-weight: 500;
+}
+
+/* Następny krok: opis + termin pod przełącznikiem etapu */
+.od-next {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.od-next-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.od-next-row .input {
+  height: 40px;
+  font-size: 13px;
+}
+
+.od-next-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.od-next-due {
+  flex: 0 0 196px;
+}
+
+.od-next-due:disabled {
+  color: var(--ink-3);
+}
+
+/* Description */
+.od-desc {
+  margin-top: 36px;
+}
+
+.od-desc h3 {
+  margin: 22px 0 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.od-desc h3:first-child {
+  margin-top: 0;
+}
+
+.od-desc p {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 72ch;
+}
+
+.od-desc ul {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  color: var(--ink-2);
+  line-height: 1.6;
+  font-size: 15px;
+}
+
+.od-desc li {
+  margin-bottom: 6px;
+}
+
+.od-desc-raw {
+  white-space: pre-wrap;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 72ch;
+}
+
+
+/* --------------------------------------------------------------------------
+   3. Decision Dock (.dock, inside OfferDetailPanel)
+   -------------------------------------------------------------------------- */
+.od-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 32px;
+  background: var(--surface-solid);
+  border: 1px solid var(--stroke);
+  box-shadow: 0 14px 36px var(--shadow);
+}
+
+.od-dock-btn {
+  width: 54px;
+  height: 54px;
+  border-radius: 27px;
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  background: transparent;
+  transition: background-color 150ms ease, color 150ms ease, transform 120ms var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .od-dock-btn:hover {
+    background: var(--fill-2);
+  }
+}
+
+.od-dock-btn svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* Active decision button: dimmed fill + accent icon (per AGENTS.md) */
+.od-dock-btn.is-active {
+  background: var(--fill-3);
+  color: var(--accent);
+}
+
+.od-dock-btn.is-reject {
+  color: var(--ink-2);
+}
+
+.od-dock-btn.is-reject.is-active {
+  color: var(--accent);
+}
+
+.od-dock-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--line);
+  margin: 0 2px;
+  flex: none;
+}
+
+/* Rating meter inside dock. Cały prostokąt .od-segs (pełna wysokość doku, z lewym marginesem)
+   jest polem kliknięcia — poziom liczy DecisionDock z pozycji kursora. Poziom = 20 px
+   szerokości (słupek 14 + odstęp 6), żeby trafiać bez celowania. */
+.od-rating {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
+  height: 54px;
+}
+
+.od-segs {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 54px;
+  padding: 11px 6px 11px 14px;
+  border-radius: 27px;
+  cursor: pointer;
+}
+
+.od-seg {
+  width: 14px;
+  border-radius: 4px;
+  background: var(--fill-3);
+  transition: background-color 120ms ease;
+}
+
+.od-seg.is-on {
+  background: var(--accent);
+}
+
+/* Podpowiedź hovera: poziomy, które kliknięcie zapali albo zgasi — wygaszony akcent. */
+.od-seg.is-hint {
+  background: color-mix(in srgb, var(--accent) 38%, var(--fill-3));
+}
+
+.od-rating-val {
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 500;
+  width: 22px;
+  text-align: center;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Confirm check button inside dock */
+.od-confirm {
+  width: 54px;
+  height: 54px;
+  border-radius: 27px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  cursor: pointer;
+  transition: opacity 150ms ease, transform 120ms var(--ease-out);
+}
+
+.od-confirm-well {
+  width: 44px;
+  height: 44px;
+  border-radius: 22px;
+  background: var(--fill-3);
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  transition: background-color 150ms ease, transform 120ms var(--ease-out);
+}
+
+.od-confirm svg {
+  width: 20px;
+  height: 20px;
+}
+
+.od-confirm-num {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.od-confirm:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.od-confirm:disabled .od-confirm-well {
+  color: var(--ink-3);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .od-confirm:not(:disabled):hover .od-confirm-well {
+    background: var(--fill-active);
+  }
+}
+
+
+/* --------------------------------------------------------------------------
+   4. Overview Panel (.ov-*)
+   -------------------------------------------------------------------------- */
+.ov-pane {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ov-wash {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 300px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(90, 112, 255, 0.14), transparent);
+  z-index: 1;
+}
+
+/* Przegląd mieści się w panelu bez przewijania całości: hero i statystyki mają stałą
+   wysokość, kolumny list dostają resztę i przewijają się same (.ov-feed-list). */
+.ov-body {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  padding: 48px 48px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  z-index: 2;
+}
+
+.ov-hero,
+.ov-stats {
+  flex: none;
+}
+
+/* Hero section */
+.ov-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.ov-headline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ov-eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.ov-number {
+  font-size: 72px;
+  font-weight: 300;
+  letter-spacing: -3px;
+  line-height: 1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-sentence {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.7px;
+  line-height: 1.15;
+  color: var(--ink);
+}
+
+.ov-actions {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+/* Stats 4-columns row */
+.ov-stats {
+  border-top: 1px solid var(--stroke);
+  border-bottom: 1px solid var(--stroke);
+  padding: 22px 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+}
+
+.ov-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ov-stat b {
+  font-size: 30px;
+  font-weight: 300;
+  letter-spacing: -1px;
+  line-height: 1.1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-stat span {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* Feeds 2-columns section */
+.ov-feeds {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+  gap: 40px;
+}
+
+.ov-feed-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ov-feed-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ov-feed-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+
+.ov-feed-hint {
+  font-size: 13px;
+  color: var(--ink-3);
+  margin: 10px 0;
+}
+
+.ov-feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fill-3) transparent;
+  /* Ucięta lista gaśnie u dołu, dopóki jest co przewijać; bez nadmiaru oś przewijania jest
+     nieaktywna i --ov-fade zostaje 0. */
+  mask-image: linear-gradient(to bottom, black calc(100% - var(--ov-fade)), transparent);
+  animation: ov-feed-fade linear both;
+  animation-timeline: scroll(self);
+}
+
+@property --ov-fade {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+@keyframes ov-feed-fade {
+  from { --ov-fade: 32px; }
+  95% { --ov-fade: 32px; }
+  to { --ov-fade: 0px; }
+}
+
+/* Niski ekran: mniejszy oddech i liczba, żeby kolumnom list zostało miejsce. */
+@media (max-height: 820px) {
+  .ov-body {
+    padding: 32px 40px 24px;
+    gap: 24px;
+  }
+
+  .ov-hero {
+    gap: 14px;
+  }
+
+  .ov-number {
+    font-size: 56px;
+  }
+
+  .ov-stats {
+    padding: 16px 0;
+  }
+}
+
+/* Decision row */
+.ov-dec-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+  border: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ov-dec-row:hover {
+    background: var(--fill-2);
+  }
+}
+
+.ov-dec-well {
+  width: 26px;
+  height: 26px;
+  border-radius: 13px;
+  background: var(--fill-2);
+  display: grid;
+  place-items: center;
+  color: var(--ink-2);
+  flex: none;
+}
+
+.ov-dec-well svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ov-dec-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ov-dec-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ov-dec-company {
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ov-dec-time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Activity row */
+.ov-act-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--stroke);
+  width: 100%;
+}
+
+.ov-act-row:last-child {
+  border-bottom: none;
+}
+
+.ov-act-time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  width: 84px;
+  white-space: nowrap;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-act-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--ink-2);
+  flex: none;
+}
+
+.ov-act-icon.is-bad {
+  color: var(--ink-3);
+}
+
+.ov-act-what {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.ov-act-op {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  flex: none;
+}
+
+.ov-act-op.is-bad {
+  color: var(--ink-2);
+}
+
+.ov-act-text {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ov-act-detail {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
+   5. Wejście strony (App: .workspace.is-intro-wait → .is-intro → bez klasy, INTRO_MS)
+   Przegląd czeka ukryty na pierwsze oferty. Potem paski dopasowania rosną od lewej wiersz po
+   wierszu, a treść przeglądu odsłania się w tym samym kierunku (kurtyna od lewej + wyostrzenie),
+   linie statystyk rysują się razem z nią. Najpóźniejszy koniec (~1,7 s) mieści się w INTRO_MS.
+   -------------------------------------------------------------------------- */
+.workspace.is-intro-wait :is(.ov-eyebrow, .ov-number, .ov-sentence, .ov-actions, .ov-stats, .ov-feed-col) {
+  opacity: 0;
+}
+
+.workspace.is-intro .ol-row-level {
+  animation: ol-level-grow 900ms var(--ease-out) backwards;
+  animation-delay: calc(150ms + min(var(--i, 0), 12) * 55ms);
+}
+
+@keyframes ol-level-grow {
+  from { scale: 0 1; }
+}
+
+.workspace.is-intro :is(.ov-eyebrow, .ov-number, .ov-sentence, .ov-actions, .ov-stats, .ov-feed-col) {
+  animation: ov-wipe 900ms var(--ease-out) backwards;
+}
+
+.workspace.is-intro .ov-eyebrow { animation-delay: 100ms; }
+.workspace.is-intro .ov-number { animation-delay: 160ms; }
+.workspace.is-intro .ov-sentence { animation-delay: 240ms; }
+.workspace.is-intro .ov-actions { animation-delay: 320ms; }
+.workspace.is-intro .ov-stats { animation-delay: 400ms; }
+.workspace.is-intro .ov-feed-col:first-child { animation-delay: 500ms; }
+.workspace.is-intro .ov-feed-col:last-child { animation-delay: 580ms; }
+
+/* Ujemne wcięcia na końcu: cienie i wystające elementy nie są przycięte tuż przed zdjęciem klipu. */
+@keyframes ov-wipe {
+  from {
+    clip-path: inset(-24px 100% -24px 0);
+    opacity: 0;
+    filter: blur(6px);
+  }
+  to {
+    clip-path: inset(-24px -24px -24px 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace.is-intro .ol-row-level,
+  .workspace.is-intro :is(.ov-eyebrow, .ov-number, .ov-sentence, .ov-actions, .ov-stats, .ov-feed-col) {
+    animation: none;
+  }
+}

@@ -38,10 +38,14 @@ DECISIONS_FILE = "user_decisions.json"
 REJECTED_RATING = 3
 
 
-def dismissed_links() -> set:
-    """Linki ofert, które użytkownik odrzucił - w obu formatach decyzji naraz."""
+def dismissed_links(decisions: dict | None = None) -> set:
+    """Linki ofert, które użytkownik odrzucił - w obu formatach decyzji naraz.
+
+    Serwer podaje decyzje z pamięci; bez argumentu (CLI) czytamy plik."""
+    if decisions is None:
+        decisions = load_json_safe(DECISIONS_FILE, default={}) or {}
     out = set()
-    for link, value in (load_json_safe(DECISIONS_FILE, default={}) or {}).items():
+    for link, value in decisions.items():
         # Stary format to goły string ("reject"), nowy to słownik ze statusem i oceną
         if isinstance(value, str):
             if value == "reject":
@@ -75,7 +79,9 @@ def collect(analyzed, threshold: int, skip: set) -> tuple[dict, int, int]:
     po całym pliku brzmiałoby jak informacja o tym raporcie, a dotyczyłoby ofert,
     których ten raport i tak nigdy nie oglądał.
     """
-    gaps = defaultdict(lambda: {"label": None, "count": 0, "scores": [], "learnable": 0})
+    # `links`: kanoniczny link → wpis. Jedna oferta liczy się raz, nawet gdy model wymienił
+    # ten sam brak dwa razy - wtedy liczba w rankingu równa się długości listy „Pokaż N ofert”.
+    gaps = defaultdict(lambda: {"label": None, "scores": [], "learnable": 0, "links": {}})
     considered = skipped = 0
 
     for entry in analyzed:
@@ -94,10 +100,12 @@ def collect(analyzed, threshold: int, skip: set) -> tuple[dict, int, int]:
             if not key:
                 continue
             gap = gaps[key]
+            if link in gap["links"]:
+                continue
             # Pierwsze napotkane brzmienie zostaje etykietą - w raporcie ma stać
             # to, co naprawdę napisał model, nie wersja po naszej normalizacji.
             gap["label"] = gap["label"] or str(raw).strip()
-            gap["count"] += 1
+            gap["links"][link] = entry
             gap["scores"].append(score)
             if entry.get("learnable_in_month"):
                 gap["learnable"] += 1
@@ -106,18 +114,18 @@ def collect(analyzed, threshold: int, skip: set) -> tuple[dict, int, int]:
 
 
 def rank(gaps: dict, top: int) -> list:
-    """Posortuj braki: najpierw częstość, przy remisie średnie dopasowanie ofert."""
+    """Posortuj braki: najpierw liczba ofert, przy remisie średnie dopasowanie ofert."""
     rows = []
     for gap in gaps.values():
         scores = gap["scores"]
         rows.append({
             "skill": gap["label"],
-            "count": gap["count"],
+            "offers": len(gap["links"]),
             "mean_match": round(sum(scores) / len(scores), 1),
             "max_match": max(scores),
             "learnable": gap["learnable"],
         })
-    rows.sort(key=lambda r: (-r["count"], -r["mean_match"]))
+    rows.sort(key=lambda r: (-r["offers"], -r["mean_match"]))
     return rows[:top]
 
 
@@ -160,12 +168,12 @@ def main(argv=None):
         return 1
 
     print()
-    top_value = rows[0]["count"]
+    top_value = rows[0]["offers"]
     print(f"{'ile ofert':>9} | {'śr. dopas.':>10} | umiejętność")
     print("-" * 64)
     for row in rows:
-        print(f"{row['count']:>9} | {row['mean_match']:>9.1f}% | "
-              f"{bar(row['count'], top_value)} {row['skill']}")
+        print(f"{row['offers']:>9} | {row['mean_match']:>9.1f}% | "
+              f"{bar(row['offers'], top_value)} {row['skill']}")
     print("-" * 64)
     print("\nJak to czytać:")
     print("  Pozycja wysoko = tyle ofert, które poza tym pasują, odpada na tej jednej rzeczy.")

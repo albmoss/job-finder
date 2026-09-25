@@ -1,0 +1,1218 @@
+/* ==========================================================================
+   Pipeline Styles: Pill, Sheet, Launch Modal & Setup (V2 dark)
+   ========================================================================== */
+
+/* ---------- 1. Pigułka (Top Bar Pill) ---------- */
+.pp-pill {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 56px;
+  /* Prawy margines 16 px = odstęp strumienia od przycisku: przycisk ma luz z obu stron. */
+  padding: 0 16px 0 22px;
+  border-radius: 28px;
+  text-align: left;
+  min-width: 0;
+  cursor: pointer;
+  border: 1px solid var(--stroke);
+  background: var(--surface);
+  backdrop-filter: blur(20px);
+  position: relative;
+  /* Powrót po zamknięciu arkusza z opóźnieniem: pasek wyłania się, gdy zwinięty arkusz już leży
+     na nim — wcześniej oba teksty przenikały się w połowie drogi. */
+  transition: background-color 150ms ease, border-color 150ms ease, opacity 110ms ease 170ms;
+  user-select: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .pp-pill:hover {
+    background: var(--fill);
+    border-color: var(--stroke-strong);
+  }
+  .pp-pill.is-idle:hover .pp-ringbtn .pp-icon-play {
+    transform: translateX(2px);
+  }
+}
+
+.pp-pill.is-error {
+  opacity: 0.75;
+}
+
+.pp-pill .pp-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 150px;
+  flex: none;
+}
+
+.pp-pill .pp-stage b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.pp-pill .pp-stage span {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  line-height: 1.2;
+}
+
+.pp-pill canvas.pp-stream {
+  flex: 1;
+  height: 26px;
+  min-width: 0;
+  display: block;
+}
+
+/* Przycisk pierścieniowy */
+.pp-ringbtn {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 50%;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.pp-ringbtn svg.pp-ring {
+  position: absolute;
+  inset: 0;
+  width: 44px;
+  height: 44px;
+  transform: rotate(-90deg);
+}
+
+.pp-ringbtn svg.pp-ring circle {
+  fill: none;
+  stroke-width: 2;
+}
+
+.pp-ringbtn svg.pp-ring .pp-ring-bg {
+  stroke: rgba(255, 255, 255, 0.08);
+}
+
+.pp-ringbtn svg.pp-ring .pp-ring-arc {
+  stroke: var(--accent);
+  transition: stroke-dashoffset 500ms var(--ease-out);
+}
+
+.pp-ringbtn .pp-face {
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  transition: background-color 150ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .pp-ringbtn:hover .pp-face {
+    background: rgba(255, 255, 255, 0.13);
+  }
+}
+
+.pp-ringbtn .pp-face svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 150ms var(--ease-out);
+}
+
+.pp-ringbtn .pp-stopglyph {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--ink);
+}
+
+.pp-spin {
+  animation: pp-spin 900ms linear infinite;
+}
+
+@keyframes pp-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Kropki „…” za tytułem biegnącego etapu: dopisują się po jednej, potem znikają razem.
+   Stała szerokość — tytuł i metryka obok nie drgają. `<i>`, bo `.pp-stage span` to metryka. */
+.pp-dots {
+  display: inline-block;
+  width: 1.1em;
+  font-style: normal;
+  text-align: left;
+}
+.pp-dots i {
+  font-style: normal;
+  opacity: 0;
+  animation: pp-dot-1 1.6s infinite;
+}
+.pp-dots i:nth-child(2) { animation-name: pp-dot-2; }
+.pp-dots i:nth-child(3) { animation-name: pp-dot-3; }
+@keyframes pp-dot-1 { 0%, 24.9% { opacity: 0; } 25%, 100% { opacity: 1; } }
+@keyframes pp-dot-2 { 0%, 49.9% { opacity: 0; } 50%, 100% { opacity: 1; } }
+@keyframes pp-dot-3 { 0%, 74.9% { opacity: 0; } 75%, 100% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .pp-dots i { animation: none; opacity: 1; }
+}
+
+
+/* ---------- 2. Arkusz (Pipeline Sheet) ----------
+   Arkusz rozwija się z paska w dół: zamknięty jest przycięty do prostokąta paska (zmienne
+   --from-* mierzy PipelineSheet), otwarty — do siebie. Strumień arkusza stoi w stanie
+   zamkniętym na strumieniu paska (--stream-*) i zjeżdża na swoje miejsce; tekst etapu jedzie
+   z lewą krawędzią od miejsca tekstu paska. Treść odsłania dolna krawędź przycięcia.
+   Otwarcie: 420 ms krzywą szuflady; zamknięcie tą samą drogą, szybciej (260 ms ease-out). */
+.pp-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: var(--scrim);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease;
+}
+
+.pp-sheet-backdrop.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transition-duration: 320ms;
+}
+
+.pp-sheet {
+  position: fixed;
+  z-index: 60;
+  top: 20px;
+  right: var(--sheet-right, 24px);
+  width: var(--sheet-w, 810px);
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  border-radius: 30px;
+  /* Obramowanie 1 px + 5/6 px = przycisk „zwiń” wypada co do piksela na przycisku startu paska. */
+  padding: 5px 6px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  background: var(--sheet);
+  border: 1px solid var(--stroke);
+  box-shadow: 0 30px 80px var(--shadow);
+  clip-path: inset(var(--from-top, 0px) var(--from-right, 0px) var(--from-bottom, 0px) var(--from-left, 0px) round 28px);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    clip-path 260ms var(--ease-out),
+    visibility 0s linear 260ms;
+}
+
+.pp-sheet.is-open {
+  /* Ujemne wcięcie, żeby clip-path nie ścinał cienia otwartego arkusza. */
+  clip-path: inset(-40px -40px -90px -40px round 0px);
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    clip-path 420ms var(--ease-drawer),
+    visibility 0s;
+}
+
+/* Strumień i tekst etapu w stanie zamkniętym stoją tam, gdzie ich odpowiedniki w pasku. */
+.pp-sheet .pp-band canvas.pp-sheet-canvas {
+  transform-origin: 0 0;
+  transform: translate(var(--stream-x, 0px), var(--stream-y, 0px)) scale(var(--stream-sx, 1), var(--stream-sy, 1));
+  transition: transform 260ms var(--ease-out);
+}
+.pp-sheet .pp-sheet-head .pp-stage {
+  transform: translate(var(--stage-x, 0px), var(--stage-y, 0px));
+  transition: transform 260ms var(--ease-out);
+}
+/* Podpis arkusza („pełny przebieg · start…”) różni się od podpisu paska — przy zamykaniu gaśnie
+   od razu, przy otwieraniu pojawia się, gdy tekst odjedzie od paska. */
+.pp-sheet .pp-sheet-head .pp-stage span {
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+.pp-sheet.is-open .pp-sheet-head .pp-stage span {
+  opacity: 1;
+  transition: opacity 200ms var(--ease-out) 120ms;
+}
+.pp-sheet.is-open .pp-band canvas.pp-sheet-canvas,
+.pp-sheet.is-open .pp-sheet-head .pp-stage {
+  transform: none;
+  transition: transform 420ms var(--ease-drawer);
+}
+
+/* Pomiar przed otwarciem: stan zamknięty wskakuje na nowe wartości bez przejścia. */
+.pp-sheet[data-measure],
+.pp-sheet[data-measure] * {
+  transition: none !important;
+}
+
+/* Liczba i akcje nagłówka nie mają odpowiednika w pasku — przenikają. „Zwiń” jest widoczny
+   od pierwszej klatki: stoi na miejscu przycisku startu. */
+.pp-sheet-head > :not(.pp-collapse):not(.pp-stage) {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.pp-sheet.is-open .pp-sheet-head > :not(.pp-collapse):not(.pp-stage) {
+  opacity: 1;
+  transition: opacity 240ms var(--ease-out) 110ms;
+}
+
+/* Rząd liczb etapów leży na drodze strumienia z paska — pojawia się, gdy strumień go minie. */
+.pp-sheet .pp-flow > .pp-cols {
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+.pp-sheet.is-open .pp-flow > .pp-cols {
+  opacity: 1;
+  transition: opacity 220ms var(--ease-out) 140ms;
+}
+
+/* Pod otwartym arkuszem pasek znika, żeby nie prześwitywał przez półprzezroczyste tło. */
+:root:has(.pp-sheet.is-open) .pp-pill {
+  opacity: 0;
+  transition: background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+}
+
+/* Mniej ruchu: bez rozwijania i jazdy — samo przenikanie 150 ms. */
+@media (prefers-reduced-motion: reduce) {
+  .pp-sheet,
+  .pp-sheet.is-open {
+    clip-path: none;
+    opacity: 0;
+    transition: opacity 150ms ease, visibility 0s linear 150ms;
+  }
+  .pp-sheet.is-open { opacity: 1; transition: opacity 150ms ease, visibility 0s; }
+  .pp-sheet .pp-band canvas.pp-sheet-canvas,
+  .pp-sheet .pp-sheet-head .pp-stage {
+    transform: none;
+    transition: none;
+  }
+  .pp-pill { transition: background-color 150ms ease, border-color 150ms ease, opacity 150ms ease; }
+}
+
+.pp-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 44px;
+  padding-left: 16px;
+  /* 6 px paddingu arkusza + 10 px = 16 px paddingu paska: „zwiń” stoi na przycisku startu. */
+  padding-right: 10px;
+}
+
+.pp-sheet-head .pp-collapse {
+  width: 44px;
+  height: 44px;
+  border-radius: 22px;
+}
+
+.pp-sheet-head .pp-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Te same metryki co tekst paska — przy otwarciu tytuł nie skacze w pionie. */
+.pp-sheet-head .pp-stage b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.pp-sheet-head .pp-stage span {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  line-height: 1.2;
+}
+
+.pp-sheet-head .pp-total {
+  font-size: 30px;
+  font-weight: 300;
+  letter-spacing: -1px;
+  display: flex;
+  align-items: flex-start;
+  padding-right: 8px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-sheet-head .pp-total small {
+  font-size: 13px;
+  color: var(--ink-3);
+  letter-spacing: 0;
+  margin-top: 4px;
+  margin-left: 2px;
+}
+
+.pp-round {
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  border: none;
+  cursor: pointer;
+  transition: background-color 150ms ease, transform 120ms var(--ease-out);
+}
+
+.pp-round:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.pp-round:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.pp-round:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pp-round svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 7 kolumn etapów */
+.pp-flow {
+  padding: 6px 20px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pp-cols {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+}
+
+.pp-cols .c b {
+  display: block;
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.pp-cols .c span {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.pp-cols .c.cur b {
+  color: var(--accent);
+  font-size: 20px;
+}
+
+.pp-cols .c.wait b {
+  color: var(--ink-3);
+}
+
+.pp-band {
+  position: relative;
+  height: 132px;
+}
+
+.pp-band canvas.pp-sheet-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Linia stacji */
+.pp-stations .line {
+  position: relative;
+  height: 12px;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  align-items: center;
+}
+
+/* Tor od środka pierwszej do środka ostatniej stacji (środki 7 kolumn: 1/14 od krawędzi). */
+.pp-stations .line::before {
+  content: "";
+  position: absolute;
+  left: calc(100% / 14);
+  right: calc(100% / 14);
+  top: 50%;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.pp-stations .line .pp-done-line {
+  position: absolute;
+  top: 50%;
+  height: 1px;
+  background: rgba(237, 235, 230, 0.4);
+  transition: width 400ms var(--ease-out);
+}
+
+/* Odcinek biegnącego etapu: kobalt jak strumień, światło płynie ku bieżącej stacji. */
+.pp-stations .line .pp-run-line {
+  position: absolute;
+  top: 50%;
+  height: 2px;
+  margin-top: -0.5px;
+  border-radius: 1px;
+  overflow: hidden;
+  background: linear-gradient(90deg, color-mix(in oklab, var(--accent-2) 45%, transparent), var(--accent));
+}
+
+.pp-stations .line .pp-run-line::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, var(--accent-hot), transparent);
+  animation: pp-run-flow 1.8s var(--ease-out) infinite;
+}
+
+@keyframes pp-run-flow {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-stations .line .pp-run-line::after { animation: none; display: none; }
+}
+
+.pp-stations .st {
+  position: relative;
+  justify-self: center;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: var(--surface-solid);
+  z-index: 1;
+}
+
+.pp-stations .st.done {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+.pp-stations .st.cur {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--accent);
+  background: none;
+}
+
+.pp-stations .st.cur::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.pp-stations .names {
+  margin-top: 9px;
+}
+
+.pp-stations .names .c b {
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.pp-stations .names .c.cur b {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pp-stations .names .c span {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.pp-stations .names .c.cur span {
+  color: var(--accent);
+}
+
+
+/* ---------- 3. Trzy karty (Paczki / Klucze / Na żywo) ----------
+   „Na żywo” jest szersza — niesie najwięcej treści. Karty mają stałą wysokość, żeby siatka
+   paczek i kafelki kluczy mogły wypełnić wolne pole zamiast rosnąć z treścią. */
+.pp-now {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.55fr);
+  gap: 12px;
+  padding: 0 20px;
+}
+
+.pp-card {
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 18px;
+  min-width: 0;
+  height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pp-card .h {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* Nazwa modelu bywa długa — tnie się, nie łamie nagłówka na dwie linie. */
+.pp-card .h span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.pp-card .h button.pp-log-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--ink-3);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pp-card .h button.pp-log-toggle:hover {
+  color: var(--ink);
+}
+
+/* Siatka paczek i źródeł: rozmiar kafelka (--cell) i kolumny liczy fitGrid z wymiarów pola. */
+.pp-packs {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: repeat(7, 24px);
+  align-content: start;
+  gap: 5px;
+}
+
+.pp-pack {
+  width: var(--cell, 24px);
+  height: var(--cell, 24px);
+  border-radius: max(2px, calc(var(--cell, 24px) * 0.28));
+  background: rgba(255, 255, 255, 0.06);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Gotowe kafelki w barwach strumienia: kobalt na początku siatki, fiolet na końcu (--t). */
+.pp-pack.done,
+.pp-pack.cur::before {
+  background: color-mix(in oklab, var(--accent-2), var(--stream-end) calc(var(--t, 0) * 100%));
+}
+
+.pp-pack.cur {
+  background: var(--fill-3);
+}
+
+/* Bieżący kafelek „ładuje się” tym samym kolorem: szacunek z tempa paczek, tyk co sekundę. */
+.pp-pack.cur::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(var(--p, 0));
+  transition: transform 1s linear;
+}
+
+.pp-pack.cur::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1.5px;
+  background: var(--accent-hot);
+  left: calc(var(--p, 0) * 100%);
+  opacity: 0.9;
+  transition: left 1s linear;
+}
+
+/* Bez tempa (pierwsza paczka, źródło bez meldunków): ładowanie w pętli. */
+.pp-pack.cur.is-busy::before {
+  animation: pp-pack-load 1.8s var(--ease-out) infinite;
+}
+.pp-pack.cur.is-busy::after {
+  display: none;
+}
+@keyframes pp-pack-load {
+  0% { transform: scaleX(0); opacity: 1; }
+  75% { transform: scaleX(1); opacity: 1; }
+  100% { transform: scaleX(1); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pp-pack.cur::before,
+  .pp-pack.cur::after { transition: none; }
+  .pp-pack.cur.is-busy::before { animation: none; transform: scaleX(0.5); }
+}
+
+.pp-card .hint {
+  font-size: 11px;
+  color: var(--ink-3);
+  line-height: 1.4;
+  margin-top: auto;
+}
+
+/* Klucze API: kafelek na klucz, siatka rozciągnięta na wolne pole karty. */
+.pp-keys {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.pp-key {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border-radius: 12px;
+  background: var(--fill-2);
+  border: 1px solid var(--stroke);
+  transition: background-color 200ms ease, border-color 200ms ease;
+}
+
+.pp-key b {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.pp-key span {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.pp-key.on {
+  background: linear-gradient(
+    160deg,
+    color-mix(in oklab, var(--accent-2) 72%, transparent),
+    color-mix(in oklab, var(--stream-end) 58%, transparent)
+  );
+  border-color: transparent;
+}
+
+.pp-key.on b,
+.pp-key.on span {
+  color: var(--ink);
+}
+
+/* Limit: pasek u dołu kafelka topnieje do powrotu klucza (--cool = pozostała część). */
+.pp-key.cool::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: calc(var(--cool, 0) * 100%);
+  background: var(--accent-hot);
+  opacity: 0.7;
+  transition: width 1s linear;
+}
+
+.pp-card .big {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.pp-card .small {
+  font-size: 11px;
+  color: var(--ink-3);
+  margin-top: 4px;
+}
+
+/* Ticker logów na żywo */
+.pp-ticker {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.pp-tk {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: opacity 300ms ease;
+}
+
+.pp-tk time {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+.pp-tk span {
+  font-size: 12px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Rozwinięty dziennik w arkuszu */
+.pp-log-console-wrap {
+  padding: 0 20px;
+}
+
+.pp-log-console {
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 12px 14px;
+  height: 220px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.pp-log-line {
+  display: flex;
+  gap: 10px;
+}
+
+.pp-log-line .time {
+  color: var(--ink-3);
+  flex: none;
+}
+
+.pp-log-line .msg {
+  color: var(--ink-2);
+  word-break: break-all;
+}
+
+.pp-log-line.is-err .msg {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.pp-log-line.is-warn .msg {
+  color: var(--ink);
+}
+
+.pp-log-line.is-ok .msg {
+  color: var(--ink);
+}
+
+.pp-log-line.is-phase .msg {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+
+/* ---------- 4. Dolny wiersz: Pojedyncze kroki ----------
+   Etykieta siedzi w jednej ramce z przyciskami kroków — widać, do czego się odnosi. */
+.pp-steps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px;
+}
+
+.pp-steps-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 4px 4px 16px;
+  border-radius: 999px;
+  background: var(--fill-2);
+  border: 1px solid var(--stroke);
+}
+
+.pp-steps .lbl {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.pp-steps-run {
+  margin-left: auto;
+}
+
+.pp-steps-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pp-confirm-rescore {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 16px;
+  background: var(--fill-3);
+  border: 1px solid var(--stroke-strong);
+  font-size: 12px;
+}
+
+.pp-confirm-rescore span {
+  color: var(--ink);
+}
+
+
+/* ---------- 5. Launch Modal (Okno Uruchomienia) ---------- */
+.pp-modal {
+  width: 520px;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 26px 26px 22px;
+  border-radius: 30px;
+  background: var(--sheet);
+  border: 1px solid var(--stroke);
+  backdrop-filter: blur(30px);
+  box-shadow: 0 30px 80px var(--shadow);
+  animation: modal-in 260ms var(--ease-out);
+}
+
+.pp-modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.pp-modal-head h2 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+  margin: 0;
+  color: var(--ink);
+}
+
+.pp-modal-head p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+
+/* Opcje przebiegu (Run options) */
+.pp-mode-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pp-mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
+  position: relative;
+}
+
+.pp-mode-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pp-mode-card.is-active {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.pp-mode-card-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pp-mode-radio {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.3);
+  display: grid;
+  place-items: center;
+  flex: none;
+  transition: border-color 150ms ease;
+}
+
+.pp-mode-card.is-active .pp-mode-radio {
+  border-color: var(--ink);
+}
+
+.pp-mode-radio-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+.pp-mode-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pp-mode-desc {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.45;
+  padding-left: 30px;
+}
+
+.pp-mode-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+  padding-left: 30px;
+  margin-top: 2px;
+}
+
+.pp-mode-meta svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+/* Wiersze gotowości (Readiness rows) */
+.pp-ready-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pp-ready-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+  font-size: 13px;
+}
+
+.pp-ready-icon {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.pp-ready-icon.is-ok {
+  color: var(--ink-2);
+}
+
+.pp-ready-icon.is-warn {
+  color: var(--ink);
+}
+
+.pp-ready-label {
+  font-weight: 500;
+  color: var(--ink-3);
+  min-width: 70px;
+}
+
+.pp-ready-val {
+  color: var(--ink);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pp-ready-btn {
+  background: none;
+  border: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.pp-ready-btn:hover {
+  color: var(--ink);
+  background: var(--fill);
+}
+
+/* Zgoda na koszty (Consent checkbox) */
+.pp-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 150ms ease;
+}
+
+.pp-consent:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.pp-consent input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pp-checkbox {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: var(--fill-2);
+  display: grid;
+  place-items: center;
+  flex: none;
+  margin-top: 1px;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.pp-consent.is-checked .pp-checkbox {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.pp-checkbox svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 3;
+}
+
+.pp-consent-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pp-consent-text strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pp-consent-text span {
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 1.45;
+}
+
+/* Stopka modala */
+.pp-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.pp-modal-hint {
+  margin-right: auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* Sekcja setup wewnątrz okna */
+.pp-setup-drawer {
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: modal-in 200ms var(--ease-out);
+}
+
+.pp-setup-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.pp-cv-preview {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  padding: 10px 12px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.pp-env-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}

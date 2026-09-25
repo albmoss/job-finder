@@ -1,6 +1,7 @@
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
+import argparse
 import hashlib
 import json
 import time
@@ -14,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import GEMINI_API_KEYS
 from utils.links import canonical_link
-from utils.safe_io import save_json_atomic
+from utils.safe_io import save_json_atomic, rotate_backup
 from utils.console import force_utf8
 
 # Struktury pod tryb Structured Outputs
@@ -26,6 +27,8 @@ class JobEval(BaseModel):
     missing_skills: list[str]
     learnable_in_month: bool
     industry: str
+    # Po ocenie: kolejność pól w schemacie to kolejność generowania (SDK wysyła propertyOrdering).
+    highlights: list[str]
 
 BATCH_SIZE = 75
 
@@ -78,21 +81,35 @@ INPUT_DB = "jobs_database.json"
 OUTPUT_FILE = "analyzed_jobs_waterfall.json"
 CV_FILE = "final_cv_text.txt"
 STATE_FILE = "waterfall_state.json"
+STOP_FLAG_FILE = Path(__file__).resolve().parent / "pipeline_stop_requested.flag"
+
+
+def is_stop_requested() -> bool:
+    return STOP_FLAG_FILE.exists() or os.path.exists("pipeline_stop_requested.flag")
+
 
 def load_api_state():
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 state = json.load(f)
-                return state.get("current_key_val", 0), state.get("current_model_idx", 0)
+                return (
+                    state.get("current_key_val", 0),
+                    state.get("current_model_idx", 0),
+                    state.get("rescore_all_started_at"),
+                )
         except Exception:
             pass
-    return 0, 0
+    return 0, 0, None
 
-def save_api_state(key_val, model_idx):
+
+def save_api_state(key_val, model_idx, rescore_all_started_at=None):
     try:
+        data = {"current_key_val": key_val, "current_model_idx": model_idx}
+        if rescore_all_started_at is not None:
+            data["rescore_all_started_at"] = rescore_all_started_at
         with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"current_key_val": key_val, "current_model_idx": model_idx}, f)
+            json.dump(data, f)
     except Exception as e:
         print(f"Error saving state: {e}")
 
@@ -104,12 +121,15 @@ def load_cv():
         print("ERROR: CV file not found at", CV_FILE)
         return "ERROR: CV File not found."
 
+def is_valid_job(job: dict) -> bool:
+    """Oferta z sensownym opisem kwalifikująca się do oceny AI (>20 znaków, nie zaślepka)."""
+    from utils.scoring_queue import is_valid_job as _ivj
+    return _ivj(job)
+
 def load_jobs():
     with open(INPUT_DB, "r", encoding="utf-8") as f:
         data = json.load(f)
-    # Tylko oferty z sensownym opisem - zaślepki OLX mają poniżej 50 znaków
-    valid = [j for j in data if j.get("description") and j["description"] != "Brak opisu" and len(j["description"].strip()) > 20]
-    return valid
+    return [j for j in data if is_valid_job(j)]
 
 def load_existing_results():
     if not os.path.exists(OUTPUT_FILE):
@@ -126,8 +146,8 @@ def description_fingerprint(job: dict) -> str:
     Skrót opisu oferty. Pozwala wykryć, że oferta została wzbogacona po analizie
     (np. OLX dostał prawdziwy opis zamiast zaślepki) i wymaga przeliczenia.
     """
-    text = (job.get("description") or "") + "||" + (job.get("title") or "")
-    return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    from utils.scoring_queue import description_fingerprint as _df
+    return _df(job)
 
 
 def profile_version() -> str:
@@ -140,20 +160,17 @@ def profile_version() -> str:
         return "brak"
 
 
-def is_stale(entry: dict, job: dict, current_profile: str) -> bool:
+def is_stale(entry: dict, job: dict, current_profile: str = None, rescore_all: bool = False, rescore_changed: bool = False, rescore_cutoff: str = None) -> bool:
     """
     Czy wynik analizy jest nieaktualny?
-    Nieaktualny = opis oferty się zmienił albo profil preferencji jest nowszy.
-    Stare wpisy bez stempli traktujemy jako aktualne, żeby nie przeliczać
-    całej bazy przy pierwszym uruchomieniu po aktualizacji.
+    W standardowym trybie (normal mode) istniejace oceny sa w pelni zachowywane,
+    a ocenie podlegaja wylacznie oferty dotychczas nieocenione.
+    Pelne przeliczenie bazy wymaga jawnej flagi (rescore_all=True).
+    Przeliczenie ofert ze zmienionym opisem wymaga jawnej flagi (rescore_changed=True).
+    Zmiana profilu preferencji nie uniewaznia ocen bez zgody uzytkownika.
     """
-    stamped_desc = entry.get("_description_hash")
-    if stamped_desc and stamped_desc != description_fingerprint(job):
-        return True
-    stamped_profile = entry.get("_profile_version")
-    if stamped_profile and stamped_profile != current_profile:
-        return True
-    return False
+    from utils.scoring_queue import is_stale_result
+    return is_stale_result(entry, job, rescore_all=rescore_all, rescore_changed=rescore_changed, rescore_cutoff=rescore_cutoff)
 
 def load_user_decisions():
     try:
@@ -412,6 +429,7 @@ Zdefiniuj następujące pola dla każdej oferty:
 - `missing_skills`: Lista kluczowych umiejętności z oferty, których kandydat NIE posiada w swoim CV.
 - `learnable_in_month`: Czy brakujące umiejętności można opanować w ciągu jednego miesiąca nauki (~160 godzin)? (True/False)
 - `industry`: Branża, do której należy oferta (np. IT, Sales, Marketing, Customer Service, Finance, Engineering, Other).
+- `highlights`: 3-5 krótkich haseł (1-3 słowa każde) streszczających ofertę: rodzaj roli, kluczowe narzędzia lub technologie, tryb pracy, forma zatrudnienia. Tylko to, co naprawdę jest w opisie; bez ocen i bez braków kandydata. Oferta bez pełnego opisu → pusta lista [].
 
 FORMAT ODPOWIEDZI (Tylko zwięzły JSON array, bez komentarzy):
 [
@@ -422,7 +440,8 @@ FORMAT ODPOWIEDZI (Tylko zwięzły JSON array, bez komentarzy):
     "is_entry_level": true,
     "missing_skills": ["SQL", "Tableau"],
     "learnable_in_month": true,
-    "industry": "IT"
+    "industry": "IT",
+    "highlights": ["Analityk danych", "SQL", "Power BI", "Hybrydowo", "UoP"]
   }}
 ]
 
@@ -509,6 +528,7 @@ def _entries_from(parsed, batch, model_name, profile_ver):
             "missing_skills": item.get("missing_skills", []),
             "learnable_in_month": item.get("learnable_in_month", True),
             "industry": item.get("industry", "Other"),
+            "highlights": [str(h).strip() for h in (item.get("highlights") or []) if str(h).strip()][:5],
             # Stemple: pozwalają później wykryć, że wynik jest nieaktualny,
             # i przeliczyć TYLKO te oferty
             "_description_hash": description_fingerprint(job),
@@ -577,9 +597,15 @@ def score_batch(batch, prompt, model_idx, key_idx, profile_ver):
     raise NoCapacity()
 
 
-def main():
-    print("Starting WATERFALL Analysis (RESUME MODE)...")
-
+def main(rescore_all: bool = False, rescore_changed: bool = False, resume: bool = False):
+    mode_desc = "RESUME MODE" if resume else "NORMAL/FRESH RUN"
+    print(f"Starting WATERFALL Analysis ({mode_desc})...")
+    if rescore_all:
+        print("   EXPLICIT FULL RESCORE MODE (--rescore-all) enabled.")
+    elif rescore_changed:
+        print("   EXPLICIT CHANGED-DESCRIPTIONS RESCORE MODE (--rescore-changed) enabled.")
+    else:
+        print("   NORMAL MODE: evaluating only previously unscored offers.")
     # Bez klucza nie ma czego rotować. Wcześniej pusta pula oznaczała, że pętla
     # po kluczach nie wykonywała się ani razu, każdy batch kończył się "porażką
     # na wszystkich modelach", a etap spał po 5 minut i próbował w nieskończoność.
@@ -596,6 +622,11 @@ def main():
     existing_results = load_existing_results()
     print(f"Loaded {len(existing_results)} existing matched jobs.")
 
+    # Bezpieczna rotacja backupu RAZ na początku przebiegu (jeśli są istniejące wyniki),
+    # a nie co paczkę, żeby kolejne paczki nie niszczyły kopii sprzed startu.
+    if existing_results:
+        rotate_backup(OUTPUT_FILE)
+
     current_profile_version = profile_version()
     print(f"Preference profile version: {current_profile_version}")
 
@@ -607,50 +638,66 @@ def main():
         if link:
             existing_by_link[link] = item
 
-    # Wyniki nieaktualne (zmieniony opis / nowszy profil) trafiają do ponownej analizy,
-    # a ich stare wpisy są usuwane - inaczej mielibyśmy dwa wyniki dla jednej oferty.
-    stale_links = {
-        link for link, item in existing_by_link.items()
-        if link in jobs_by_link and is_stale(item, jobs_by_link[link], current_profile_version)
-    }
-    if stale_links:
-        print(f"{len(stale_links)} results are stale (description or profile changed) - rescoring.")
-        existing_results = [
-            item for item in existing_results
-            if canonical_link((item.get('job') or {}).get('link', '')) not in stale_links
-        ]
+    # Wyniki nieaktualne (jawny rescore_all lub rescore_changed) trafiają do ponownej analizy.
+    # W trybie standardowym (normal mode) stale_links jest puste - oceniamy tylko nieocenione.
+    # Ważne: NIE usuwamy starych wpisów z góry z pliku ani z pamięci!
+    # Zastępujemy je dopiero po faktycznym przeliczeniu danej paczki, dzięki czemu
+    # ewentualne przerwanie procesu w trakcie nie gubi nieprzeliczonych jeszcze ocen.
+    rescore_cutoff = None
+    current_key_val, current_model_idx, rescore_all_started_at = load_api_state()
+    if rescore_all:
+        if resume and rescore_all_started_at:
+            rescore_cutoff = rescore_all_started_at
+            print(f"Resuming explicit full rescore session started at {rescore_cutoff}")
+        else:
+            rescore_cutoff = datetime.now().isoformat()
+            save_api_state(current_key_val, current_model_idx, rescore_all_started_at=rescore_cutoff)
+            if resume:
+                print(f"Resume requested but no previous rescore_all timestamp found - starting from {rescore_cutoff}")
+            else:
+                print(f"Starting fresh explicit full rescore session (cutoff: {rescore_cutoff})")
+    else:
+        if rescore_all_started_at:
+            save_api_state(current_key_val, current_model_idx, rescore_all_started_at=None)
 
-    # Do przeliczenia zostaje to, czego nie ma wśród aktualnych wyników i czego
-    # użytkownik nie ocenił ręcznie - te drugie i tak nie potrzebują oceny modelu.
-    done = {link for link in existing_by_link if link not in stale_links}
-    decided = {canonical_link(k) for k in load_user_decisions()}
-
-    remaining_jobs, skipped = [], 0
-    for job in all_jobs:
-        link = canonical_link(job['link'])
-        if link in done:
-            continue
-        if link in decided:
-            skipped += 1
-            continue
-        remaining_jobs.append(job)
-
-    if skipped:
-        print(f"Skipped {skipped} already-decided jobs (rejected/saved/aspirational).")
+    stale_links = set()
+    if rescore_all or rescore_changed:
+        stale_links = {
+            link for link, item in existing_by_link.items()
+            if link in jobs_by_link and is_stale(item, jobs_by_link[link], current_profile_version, rescore_all=rescore_all, rescore_changed=rescore_changed, rescore_cutoff=rescore_cutoff)
+        }
+        if stale_links:
+            mode_lbl = "explicit full rescore" if rescore_all else "changed descriptions"
+            print(f"{len(stale_links)} results are stale ({mode_lbl}) - queuing for analysis.")
+    results_by_link = dict(existing_by_link)
+    # Do przeliczenia zostaje to, co kwalifikuje się wg jednolitej semantyki kolejki:
+    # - pomija oferty już ocenione (chyba że rescore)
+    # - pomija oferty z decyzją użytkownika (decided)
+    # - pomija oferty zdjęte z portalu (zdjete_z_portalu)
+    # - pomija oferty przeterminowane (valid_through)
+    # - pomija oferty bez wartościowego opisu
+    # - przy wznowieniu rescore_all: pomija oferty przeliczone już w tej sesji
+    from utils.scoring_queue import get_pending_scoring_jobs
+    remaining_jobs = get_pending_scoring_jobs(
+        jobs=all_jobs,
+        analyzed=existing_results,
+        decisions=load_user_decisions(),
+        rescore_all=rescore_all,
+        rescore_changed=rescore_changed,
+        rescore_cutoff=rescore_cutoff,
+    )
     print(f"Remaining jobs to process: {len(remaining_jobs)}")
 
     if not remaining_jobs:
         print("Nothing left to do! All jobs analyzed.")
+        if rescore_all:
+            save_api_state(current_key_val, current_model_idx, rescore_all_started_at=None)
         return True
 
-    current_key_val, current_model_idx = load_api_state()
-    # Stan z poprzedniego przebiegu może wskazywać klucz, którego już nie ma
-    # w .env - wtedy rotacja startowałaby poza zakresem listy.
     current_model_idx = min(max(current_model_idx, 0), len(MODELS) - 1)
     current_key_val = min(max(current_key_val, 0), len(API_KEYS) - 1)
     print(f"Loaded API State: Model[{current_model_idx}] Key[{current_key_val}]")
 
-    results = existing_results
     job_queue = remaining_jobs[:]
     current_batch_size = BATCH_SIZE
     b_idx = 0
@@ -660,6 +707,11 @@ def main():
     al_context = build_active_learning_context(all_jobs)
 
     while job_queue:
+        if is_stop_requested():
+            print("\n[STOP] Pipeline stop requested by user - saving atomic progress and halting.")
+            save_results(list(results_by_link.values()), backup=False)
+            save_api_state(current_key_val, current_model_idx, rescore_all_started_at=rescore_cutoff)
+            return False
         batch = job_queue[:current_batch_size]
         b_idx += 1
         print(f"\nBatch {b_idx} (Processing {len(batch)} jobs, "
@@ -703,26 +755,50 @@ def main():
             continue
 
         stalls = 0
-        results.extend(entries)
+        for entry in entries:
+            link = canonical_link((entry.get('job') or {}).get('link', ''))
+            if link:
+                results_by_link[link] = entry
+        results = list(results_by_link.values())
         # Oferty pominięte przez model wracają na początek kolejki. Każdy udany
         # batch ocenia co najmniej jedną ofertę, więc kolejka zawsze się kurczy.
         job_queue = missed + job_queue[len(batch):]
         current_batch_size = BATCH_SIZE
 
-        save_results(results)
-        save_api_state(current_key_val, current_model_idx)
+        save_results(results, backup=False)
+        save_api_state(current_key_val, current_model_idx, rescore_all_started_at=rescore_cutoff)
         print(f"      Locked into Model '{MODELS[current_model_idx]}' "
               f"on Key {current_key_val}.")
+        if is_stop_requested():
+            print("\n[STOP] Pipeline stop requested by user - progress saved at batch boundary.")
+            return False
 
+    if rescore_all:
+        save_api_state(current_key_val, current_model_idx, rescore_all_started_at=None)
     print(f"\nDONE. Queue empty! Processed {b_idx} batches total.")
     return True
 
-def save_results(data):
-    # Kopia zapasowa, bo to jedyny plik w projekcie, ktorego nie da sie
-    # odtworzyc za darmo - kazda ocena kosztowala wywolanie API. Zapis leci
-    # po kazdej paczce, wiec jeden zly zapis kasowalby caly przebieg.
-    save_json_atomic(OUTPUT_FILE, data, backup=True)
+def save_results(data, backup=False):
+    # Atomowy zapis. Główny backup wykonywany jest na starcie main(),
+    # a w pętli paczek zapisujemy atomowo bez rotowania backupów co 20 sekund.
+    save_json_atomic(OUTPUT_FILE, data, backup=backup)
 
 if __name__ == "__main__":
     force_utf8()
-    main()
+    parser = argparse.ArgumentParser(description="Waterfall AI job analysis")
+    parser.add_argument("--rescore-all", action="store_true", help="Jawne przeliczenie wszystkich ocen od nowa")
+    parser.add_argument("--rescore-changed", action="store_true", help="Przeliczenie ofert ze zmienionym opisem")
+    parser.add_argument("--resume", action="store_true", help="Wznawia przerwany przebieg")
+    args, _ = parser.parse_known_args()
+    ok = main(rescore_all=args.rescore_all, rescore_changed=args.rescore_changed, resume=args.resume)
+    if not ok and is_stop_requested():
+        print("\n" + "=" * 60)
+        print("PIPELINE STOPPED")
+        print("=" * 60)
+        try:
+            if STOP_FLAG_FILE.exists():
+                STOP_FLAG_FILE.unlink()
+        except Exception:
+            pass
+        sys.exit(0)
+    sys.exit(0 if ok else 1)

@@ -78,7 +78,9 @@ class JobMatch:
     user_decision: Optional[str] = None  # „apply”, „reject” albo None
     learnable_in_month: bool = False
     industry: str = "Other"
-    
+    # Słowa kluczowe streszczające ofertę; mają je tylko oferty ocenione po dodaniu pola.
+    highlights: Optional[list[str]] = None
+
     def to_dict(self):
         """Convert to dictionary for JSON serialization"""
         return {
@@ -89,7 +91,8 @@ class JobMatch:
             'missing_skills': self.missing_skills or [],
             'user_decision': self.user_decision,
             'learnable_in_month': self.learnable_in_month,
-            'industry': self.industry
+            'industry': self.industry,
+            'highlights': self.highlights or [],
         }
     
     @classmethod
@@ -103,7 +106,8 @@ class JobMatch:
             missing_skills=data.get('missing_skills', []),
             user_decision=data.get('user_decision'),
             learnable_in_month=data.get('learnable_in_month', False),
-            industry=data.get('industry', 'Other')
+            industry=data.get('industry', 'Other'),
+            highlights=data.get('highlights') or [],
         )
 
 
@@ -161,17 +165,14 @@ class JobDatabase:
     def save_jobs(self, jobs: list[Job]):
         """Zapis atomowy - przerwany zapis nie zostawia obciętego pliku."""
         from datetime import datetime
-        import os
+        from utils.safe_io import save_json_atomic
 
         now = datetime.now().isoformat()
         for job in jobs:
             if not job.scraped_at:
                 job.scraped_at = now
 
-        temp_file = self.filepath + ".tmp"
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump([job.to_dict() for job in jobs], f, ensure_ascii=False, indent=2)
-        os.replace(temp_file, self.filepath)
+        save_json_atomic(self.filepath, [job.to_dict() for job in jobs], indent=2)
 
         self._jobs = jobs
         self._by_link = None

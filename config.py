@@ -10,6 +10,9 @@ load_dotenv(Path(__file__).parent / ".env")
 
 BASE_DIR = Path(__file__).parent
 JOBS_DATABASE_PATH = BASE_DIR / "jobs_database.json"
+# Start ostatniego pobierania ofert (run_final_pipeline, etap 1). Granica „nowych”
+# ofert na liście: scraped_at >= started_at.
+LAST_SCRAPE_RUN_PATH = BASE_DIR / "last_scrape_run.json"
 
 # Model domyślny. Właściwa kaskada modeli jest w waterfall_analysis.py (MODELS)
 # i została dobrana empirycznie - patrz benchmark_models.py.
@@ -205,33 +208,3 @@ Bądź krytyczny - lepiej odrzucić wątpliwe oferty niż zaproponować nieodpow
     "rpm_limit": 5,
     "batch_size": 50
 }
-
-UI_CONFIG = {
-    "page_title": "Job Search Analytics",
-    "page_icon": "💼",
-    # Tyle ofert mieści się w prawym panelu, żeby kończył się na tej samej
-    # wysokości co lewy (log zdarzeń + ostatnie decyzje). Przy 25 prawa kolumna
-    # była dwa razy dłuższa od lewej i całe zestawienie się rozjeżdżało.
-    "page_size": 10,
-    "match_color_thresholds": {
-        "high": 70,  # od 70% zielony
-        "medium": 40,  # 40-69% żółty
-        # poniżej 40% czerwony
-    }
-}
-
-# Load overrides from user_config.json if it exists to apply Streamlit UI changes
-USER_CONFIG_PATH = BASE_DIR / "user_config.json"
-if USER_CONFIG_PATH.exists():
-    try:
-        import json
-        with open(USER_CONFIG_PATH, "r", encoding="utf-8") as f:
-            user_overrides = json.load(f)
-        for section, overrides in user_overrides.items():
-            if section in SCRAPER_CONFIG and isinstance(SCRAPER_CONFIG[section], dict):
-                SCRAPER_CONFIG[section].update(overrides)
-            else:
-                SCRAPER_CONFIG[section] = overrides
-    except Exception as e:
-        print(f"Error loading user_config.json: {e}")
-
