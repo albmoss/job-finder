@@ -48,6 +48,7 @@ streamlit_refinement_checklist.md
 # Zrzuty ekranu i artefakty debugowania (poza tym z README)
 *.png
 !docs/app.png
+!docs/pipeline.png
 screenshots/
 
 # Frontend
