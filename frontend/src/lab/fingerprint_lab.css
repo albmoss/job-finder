@@ -1,0 +1,48 @@
+/* Laboratorium kształtu — strona robocza, tylko w `npm run dev`. */
+html, body { overflow: auto; }
+
+.lab {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 24px;
+  min-height: 100%;
+  padding: 24px;
+}
+
+.lab-controls {
+  position: sticky;
+  top: 24px;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px;
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+}
+.lab-controls h1 { font-size: 22px; font-weight: 600; }
+.lab-sub, .lab-hint, .lab-status { color: var(--ink-3); font-size: 12px; }
+.lab-status { color: var(--ink-2); }
+
+.lab-row { display: flex; flex-direction: column; gap: 6px; }
+.lab-row-head { display: flex; justify-content: space-between; font-size: 13px; font-weight: 500; }
+.lab-row input { width: 100%; accent-color: var(--accent); }
+
+.lab-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.lab-previews { display: flex; flex-direction: column; gap: 12px; max-width: 984px; }
+
+.lab-card {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 18px 24px;
+  border-radius: var(--r-well);
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+}
+.lab-score { width: 96px; flex: none; }
+.lab-num { font-size: 56px; font-weight: 300; line-height: 1; letter-spacing: -0.03em; }
+.lab-pct { font-size: 20px; color: var(--ink-3); margin-left: 2px; }
+.lab-stream { flex: 1; height: 84px; min-width: 0; display: block; }

@@ -1,0 +1,377 @@
+/* Wspólna warstwa V2: reset, szkielet, szkło, przyciski, pola, drobne elementy.
+   Tokeny (kolory, promienie, pismo) przychodzą z theme_tokens.css (ui_theme.py).
+   Style poszczególnych widoków siedzą w osobnych plikach obok (offers.css, pipeline.css…). */
+
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --panel-shadow: 0 10px 30px var(--shadow);
+  --list-w: clamp(400px, 35vw, 500px);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+html, body { overflow: hidden; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; }
+button:disabled { cursor: default; }
+a { color: inherit; }
+h1, h2, h3, p { margin: 0; }
+.tnum { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* ---------- szkielet ---------- */
+.app {
+  position: relative;
+  height: 100dvh;
+  min-width: 1100px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px 24px;
+  background:
+    radial-gradient(120% 110% at 85% 5%, rgba(90, 112, 255, 0.16), transparent 60%),
+    radial-gradient(110% 100% at 5% 100%, rgba(139, 92, 255, 0.1), transparent 60%),
+    var(--bg);
+}
+.workspace { flex: 1; min-height: 0; display: flex; gap: 16px; }
+/* Wejście paneli przy przejściu przegląd ↔ oferta: krótko i cicho — 200 ms, 6 px w górę,
+   drugi panel 40 ms później. Samo opacity + transform; w trybie mniej ruchu zostaje tylko
+   przenikanie. */
+.workspace > .panel { animation: panel-in 200ms var(--ease-out) backwards; }
+.workspace > .panel:nth-child(2) { animation-delay: 40ms; }
+@keyframes panel-in { from { opacity: 0; transform: translateY(6px); } }
+:root[data-input="keyboard"] .workspace > .panel { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .workspace > .panel { animation-name: fade-in; }
+}
+/* Zmiana kategorii myszą (App.navigate): karty stoją, bez przenikania i przesunięcia (panel-in
+   nowych paneli App anuluje). Treść rozmywa się (.is-leaving, 200 ms = SWAP_OUT_MS), pod
+   rozmyciem podmienia się widok, nowa treść czeka rozmyta na oferty (.is-waiting) i spokojnie
+   się wyostrza (.is-settling, 420 ms = SWAP_SETTLE_MS). Otwarcie innej oferty myszą
+   (App.handleSelectOffer) robi to samo tylko z prawą kartą (.is-detail-*); App anuluje wtedy
+   panel-in i od-content-in. Rozmywane są dzieci panelu, nie panel — krawędź i szkło karty
+   zostają ostre, overflow panelu przycina rozlane rozmycie. */
+.workspace.is-leaving > .panel > *,
+.workspace.is-waiting > .panel > *,
+.workspace.is-detail-leaving > .panel:last-child > *,
+.workspace.is-detail-waiting > .panel:last-child > * { filter: blur(12px); }
+.workspace.is-leaving > .panel > *,
+.workspace.is-detail-leaving > .panel:last-child > * { transition: filter 200ms ease-in; }
+.workspace.is-settling > .panel > *,
+.workspace.is-detail-settling > .panel:last-child > * { transition: filter 420ms ease; }
+/* To samo rozmycie dla części panelu (strona listy ofert, strona tabeli braków): useBlurSwap
+   w swap.ts. Przewijane listy przycinają rozlane rozmycie u siebie (clip-path w arkuszu widoku),
+   żeby nie zachodziło na nagłówek i stopkę panelu. */
+.swap-out, .swap-in { filter: blur(12px); }
+.swap-out { transition: filter 200ms ease-in; }
+.swap-settle { transition: filter 420ms ease; }
+/* Canvas strumienia dostaje własną warstwę: rysowany w każdej klatce pod panelem
+   z backdrop-filter potrafi inaczej migać przy kompozycji. */
+canvas { will-change: transform; }
+
+/* Panel: półprzezroczysta powierzchnia + rozmycie tła + jeden cień. */
+.glass {
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  backdrop-filter: blur(24px);
+  box-shadow: var(--panel-shadow);
+}
+.panel {
+  border-radius: var(--r-panel);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.panel-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.12) transparent;
+}
+.press { transition: transform 160ms var(--ease-out), background-color 150ms ease, color 150ms ease, opacity 150ms ease; }
+.press:active:not(:disabled) { transform: scale(0.97); }
+
+/* ---------- nagłówek panelu (tytuł kategorii) ---------- */
+.panel-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.panel-head h1 {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 26px; font-weight: 600; letter-spacing: -0.7px; line-height: 1.15;
+}
+.panel-head h1 svg { width: 20px; height: 20px; color: var(--ink-3); flex: none; }
+.panel-head p { margin-top: 4px; font-size: 13px; color: var(--ink-3); }
+.panel-tools { display: flex; gap: 6px; align-items: center; }
+
+/* ---------- przyciski ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  height: 40px; padding: 0 18px; border-radius: 20px;
+  font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+.btn svg { width: 16px; height: 16px; flex: none; }
+/* Główny jest jasny (tusz na tle): biały na kobalcie ma kontrast ~4:1. */
+.btn-primary { background: var(--ink); color: var(--bg); }
+.btn-secondary { background: var(--fill-3); color: var(--ink); }
+.btn-quiet { color: var(--ink-2); }
+.btn:disabled { background: var(--fill-2); color: var(--ink-3); }
+.btn-quiet:disabled { background: none; }
+@media (hover: hover) and (pointer: fine) {
+  .btn-secondary:hover:not(:disabled) { background: rgba(255, 255, 255, 0.11); }
+  .btn-quiet:hover:not(:disabled) { color: var(--ink); background: var(--fill); }
+  .btn-primary:hover:not(:disabled) { background: #fff; }
+}
+
+.iconbtn {
+  width: 36px; height: 36px; border-radius: 18px; flex: none;
+  display: grid; place-items: center;
+  background: var(--fill); color: var(--ink-2);
+}
+.iconbtn svg { width: 16px; height: 16px; }
+.iconbtn.is-on { background: var(--fill-active); color: var(--ink); }
+.iconbtn.lg { width: 40px; height: 40px; border-radius: 20px; }
+.iconbtn:disabled { opacity: 0.4; }
+@media (hover: hover) and (pointer: fine) {
+  .iconbtn:hover:not(:disabled) { background: var(--fill-3); color: var(--ink); }
+}
+
+/* ---------- klawisz ---------- */
+.kbd {
+  display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 7px;
+  border-radius: 6px; background: var(--fill-2); border: 1px solid var(--stroke);
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); line-height: 1;
+}
+
+/* ---------- etykieta sekcji i liczba ---------- */
+.section-label {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  font-size: 12px; font-weight: 500; color: var(--ink-3);
+}
+.section-label .aside { font-family: var(--mono); font-size: 11px; font-weight: 400; }
+.section-label button.aside:hover { color: var(--ink); }
+.stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.stat b { font-size: 30px; font-weight: 300; letter-spacing: -1px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat span { font-size: 12px; color: var(--ink-3); }
+
+/* ---------- słowa kluczowe ---------- */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px;
+  border-radius: var(--r-chip); background: var(--fill-2); font-size: 12.5px; color: var(--ink);
+}
+.chip.gap { background: none; border: 1px solid var(--stroke-strong); color: var(--ink-3); padding-left: 10px; }
+.chip svg { width: 13px; height: 13px; flex: none; }
+
+/* ---------- pola ---------- */
+.field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.field-label { font-size: 12px; font-weight: 500; color: var(--ink-2); }
+.input, .textarea {
+  width: 100%; border-radius: 14px; background: var(--fill-2);
+  border: 1px solid var(--stroke-strong); color: var(--ink); font-size: 14px;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.input { height: 44px; padding: 0 14px; }
+.textarea { padding: 14px 16px; resize: vertical; line-height: 1.6; font-size: 13.5px; color: var(--ink-2); }
+.input::placeholder, .textarea::placeholder { color: var(--ink-3); }
+.input:focus, .textarea:focus { outline: none; background: var(--fill-3); border-color: var(--accent); box-shadow: 0 0 0 0.5px var(--accent); }
+.field-help { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
+.field-help svg { width: 13px; height: 13px; flex: none; }
+.field.is-missing .input { color: var(--ink-3); }
+
+/* ---------- pusty stan ---------- */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center;
+  padding: 40px 24px; border-radius: var(--r-row); border: 1px solid var(--stroke);
+}
+.empty-state .well {
+  width: 44px; height: 44px; border-radius: 22px; background: var(--fill-2);
+  display: grid; place-items: center; color: var(--ink-2);
+}
+.empty-state .well svg { width: 18px; height: 18px; }
+.empty-state strong { font-size: 14px; font-weight: 600; }
+.empty-state span { font-size: 12.5px; color: var(--ink-3); }
+.empty-state .text { display: flex; flex-direction: column; gap: 4px; }
+
+/* ---------- tooltip (TooltipLayer) ---------- */
+.tip {
+  position: fixed; z-index: 90; pointer-events: none; padding: 7px 10px; border-radius: 10px;
+  background: var(--ink); color: #111113; font-size: 12px; font-weight: 500; white-space: nowrap;
+  opacity: 0; transform: scale(0.97); transition: opacity 125ms var(--ease-out), transform 125ms var(--ease-out);
+}
+.tip.show { opacity: 1; transform: none; }
+.tip.instant { transition-duration: 0ms; }
+.tip kbd { font-family: var(--mono); font-size: 11px; color: #55545a; margin-left: 6px; }
+
+/* ---------- toast ---------- */
+.toasts {
+  position: fixed; left: 50%; bottom: 132px; z-index: 80; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none;
+}
+.toast {
+  display: flex; align-items: center; gap: 12px; height: 48px; padding: 0 6px 0 16px;
+  border-radius: 24px; background: var(--surface-solid); border: 1px solid var(--stroke);
+  box-shadow: 0 14px 34px var(--shadow); font-size: 13px; pointer-events: auto;
+  /* Przejścia, nie keyframes: toasty potrafią przyjść dwa w sekundę i muszą się przestawiać
+     od bieżącego stanu. Wchodzą od dołu i tą samą drogą wychodzą. */
+  transition: opacity 400ms ease, transform 400ms ease;
+}
+@starting-style {
+  .toast { opacity: 0; transform: translateY(100%); }
+}
+.toast.is-leaving {
+  opacity: 0; transform: translateY(100%); pointer-events: none;
+  transition-duration: 200ms;
+}
+.toast > svg { width: 16px; height: 16px; color: var(--accent); flex: none; }
+.toast .msg { font-weight: 500; }
+.toast .detail { color: var(--ink-3); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast .divider { width: 1px; height: 20px; background: var(--line); }
+.toast .action { height: 36px; padding: 0 14px; border-radius: 18px; font-weight: 600; }
+.toast:not(:has(.action)) { padding-right: 18px; }
+@media (hover: hover) and (pointer: fine) { .toast .action:hover { background: var(--fill-2); } }
+
+/* ---------- warstwa modalna ----------
+   `.modal-backdrop` blokuje skróty jednoklawiszowe (keys.ts). */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 60; background: var(--scrim); backdrop-filter: blur(6px);
+  display: grid; place-items: center; animation: fade-in 200ms ease;
+}
+.modal {
+  width: 480px; max-height: calc(100dvh - 48px); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 24px; padding: 24px 24px 20px;
+  border-radius: 30px; background: var(--sheet); border: 1px solid var(--stroke);
+  backdrop-filter: blur(30px); box-shadow: 0 30px 80px var(--shadow);
+  animation: modal-in 260ms var(--ease-out);
+}
+.modal-head { display: flex; justify-content: space-between; gap: 16px; }
+.modal-head h2 { font-size: 20px; font-weight: 600; letter-spacing: -0.4px; }
+.modal-head p { margin-top: 4px; font-size: 13px; color: var(--ink-3); line-height: 1.5; }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes modal-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+/* Wyjście tą samą drogą co wejście, szybciej. `.is-closing` dostaje okno na 180 ms przed zniknięciem. */
+.modal-backdrop.is-closing { animation: fade-out 180ms ease forwards; pointer-events: none; }
+.modal.is-closing, .pp-modal.is-closing { animation: modal-out 180ms var(--ease-out) forwards; }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes modal-out { to { opacity: 0; transform: translateY(8px) scale(0.98); } }
+
+/* ---------- suwak (próg braków, skok o wiele stron listy) ---------- */
+.range-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+}
+
+.range-slider:focus {
+  outline: none;
+}
+
+.range-slider::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--ink) 0%,
+    var(--ink) var(--fill-pct, 40%),
+    var(--fill-3) var(--fill-pct, 40%),
+    var(--fill-3) 100%
+  );
+}
+
+.range-slider::-moz-range-track {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--fill-3);
+}
+
+.range-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ink);
+}
+
+.range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ink);
+  border: 3px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--stroke);
+  margin-top: -7px;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.range-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ink);
+  border: 3px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--stroke);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.range-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.1);
+}
+
+.range-slider:hover::-moz-range-thumb {
+  transform: scale(1.1);
+}
+
+.range-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.range-slider:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.range-ticks {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0 2px;
+}
+
+.range-tick {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  transition: color 150ms ease;
+}
+
+.range-tick.is-active {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 150ms !important;
+  }
+}

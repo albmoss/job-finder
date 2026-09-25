@@ -7,6 +7,7 @@ It may change without notice. If it breaks, revert to the Playwright version
 in _archive/ or check DevTools for updated endpoints.
 """
 
+import html
 import logging
 import time
 import requests
@@ -140,8 +141,9 @@ class NoFluffScraper(BaseScraper):
         # W API NoFluffJobs `title` to stanowisko, a `name` to NAZWA FIRMY.
         # Poprzednia wersja szukała firmy w posting["company"]["name"], którego
         # nie ma - stąd wszystkie oferty miały company="Unknown".
-        title = posting.get("title") or "Unknown"
-        company = (
+        # API oddaje tytuł i firmę z encjami HTML ("Systems &amp; Infrastructure").
+        title = html.unescape(posting.get("title") or "Unknown")
+        company = html.unescape(
             posting.get("name")
             or (posting.get("company") or {}).get("name")
             or posting.get("companyName")

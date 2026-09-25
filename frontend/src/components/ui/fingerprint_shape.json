@@ -1,0 +1,13 @@
+{
+  "matchFrom": 0.59,
+  "matchTo": 0.98,
+  "bodyFrom": 0.3,
+  "bodyTo": 0.79,
+  "hillsFrom": 0.62,
+  "hillsTo": 0.43,
+  "peaksFrom": 1.2,
+  "peaksTo": 1,
+  "swell": 0,
+  "minThick": 0,
+  "maxThick": 1
+}

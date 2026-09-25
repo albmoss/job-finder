@@ -10,6 +10,7 @@ Uruchomienie:  python tests/integration_test.py
 """
 
 import json
+import os
 import io
 import sys
 from contextlib import redirect_stdout
@@ -71,12 +72,16 @@ def test_stale_detection():
           not wa.is_stale(fresh, job, "v3@2026"))
 
     job_changed = dict(job, description="Zupełnie nowy, wzbogacony opis oferty")
-    check("description change invalidates result",
-          wa.is_stale(fresh, job_changed, "v3@2026"))
+    check("description change is NOT rescored in normal mode (strictly unscored)",
+          not wa.is_stale(fresh, job_changed, "v3@2026", rescore_changed=False))
+    check("description change is rescored with explicit rescore_changed=True",
+          wa.is_stale(fresh, job_changed, "v3@2026", rescore_changed=True))
 
-    check("newer profile invalidates result",
-          wa.is_stale(fresh, job, "v4@2026"))
+    check("newer profile does not invalidate existing results by default",
+          not wa.is_stale(fresh, job, "v4@2026"))
 
+    check("explicit rescore_all invalidates result on demand",
+          wa.is_stale(fresh, job, "v4@2026", rescore_all=True))
     check("legacy entry without stamps counts as fresh",
           not wa.is_stale({}, job, "v3@2026"))
 
@@ -281,6 +286,19 @@ def test_scraper_health():
     check("links leaving the portal's domain are caught",
           health.check("praca.pl", 200, jobs=[dict(ok_job, link="https://reklama.example/x")] * 3,
                        domain="praca.pl")["verdict"] == "degraded")
+
+    # NoFluffJobs API oddaje tytuł z encjami; przebieg z 25.09 padł na tym w fazie 1.
+    from dataclasses import asdict
+    from scrapers.nofluff_scraper import NoFluffScraper
+    nfj = NoFluffScraper.__new__(NoFluffScraper)._parse_posting(
+        {"title": "IT Systems &amp; Infrastructure Administrator", "name": "Kowalski &amp; Syn",
+         "url": "it-admin-kowalski-warszawa"}, {})
+    check("NoFluffJobs titles and companies arrive decoded",
+          (nfj.title, nfj.company) == ("IT Systems & Infrastructure Administrator", "Kowalski & Syn"),
+          (nfj.title, nfj.company))
+    check("so the health check has nothing to flag",
+          health.check("NoFluffJobs", 38, jobs=[asdict(nfj)] * 3,
+                       domain="nofluffjobs.com") is None)
 
     check("a rate limit is never read as breakage",
           health.check("Indeed", 0, error="HTTP 429 Too Many Requests")["verdict"] == "inconclusive")
@@ -758,6 +776,904 @@ def test_pipeline_final_status():
               {"zdrowy": {"success": True, "status": "scraped"}}, warnings
           ) == [])
 
+def test_incremental_pipeline_selection():
+    print("\n[16] Isolated waterfall main regression & concurrent state writes")
+    import waterfall_analysis as wa
+    import os, tempfile, shutil, threading, time
+    from unittest.mock import patch
+
+    old_cwd = os.getcwd()
+    temp_dir = tempfile.mkdtemp(prefix="test_wa_suite_")
+    orig_keys = wa.API_KEYS
+    orig_batch = wa.BATCH_SIZE
+
+    try:
+        os.chdir(temp_dir)
+
+        # 1. Setup isolated inputs
+        with open("final_cv_text.txt", "w", encoding="utf-8") as f:
+            f.write("Doświadczony Python Developer...")
+
+        job1 = {"title": "Python Dev", "company": "PyCorp", "link": "https://test.pl/1", "description": "Opis oferty Python SQL " * 10}
+        job2_new = {"title": "React Dev", "company": "ReactCorp", "link": "https://test.pl/2", "description": "Opis oferty React TS " * 10}
+        job3_decided = {"title": "Sales Rep", "company": "SalesCorp", "link": "https://test.pl/3", "description": "Opis oferty Sprzedaz " * 10}
+        job4_invalid = {"title": "Short", "company": "NoCorp", "link": "https://test.pl/4", "description": "Zbyt krotki"}
+
+        with open("jobs_database.json", "w", encoding="utf-8") as f:
+            json.dump([job1, job2_new, job3_decided, job4_invalid], f)
+
+        with open("user_decisions.json", "w", encoding="utf-8") as f:
+            json.dump({"https://test.pl/3": "reject"}, f)
+
+        with open("preference_profile.json", "w", encoding="utf-8") as f:
+            json.dump({
+                "_metadata": {"generator_version": "v3_contrastive", "generated_at": "2026-09-17T06:40:44"},
+                "summary": "Nowy wygenerowany profil preferencji"
+            }, f)
+
+        # Initial state on disk: job1 already analyzed under earlier profile
+        fp1 = wa.description_fingerprint(job1)
+        initial_results = [{
+            "job": job1,
+            "match_percentage": 85,
+            "_description_hash": fp1,
+            "_profile_version": "v3@2026-08-01",
+            "_model": "gemini-earlier",
+            "_analyzed_at": "2026-08-01T10:00:00"
+        }]
+        with open("analyzed_jobs_waterfall.json", "w", encoding="utf-8") as f:
+            json.dump(initial_results, f)
+
+        wa.API_KEYS = ["mock-key"]
+        wa.BATCH_SIZE = 1
+
+        called_batches = []
+        def fake_score_batch(batch, prompt, model_idx, key_idx, profile_ver):
+            called_batches.append([j["link"] for j in batch])
+            entries = []
+            for j in batch:
+                entries.append({
+                    "job": j,
+                    "match_percentage": 90,
+                    "_description_hash": wa.description_fingerprint(j),
+                    "_profile_version": profile_ver,
+                    "_model": "mock-model",
+                    "_analyzed_at": "2026-09-18T18:00:00"
+                })
+            return entries, [], model_idx, key_idx
+
+        # --- SCENARIO A: Normal run with profile changed ---
+        # Calls actual wa.main(rescore_all=False)
+        with patch.object(wa, "score_batch", side_effect=fake_score_batch):
+            res_a = wa.main(rescore_all=False)
+
+        check("wa.main returns True in normal mode", res_a is True)
+        check("normal mode only calls fake API for newly eligible unanalyzed job",
+              called_batches == [["https://test.pl/2"]], str(called_batches))
+
+        with open("analyzed_jobs_waterfall.json", "r", encoding="utf-8") as f:
+            saved_a = json.load(f)
+
+        saved_by_link = {wa.canonical_link(r["job"]["link"]): r for r in saved_a}
+        check("output retains old score with original profile stamp",
+              saved_by_link.get("https://test.pl/1", {}).get("match_percentage") == 85 and
+              saved_by_link.get("https://test.pl/1", {}).get("_profile_version") == "v3@2026-08-01")
+        check("output includes newly evaluated job",
+              saved_by_link.get("https://test.pl/2", {}).get("match_percentage") == 90)
+        check("decided and invalid jobs were not evaluated",
+              "https://test.pl/3" not in saved_by_link and "https://test.pl/4" not in saved_by_link)
+
+        # --- SCENARIO B: Explicit full rerating (--rescore-all) with interruption ---
+        called_batches.clear()
+        def fake_score_batch_interrupt(batch, prompt, model_idx, key_idx, profile_ver):
+            link = batch[0]["link"]
+            called_batches.append(link)
+            if len(called_batches) == 1:
+                # Batch 1 succeeds
+                return [{
+                    "job": batch[0],
+                    "match_percentage": 99,
+                    "_description_hash": wa.description_fingerprint(batch[0]),
+                    "_profile_version": profile_ver,
+                    "_model": "mock-model",
+                    "_analyzed_at": "2026-09-18T18:05:00"
+                }], [], model_idx, key_idx
+            else:
+                # Batch 2 interrupts
+                raise KeyboardInterrupt("Simulated user process termination on batch 2")
+
+        with patch.object(wa, "score_batch", side_effect=fake_score_batch_interrupt):
+            interrupted = False
+            try:
+                wa.main(rescore_all=True)
+            except KeyboardInterrupt:
+                interrupted = True
+
+        check("interrupted rescore raised KeyboardInterrupt as expected", interrupted)
+
+        with open("analyzed_jobs_waterfall.json", "r", encoding="utf-8") as f:
+            saved_b = json.load(f)
+
+        saved_b_by_link = {wa.canonical_link(r["job"]["link"]): r for r in saved_b}
+        check("interrupted rescore saved batch 1 with updated score",
+              saved_b_by_link.get("https://test.pl/1", {}).get("match_percentage") == 99)
+        check("interrupted rescore PRESERVED batch 2 with previous score",
+              saved_b_by_link.get("https://test.pl/2", {}).get("match_percentage") == 90)
+        check("interrupted output contains zero duplicate links",
+              len(saved_b) == len(saved_b_by_link) == 2)
+
+        # --- SCENARIO C: Resume ordinary run after interruption ---
+        called_batches.clear()
+        with patch.object(wa, "score_batch", side_effect=fake_score_batch):
+            res_c = wa.main(rescore_all=False)
+
+        check("resumed normal run completes without error", res_c is True)
+        check("resumed normal run does not re-queue already completed jobs",
+              len(called_batches) == 0, str(called_batches))
+
+        # --- SCENARIO D: State IO under concurrent reading ---
+        test_state_file = Path("test_state_concurrency.json")
+        save_json_atomic(test_state_file, {"round": 0})
+        stop_event = threading.Event()
+        observed_snapshots = []
+        read_parse_errors = []
+
+        def raw_reader():
+            while not stop_event.is_set():
+                try:
+                    with open(test_state_file, "r", encoding="utf-8") as rf:
+                        parsed = json.load(rf)
+                        if "round" in parsed:
+                            observed_snapshots.append(parsed["round"])
+                except (PermissionError, OSError):
+                    pass
+                except Exception as ex:
+                    read_parse_errors.append(str(ex))
+                time.sleep(0.001)
+
+        readers = [threading.Thread(target=raw_reader) for _ in range(2)]
+        for r in readers: r.start()
+
+        write_success = 0
+        for i in range(1, 26):
+            if save_json_atomic(test_state_file, {"round": i}):
+                write_success += 1
+            time.sleep(0.002)
+
+        stop_event.set()
+        for r in readers: r.join()
+
+        with open(test_state_file, "r", encoding="utf-8") as rf:
+            final_snapshot = json.load(rf)
+
+        check("atomic writes succeed under concurrent readers", write_success == 25, f"{write_success}/25")
+        check("readers observed valid snapshots", len(observed_snapshots) > 0)
+        check("readers never read corrupt or partial JSON", len(read_parse_errors) == 0, str(read_parse_errors))
+        check("final state on disk has expected content", final_snapshot.get("round") == 25)
+
+    finally:
+        os.chdir(old_cwd)
+        wa.API_KEYS = orig_keys
+        wa.BATCH_SIZE = orig_batch
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+def test_scoring_queue_semantics():
+    print("\n[17] Shared scoring queue eligibility semantics")
+    from utils.scoring_queue import (
+        get_pending_scoring_jobs,
+        get_pending_scoring_count,
+        is_valid_job,
+        is_expired_job,
+    )
+    from datetime import date, timedelta
+
+    today = date.today()
+    past_date = (today - timedelta(days=5)).isoformat()
+    future_date = (today + timedelta(days=30)).isoformat()
+
+    check("valid job description passes", is_valid_job({"description": "Dobra oferta pracy Python " * 5}))
+    check("too short description fails", not is_valid_job({"description": "Krótki opis"}))
+    check("placeholder Brak opisu fails", not is_valid_job({"description": "Brak opisu"}))
+    check("empty description fails", not is_valid_job({"description": ""}))
+    check("None description fails", not is_valid_job({"description": None}))
+
+    check("past valid_through is expired", is_expired_job({"valid_through": past_date}))
+    check("future valid_through is not expired", not is_expired_job({"valid_through": future_date}))
+    check("none valid_through is not expired", not is_expired_job({"valid_through": None}))
+
+    sample_jobs = [
+        {"link": "https://test.pl/valid1", "description": "Oferta 1 Python backend " * 5, "source": "src1", "last_seen": "2026-09-18T10:00:00"},
+        {"link": "https://test.pl/valid2", "description": "Oferta 2 Frontend React " * 5, "source": "src1", "last_seen": "2026-09-18T10:00:00"},
+        {"link": "https://test.pl/decided", "description": "Oferta 3 Decided job " * 5, "source": "src1", "last_seen": "2026-09-18T10:00:00"},
+        {"link": "https://test.pl/analyzed", "description": "Oferta 4 Analyzed job " * 5, "source": "src1", "last_seen": "2026-09-18T10:00:00"},
+        {"link": "https://test.pl/expired", "description": "Oferta 5 Expired job " * 5, "source": "src1", "last_seen": "2026-09-18T10:00:00", "valid_through": past_date},
+        {"link": "https://test.pl/zdjete", "description": "Oferta 6 Removed from portal " * 5, "source": "src1", "last_seen": "2026-09-10T10:00:00"},
+        {"link": "https://test.pl/invalid", "description": "Brak opisu", "source": "src1", "last_seen": "2026-09-18T10:00:00"},
+    ]
+    sample_analyzed = [
+        {"job": {"link": "https://test.pl/analyzed"}, "match_percentage": 80}
+    ]
+    sample_decisions = {
+        "https://test.pl/decided": "apply"
+    }
+
+    pending_jobs = get_pending_scoring_jobs(
+        jobs=sample_jobs,
+        analyzed=sample_analyzed,
+        decisions=sample_decisions,
+    )
+    pending_links = {j["link"] for j in pending_jobs}
+
+    check("only valid unanalyzed undecided fresh live jobs are queued",
+          pending_links == {"https://test.pl/valid1", "https://test.pl/valid2"},
+          str(pending_links))
+    check("pending scoring count equals len of pending jobs",
+          get_pending_scoring_count(jobs=sample_jobs, analyzed=sample_analyzed, decisions=sample_decisions) == 2)
+
+
+def test_pipeline_stop_and_resume_checkpoints():
+    print("\n[18] Pipeline stop, resume, and checkpoint safety")
+    import run_final_pipeline as pipeline
+    import tempfile, shutil, os
+
+    old_cwd = os.getcwd()
+    temp_dir = tempfile.mkdtemp(prefix="test_pipeline_stop_")
+    try:
+        os.chdir(temp_dir)
+
+        pipeline.CHECKPOINT_FILE = Path(temp_dir) / "pipeline_checkpoint.json"
+        pipeline.STOP_FLAG_FILE = Path(temp_dir) / "pipeline_stop_requested.flag"
+
+        pipeline.save_checkpoint(["phase0", "phase1"], {"skip_scraping": True}, current_stage="phase1")
+        cp = pipeline.load_checkpoint()
+        check("checkpoint saves completed stages", cp.get("completed_stages") == ["phase0", "phase1"])
+        check("checkpoint saves options", cp.get("options", {}).get("skip_scraping") is True)
+
+        check("no stop requested by default", not pipeline.is_stop_requested())
+        pipeline.STOP_FLAG_FILE.touch()
+        check("stop flag detected when file exists", pipeline.is_stop_requested())
+        pipeline.STOP_FLAG_FILE.unlink()
+        check("stop flag cleared", not pipeline.is_stop_requested())
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            ret = pipeline._finish({"phase0": True}, stopped=True)
+        text = out.getvalue()
+        check("stopped pipeline returns False", ret is False)
+        check("stopped pipeline logs PIPELINE STOPPED", "PIPELINE STOPPED" in text)
+
+        pipeline.clear_checkpoint()
+        check("clear_checkpoint removes file", not pipeline.CHECKPOINT_FILE.exists())
+    finally:
+        os.chdir(old_cwd)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_windows_process_safety():
+    print("\n[19] Windows process identity and child management")
+    import os
+    from pipeline_manager import _get_process_creation_time, _is_pid_alive, _get_child_pids
+
+    pid = os.getpid()
+    ctime = _get_process_creation_time(pid)
+    check("can read process creation time for own PID", ctime is not None and ctime > 0)
+    check("is_pid_alive returns True with correct expected creation time",
+          _is_pid_alive(pid, expected_create_time=ctime))
+    check("is_pid_alive returns False with incorrect expected creation time (prevents recycled PID kill)",
+          not _is_pid_alive(pid, expected_create_time=ctime + 999999))
+    check("is_pid_alive returns False for invalid PID",
+          not _is_pid_alive(-1))
+    check("get_child_pids returns list", isinstance(_get_child_pids(pid), list))
+
+def test_pipeline_stop_and_resume_lifecycle():
+    print("\n[20] Comprehensive stop-resume lifecycle and edge case regressions")
+    import run_final_pipeline as pipeline
+    import waterfall_analysis as wa
+    import pipeline_manager as sapp
+    from pipeline_manager import PipelineProcessManager, load_json_safe
+    import tempfile, shutil, os, time, sys, io
+    from unittest.mock import patch
+    from contextlib import redirect_stdout
+
+    old_cwd = os.getcwd()
+    temp_dir = tempfile.mkdtemp(prefix="test_lifecycle_")
+    temp_path = Path(temp_dir)
+
+    # Isolate all module state paths to temporary directory
+    t_state_lock = temp_path / "pipeline_run_state.json"
+    t_stop_flag = temp_path / "pipeline_stop_requested.flag"
+    t_checkpoint = temp_path / "pipeline_checkpoint.json"
+    t_waterfall_state = temp_path / "waterfall_state.json"
+
+    patches = [
+        patch.object(sapp, "STATE_LOCK_FILE", t_state_lock),
+        patch.object(sapp, "STOP_FLAG_FILE", t_stop_flag),
+        patch.object(sapp, "CHECKPOINT_FILE", t_checkpoint),
+        patch.object(pipeline, "STOP_FLAG_FILE", t_stop_flag),
+        patch.object(pipeline, "CHECKPOINT_FILE", t_checkpoint),
+        patch.object(wa, "STOP_FLAG_FILE", t_stop_flag),
+        patch.object(wa, "STATE_FILE", str(t_waterfall_state)),
+    ]
+
+    for p in patches:
+        p.start()
+
+    try:
+        os.chdir(temp_dir)
+
+        # 1. Real run_pipeline lifecycle: initial checkpoint inside phase0 and stop before phase4
+        phase0_saw_checkpoint = {"seen": False, "has_options": False}
+        phase4_called = {"called": False}
+
+        def fake_purge():
+            # Executed during Phase 0: verify initial checkpoint was already persisted!
+            if t_checkpoint.exists():
+                phase0_saw_checkpoint["seen"] = True
+                cp = load_json_safe(t_checkpoint, default={})
+                if cp.get("options", {}).get("skip_scraping") is True and cp.get("current_stage") == "phase0":
+                    phase0_saw_checkpoint["has_options"] = True
+            return True
+        def fake_waterfall_stopping(**kwargs):
+            # Simulate stop requested at waterfall batch boundary
+            t_stop_flag.touch()
+            return False
+
+        def fake_eval():
+            phase4_called["called"] = True
+            return True
+
+        with patch.object(pipeline, "purge_stale_offers") as mock_p0, \
+             patch.object(pipeline, "migrate_normalize_links") as mock_p1_5, \
+             patch.object(pipeline, "deduplicate_db") as mock_p2, \
+             patch.object(pipeline, "clean_db") as mock_p2_5, \
+             patch.object(pipeline, "JobDatabase") as mock_db_cls, \
+             patch("waterfall_analysis.main", side_effect=fake_waterfall_stopping), \
+             patch("eval_ranking.main", side_effect=fake_eval):
+
+            mock_p0.main = fake_purge
+            mock_p1_5.main = lambda: True
+            mock_p2.run = lambda: True
+            mock_p2_5.run = lambda: True
+            mock_db_instance = mock_db_cls.return_value
+            mock_db_instance.load_jobs.return_value = [{"title": "Job 1", "link": "http://x"}]
+
+            out_buf = io.StringIO()
+            with redirect_stdout(out_buf):
+                res = pipeline.run_pipeline(skip_scraping=True, rescore_all=True)
+            run_output = out_buf.getvalue()
+
+        check("initial checkpoint observed inside phase0", phase0_saw_checkpoint["seen"] is True)
+        check("initial checkpoint preserves options inside phase0", phase0_saw_checkpoint["has_options"] is True)
+        check("run_pipeline returned False on user stop", res is False)
+        check("run_pipeline printed PIPELINE STOPPED", "PIPELINE STOPPED" in run_output)
+        check("phase4 was NOT called after waterfall stop", phase4_called["called"] is False)
+
+        cp_after_stop = load_json_safe(t_checkpoint, default={})
+        check("checkpoint marks stopped is True", cp_after_stop.get("stopped") is True)
+        check("checkpoint preserves completed stages before stop", "phase2_5" in cp_after_stop.get("completed_stages", []))
+
+        # 2. Resuming run_pipeline skips completed stages
+        phase0_rerun = {"called": False}
+        phase4_resumed = {"called": False}
+
+        def fake_purge_rerun():
+            phase0_rerun["called"] = True
+            return True
+
+        def fake_waterfall_success(**kwargs):
+            return True
+
+        def fake_eval_resume(args):
+            phase4_resumed["called"] = True
+            return True
+
+        with patch.object(pipeline, "purge_stale_offers") as mock_p0, \
+             patch.object(pipeline, "migrate_normalize_links") as mock_p1_5, \
+             patch.object(pipeline, "deduplicate_db") as mock_p2, \
+             patch.object(pipeline, "clean_db") as mock_p2_5, \
+             patch.object(pipeline, "JobDatabase") as mock_db_cls, \
+             patch("waterfall_analysis.main", side_effect=fake_waterfall_success), \
+             patch("eval_ranking.main", side_effect=fake_eval_resume):
+
+            mock_p0.main = fake_purge_rerun
+            mock_p1_5.main = lambda: True
+            mock_p2.run = lambda: True
+            mock_p2_5.run = lambda: True
+            mock_db_instance = mock_db_cls.return_value
+            mock_db_instance.load_jobs.return_value = [{"title": "Job 1", "link": "http://x"}]
+
+            out_resume = io.StringIO()
+            with redirect_stdout(out_resume):
+                res_resume = pipeline.run_pipeline(resume=True)
+            resume_output = out_resume.getvalue()
+
+        check("resumed pipeline returned True on completion", res_resume is True)
+        check("resumed pipeline skipped completed phase0", phase0_rerun["called"] is False)
+        check("resumed pipeline executed phase4", phase4_resumed["called"] is True)
+        check("resumed pipeline output contains PIPELINE COMPLETE", "PIPELINE COMPLETE" in resume_output)
+
+        # 3. Slow cooperative stop (>1.5s grace period) and subsequent clean start without immediate stop
+        mgr = PipelineProcessManager()
+        # Child runs for 2.0s - deliberately exceeding the manager's 1.5s cooperative polling window!
+        slow_cmd = [sys.executable, "-c", "import time; time.sleep(2.0)"]
+        started, _ = mgr.start_pipeline(mode="full", cmd=slow_cmd, is_resume=False)
+        check("manager started slow child process", started is True)
+
+        # Issue cooperative stop: polling loop waits 1.5s, then returns while process is still running
+        t0 = time.time()
+        stop_ok, stop_msg = mgr.stop_pipeline(force=False)
+        duration = time.time() - t0
+        check("stop_pipeline returned without auto-force-kill", stop_ok is True)
+        check("stop_pipeline polling window observed (~1.5s)", 1.3 <= duration <= 2.2)
+        check("manager status is stopping", mgr.get_state().get("status") in ("stopping", "stopped"))
+
+        # Wait for the child process to finish its 2.0s sleep and exit
+        if mgr._thread:
+            mgr._thread.join(timeout=4.0)
+        check("child process exited cleanly", not mgr.is_running())
+
+        # A leftover stop flag may have remained if polling expired before process exit.
+        # Simulate leftover flag on disk:
+        t_stop_flag.touch()
+        check("stop flag exists on disk before new start", t_stop_flag.exists())
+
+        # Next start_pipeline or resume MUST safely clear the stale flag and NOT stop immediately!
+        quick_cmd = [sys.executable, "-c", "import sys; sys.exit(0)"]
+        next_started, _ = mgr.start_pipeline(mode="full", cmd=quick_cmd, is_resume=False)
+        check("new start_pipeline started successfully", next_started is True)
+        check("stale stop flag cleared by start_pipeline", not t_stop_flag.exists())
+
+        if mgr._thread:
+            mgr._thread.join(timeout=3.0)
+        next_state = mgr.get_state()
+        check("new run completed successfully instead of immediately stopping", next_state.get("status") == "completed")
+
+        # 4. Standalone tool exit semantics: code 0 = completed, code 1 = failed
+        mgr_sa = PipelineProcessManager()
+        sa_cmd = [sys.executable, "-c", "import sys; sys.exit(0)"]
+        ok_sa, _ = mgr_sa.start_pipeline(mode="full", cmd=sa_cmd, is_resume=False)
+        if mgr_sa._thread:
+            mgr_sa._thread.join(timeout=3.0)
+        sa_state = mgr_sa.get_state()
+        check("standalone exit code 0 marked as completed", sa_state.get("status") == "completed")
+        check("standalone exit code 0 marked as success", sa_state.get("success") is True)
+
+        mgr_fa = PipelineProcessManager()
+        fa_cmd = [sys.executable, "-c", "import sys; sys.exit(1)"]
+        ok_fa, _ = mgr_fa.start_pipeline(mode="full", cmd=fa_cmd, is_resume=False)
+        if mgr_fa._thread:
+            mgr_fa._thread.join(timeout=3.0)
+        fa_state = mgr_fa.get_state()
+        check("standalone exit code 1 marked as failed", fa_state.get("status") == "failed")
+
+        # 5. Resumed vs Fresh --rescore-all semantics
+        from utils.scoring_queue import is_stale_result
+        cutoff_t1 = "2026-09-18T10:00:00"
+        cutoff_t2 = "2026-09-18T12:00:00"
+        job_stub = {"title": "Python Dev", "description": "Experienced Python developer required for backend microservices"}
+        entry_old = {"job": job_stub, "_analyzed_at": "2026-09-18T09:00:00"}
+        entry_mid = {"job": job_stub, "_analyzed_at": "2026-09-18T11:00:00"}
+
+        check("fresh rescore-all marks older entry as stale",
+              is_stale_result(entry_old, job_stub, rescore_all=True, rescore_cutoff=cutoff_t2) is True)
+        check("fresh rescore-all marks previous session entry as stale",
+              is_stale_result(entry_mid, job_stub, rescore_all=True, rescore_cutoff=cutoff_t2) is True)
+        check("resumed rescore-all skips entries evaluated in current session",
+              is_stale_result(entry_mid, job_stub, rescore_all=True, rescore_cutoff=cutoff_t1) is False)
+        check("resumed rescore-all still evaluates entries from before session cutoff",
+              is_stale_result(entry_old, job_stub, rescore_all=True, rescore_cutoff=cutoff_t1) is True)
+
+    finally:
+        for p in patches:
+            p.stop()
+        os.chdir(old_cwd)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+def test_http_security_and_dns_rebinding_protection():
+    print("\n[21] HTTP local binding, Host validation & DNS rebinding protection")
+    from starlette.testclient import TestClient
+    import server
+
+    client = TestClient(server.app, base_url="http://127.0.0.1:8501")
+
+    # 1. Localhost allowed on GET endpoints
+    res_local_ip = client.get("/api/cv", headers={"host": "127.0.0.1:8501"})
+    check("local 127.0.0.1 allowed on GET /api/cv", res_local_ip.status_code == 200)
+
+    res_local_name = client.get("/api/cv", headers={"host": "localhost:8501"})
+    check("local localhost allowed on GET /api/cv", res_local_name.status_code == 200)
+
+    # 2. Foreign Host headers (DNS rebinding simulation) rejected across GET endpoints
+    res_rebind_cv = client.get("/api/cv", headers={"host": "attacker.com:8501"})
+    check("foreign host rejected on GET /api/cv with 400 Bad Request", res_rebind_cv.status_code == 400)
+
+    res_rebind_boot = client.get("/api/bootstrap", headers={"host": "malicious.site:8501"})
+    check("foreign host rejected on GET /api/bootstrap with 400 Bad Request", res_rebind_boot.status_code == 400)
+
+    res_rebind_offers = client.get("/api/offers", headers={"host": "evil.org"})
+    check("foreign host rejected on GET /api/offers with 400 Bad Request", res_rebind_offers.status_code == 400)
+
+    # 3. Cross-origin mutation protection rejects foreign Origin on POST
+    res_csrf = client.post("/api/offers/decision",
+                           json={"link": "https://example.com/test", "status": "save", "rating": 5},
+                           headers={"origin": "http://evil.com"})
+    check("cross-origin mutation rejected with 403 Forbidden", res_csrf.status_code == 403)
+
+    # 4. Zero client secrets exposed in /api/env-keys
+    res_keys = client.get("/api/env-keys", headers={"host": "127.0.0.1:8501"})
+    check("env-keys endpoint responds with 200", res_keys.status_code == 200)
+    keys_data = res_keys.json()
+    all_fields_safe = True
+    for field in keys_data.get("fields", []):
+        if "value" in field or "secret_value" in field:
+            all_fields_safe = False
+    check("no plaintext secrets exposed in /api/env-keys payload", all_fields_safe is True)
+
+
+def test_external_data_change_automatic_invalidation():
+    print("\n[22] External data change automatic invalidation & cache efficiency")
+    import tempfile, shutil, json, time
+    from pathlib import Path
+    from starlette.testclient import TestClient
+    import app_services
+    import server
+
+    temp_dir = tempfile.mkdtemp(prefix="test_auto_inval_")
+    temp_path = Path(temp_dir)
+
+    t_jobs = temp_path / "jobs_database.json"
+    t_analyzed = temp_path / "analyzed_jobs_waterfall.json"
+    t_decisions = temp_path / "user_decisions.json"
+
+    orig_jobs = app_services.JOBS_DATABASE_PATH
+    orig_ana = app_services.ANALYZED_JOBS_PATH
+    orig_dec = app_services.USER_DECISIONS_PATH
+
+    app_services.JOBS_DATABASE_PATH = t_jobs
+    app_services.ANALYZED_JOBS_PATH = t_analyzed
+    app_services.USER_DECISIONS_PATH = t_decisions
+
+    try:
+        # Initial disk state: 1 job, 1 match, 0 decisions
+        job1 = {"title": "Initial Dev", "company": "Corp A", "link": "https://corp-a.com/job1",
+                "description": "Python backend microservices experience required over 20 chars", "source": "Test"}
+        match1 = {"job": job1, "match_percentage": 88, "reason": "Good Python fit"}
+
+        t_jobs.write_text(json.dumps([job1], ensure_ascii=False), encoding="utf-8")
+        t_analyzed.write_text(json.dumps([match1], ensure_ascii=False), encoding="utf-8")
+        t_decisions.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
+
+        client = TestClient(server.app, base_url="http://127.0.0.1:8501")
+
+        # 1. Initial query: consumer observes 1 offer
+        res1 = client.get("/api/offers?tab=Dopasowane", headers={"host": "127.0.0.1:8501"})
+        check("initial offers query returns 200", res1.status_code == 200)
+        data1 = res1.json()
+        check("initial offers count is 1", data1.get("total") == 1)
+        check("initial offer title is observed", len(data1.get("items", [])) > 0 and data1["items"][0]["title"] == "Initial Dev")
+
+        # 2. Simulate background pipeline writing newly scraped & analyzed offer to disk
+        time.sleep(0.05)
+        job2 = {"title": "Background Pipeline Dev", "company": "Corp B", "link": "https://corp-b.com/job2",
+                "description": "React TypeScript full stack role over 20 chars", "source": "Test"}
+        match2 = {"job": job2, "match_percentage": 94, "reason": "High React fit"}
+
+        t_jobs.write_text(json.dumps([job1, job2], ensure_ascii=False), encoding="utf-8")
+        t_analyzed.write_text(json.dumps([match1, match2], ensure_ascii=False), encoding="utf-8")
+
+        # 3. Next consumer poll without manual reload: observes updated 2 offers automatically
+        res2 = client.get("/api/offers?tab=Dopasowane", headers={"host": "127.0.0.1:8501"})
+        check("subsequent poll returns 200 without manual reload", res2.status_code == 200)
+        data2 = res2.json()
+        check("background file update automatically reflected in total count (total: 2)", data2.get("total") == 2)
+        titles2 = [it["title"] for it in data2.get("items", [])]
+        check("newly written offer title observed by consumer", "Background Pipeline Dev" in titles2)
+
+        # 4. Simulate external decision write to disk (e.g. concurrent CLI or external sync)
+        time.sleep(0.05)
+        decision_data = {"https://corp-a.com/job1": {"status": "save", "rating": 9, "stage": "save"}}
+        t_decisions.write_text(json.dumps(decision_data, ensure_ascii=False), encoding="utf-8")
+
+        # 5. Consumer polls Zapisane tab without manual reload: observes saved offer automatically
+        res3 = client.get("/api/offers?tab=Zapisane", headers={"host": "127.0.0.1:8501"})
+        check("Zapisane poll returns 200", res3.status_code == 200)
+        data3 = res3.json()
+        check("external decision write automatically reflected in Zapisane tab (total: 1)", data3.get("total") == 1)
+        links3 = [it["link"] for it in data3.get("items", [])]
+        check("saved offer link observed in Zapisane items", "https://corp-a.com/job1" in links3)
+
+        # 6. Consumer polls Dopasowane tab: decided offer moved out
+        res4 = client.get("/api/offers?tab=Dopasowane", headers={"host": "127.0.0.1:8501"})
+        data4 = res4.json()
+        check("decided offer automatically excluded from Dopasowane tab (total: 1)", data4.get("total") == 1)
+        titles4 = [it["title"] for it in data4.get("items", [])]
+        check("only undecided offer remains in Dopasowane", "Background Pipeline Dev" in titles4 and "Initial Dev" not in titles4)
+
+    finally:
+        app_services.JOBS_DATABASE_PATH = orig_jobs
+        app_services.ANALYZED_JOBS_PATH = orig_ana
+        app_services.USER_DECISIONS_PATH = orig_dec
+        app_services.job_data_service.reload()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+def test_playwright_chromium_prerequisites():
+    print("\n[23] Playwright Chromium prerequisite detector & asyncio safety")
+    import app_services
+    import asyncio
+    import tempfile
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        browser_exe = tmp_path / "fake_chrome.exe"
+        browser_exe.write_text("placeholder", encoding="utf-8")
+        missing_exe = tmp_path / "nonexistent_chrome.exe"
+
+        def _mock_resolver(target_path: Path):
+            def _resolver():
+                try:
+                    asyncio.get_running_loop()
+                    raise AssertionError("Helper was invoked directly on an active asyncio event loop thread")
+                except RuntimeError:
+                    pass
+                return str(target_path)
+            return _resolver
+
+        # 1. Existing browser executable file returns ready (bool check)
+        with patch.object(app_services, "_get_chromium_executable_path", side_effect=_mock_resolver(browser_exe)):
+            ok_ready, _ = app_services.check_playwright_chromium()
+            check("existing browser executable returns ready", ok_ready is True)
+
+        # 2. Missing browser executable file returns not ready without install (bool check)
+        with patch.object(app_services, "_get_chromium_executable_path", side_effect=_mock_resolver(missing_exe)):
+            ok_missing, _ = app_services.check_playwright_chromium()
+            check("missing browser executable returns not ready without install", ok_missing is False)
+
+        # 3. Invocation from inside an active asyncio event loop
+        async def _async_call():
+            with patch.object(app_services, "_get_chromium_executable_path", side_effect=_mock_resolver(browser_exe)):
+                return app_services.check_playwright_chromium()
+
+        async_ok, _ = asyncio.run(_async_call())
+        check("check_playwright_chromium succeeds when called from active asyncio loop", async_ok is True)
+
+        # 4. Resolver assertion guards against direct execution on running loop
+        async def _direct_loop_check():
+            resolver = _mock_resolver(browser_exe)
+            try:
+                resolver()
+                return False
+            except AssertionError:
+                return True
+
+        check("resolver assertion guards against direct execution on running loop", asyncio.run(_direct_loop_check()) is True)
+
+def test_pipeline_skipped_stage_progress():
+    print("\n[24] Pipeline progress calculation with skipped stages")
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+    import pipeline_manager
+    from pipeline_manager import PipelineProcessManager
+
+    # Stan przebiegu w katalogu tymczasowym: wcześniej test kasował prawdziwy
+    # pipeline_run_state.json i z arkusza znikał log przerwanego przebiegu.
+    temp_dir = Path(tempfile.mkdtemp(prefix="test_pipeline_progress_"))
+    with patch.object(pipeline_manager, "STATE_LOCK_FILE", temp_dir / "pipeline_run_state.json"), \
+         patch.object(pipeline_manager, "CHECKPOINT_FILE", temp_dir / "pipeline_checkpoint.json"), \
+         patch.object(pipeline_manager, "STOP_FLAG_FILE", temp_dir / "pipeline_stop_requested.flag"):
+        _check_skipped_stage_progress(PipelineProcessManager)
+    import shutil
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _check_skipped_stage_progress(PipelineProcessManager):
+    class DummyProc:
+        pid = 12345
+        def poll(self): return None
+
+    class ExitedProc:
+        pid = 12345
+        def poll(self): return 0
+
+    mgr = PipelineProcessManager()
+    mgr._cmd = ["test"]
+    mgr._process = DummyProc()
+
+    # 1. Completed state with 1 skipped + 6 done:
+    mgr._status = "completed"
+    mgr._stages = [
+        {"name": "scrape", "title": "Scraping portali", "status": "skipped"},
+        {"name": "extract", "title": "Ekstrakcja", "status": "done"},
+        {"name": "enrich", "title": "Wzbogacanie", "status": "done"},
+        {"name": "cluster", "title": "Klasteryzacja", "status": "done"},
+        {"name": "match", "title": "Dopasowanie", "status": "done"},
+        {"name": "ranking", "title": "Ranking", "status": "done"},
+        {"name": "report", "title": "Raport", "status": "done"},
+    ]
+    mgr._active_stage_idx = 6
+    mgr._exit_code = 0
+    mgr._pipeline_complete_seen = True
+
+    state_completed = mgr.get_state()
+    check("completed with skipped stage reports 100.0% progress", state_completed["progress_percent"] == 100.0)
+    check("completed with skipped stage labels 7/7 resolved stages", "7/7" in state_completed["progress_label"])
+    check("completed pipeline cannot be resumed", state_completed["can_resume"] is False)
+
+    # 2. Running state when stage 0 is skipped and stage 1 is active (stages 1-6 pending):
+    mgr._stages = [
+        {"name": "scrape", "title": "Scraping portali", "status": "skipped"},
+        {"name": "extract", "title": "Ekstrakcja", "status": "running"},
+        {"name": "enrich", "title": "Wzbogacanie", "status": "pending"},
+        {"name": "cluster", "title": "Klasteryzacja", "status": "pending"},
+        {"name": "match", "title": "Dopasowanie", "status": "pending"},
+        {"name": "ranking", "title": "Ranking", "status": "pending"},
+        {"name": "report", "title": "Raport", "status": "pending"},
+    ]
+    mgr._status = "running"
+    mgr._active_stage_idx = 1
+    state_running = mgr.get_state()
+    check("running with 1 skipped stage reflects resolved stage in progress_percent",
+          state_running["progress_percent"] == round((1 / 7) * 100, 1))
+    check("running state indicates active stage", "Etap 2 z 7" in state_running["progress_label"])
+
+    # 3. Stopped state with unfinished stages:
+    mgr._process = ExitedProc()
+    mgr._status = "stopped"
+    state_stopped = mgr.get_state()
+    check("stopped pipeline with remaining stages allows resume", state_stopped["can_resume"] is True)
+
+
+def test_pipeline_stage_stats_and_eta():
+    print("\n[25] Stage numbers and scoring pace parsed from the run log")
+    from pipeline_manager import PipelineProcessManager
+
+    mgr = PipelineProcessManager()
+    lines = [
+        "   REMOVED (stale):  37",
+        "Cleaned analyzed_jobs_waterfall.json: 900 → 880 (removed 20)",
+        "  jobs_database.json: 1250 -> 1240 (scalono 10)",
+        "  analyzed_jobs_waterfall.json: 880 -> 870 (scalono 10)",
+        "2026-09-23 10:02:11,123 - deduplicate_db - INFO - analyzed_jobs_waterfall.json: 870 -> 860 (removed 10)",
+        "2026-09-23 10:02:12,123 - deduplicate_db - INFO - jobs_database.json: 1240 -> 1192 (removed 48)",
+        "2026-09-23 10:02:13,000 - clean_db - INFO -    Before: 1,000,000 chars",
+        "2026-09-23 10:02:13,000 - clean_db - INFO -    After:  1,000,000 chars",
+        "2026-09-23 10:02:14,000 - clean_db - INFO -    Before: 2,000,000 chars",
+        "2026-09-23 10:02:14,000 - clean_db - INFO -    After:  1,070,000 chars",
+    ]
+    for line in lines:
+        mgr._parse_telemetry(line)
+    stages = mgr._telemetry_snapshot()["stages"]
+    check("purge: stale offers removed from the jobs database", stages.get("phase0") == {"removed": 37})
+    check("normalisation: jobs database only, analyzed file ignored",
+          stages.get("phase1_5") == {"links": 1240, "merged": 10}, stages.get("phase1_5"))
+    check("dedup: jobs database count, analyzed and purge lines ignored",
+          stages.get("phase2") == {"removed": 48}, stages.get("phase2"))
+    check("token diet: characters summed over both files",
+          stages.get("phase2_5") == {"chars_before": 3_000_000, "chars_after": 2_070_000}, stages.get("phase2_5"))
+
+    mgr._parse_telemetry("2026-09-23 10:02:15,000 - deduplicate_db - INFO - jobs_database.json: 1192 ofert, brak duplikatow - plik bez zmian")
+    check("dedup without duplicates reports zero", mgr._telemetry_snapshot()["stages"]["phase2"] == {"removed": 0})
+
+    mgr._parse_telemetry("Processing 50 jobs (Target Batch Size: 25).")
+    mgr._parse_telemetry("Batch 1 (Processing 25 jobs, 25 remaining in queue)...")
+    first = mgr._telemetry["scoring"]["first_batch_at"]
+    check("scoring: pace has no end before the first batch finishes",
+          first is not None and mgr._telemetry["scoring"]["last_done_at"] is None)
+    mgr._parse_telemetry("      Success! Processed 25 out of 25 requested jobs.")
+    mgr._parse_telemetry("Batch 2 (Processing 25 jobs, 0 remaining in queue)...")
+    sc = mgr._telemetry_snapshot()["scoring"]
+    check("scoring: first batch start is kept across later batches", sc["first_batch_at"] == first)
+    check("scoring: finished batch stamps its end", sc["last_done_at"] is not None and sc["processed"] == 25)
+    check("scoring: pack size comes from the run, not a UI constant", sc["batch_size"] == 25, sc)
+
+    for line in [
+        "2026-09-25 18:14:00,000 - main_scraper - INFO - Running aplikuj.pl scraper...",
+        "2026-09-25 18:14:01,000 - main_scraper - INFO - Running OLX Praca scraper...",
+        "2026-09-25 18:20:00,000 - scrapers.ldjson_scraper_base - INFO - aplikuj.pl: 1200/3482 descriptions - 240/min, ~10 min left",
+        "2026-09-25 18:20:01,000 - scrapers.olx_scraper - INFO - OLX: 50/300 opisow (ok: 48, wygasle: 2, bledy: 0, blokady: 0) - 30 ofert/min, zostalo ~8 min",
+        "2026-09-25 18:20:02,000 - scrapers.ldjson_scraper_base - INFO - GoWork.pl: 100/200 descriptions - 60/min, ~2 min left",
+    ]:
+        mgr._parse_telemetry(line)
+    by_name = {s["name"]: s for s in mgr._telemetry_snapshot()["sources"]}
+    check("details: ld+json progress lands on its source",
+          (by_name["aplikuj.pl"]["details_done"], by_name["aplikuj.pl"]["details_total"]) == (1200, 3482))
+    check("details: OLX short log name maps to the OLX Praca source",
+          (by_name["OLX Praca"]["details_done"], by_name["OLX Praca"]["details_total"]) == (50, 300))
+    check("details: progress of an unannounced source creates no row", "GoWork.pl" not in by_name)
+    mgr._parse_telemetry("2026-09-25 18:29:00,000 - scrapers.ldjson_scraper_base - INFO - "
+                         "aplikuj.pl: fetched 3400/3482 descriptions, dropped 12 (out of scope) -> 966 offers")
+    src = next(s for s in mgr._telemetry_snapshot()["sources"] if s["name"] == "aplikuj.pl")
+    check("details: final summary fills the tile even when some pages had no JobPosting",
+          src["details_done"] == src["details_total"] == 3482, src)
+
+def test_offer_api_backlog_contract():
+    print("\n[26] Fresh offers, gap filter, next step and AI highlights over HTTP")
+    import tempfile, shutil, json
+    from pathlib import Path
+    from starlette.testclient import TestClient
+    import app_services
+    import server
+
+    temp_path = Path(tempfile.mkdtemp(prefix="test_backlog_api_"))
+    paths = {
+        "JOBS_DATABASE_PATH": temp_path / "jobs_database.json",
+        "ANALYZED_JOBS_PATH": temp_path / "analyzed_jobs_waterfall.json",
+        "USER_DECISIONS_PATH": temp_path / "user_decisions.json",
+        "LAST_SCRAPE_RUN_PATH": temp_path / "last_scrape_run.json",
+    }
+    originals = {name: getattr(app_services, name) for name in paths}
+    for name, path in paths.items():
+        setattr(app_services, name, path)
+
+    def job(n, scraped_at):
+        return {"title": f"Analityk {n}", "company": "Corp", "link": f"https://corp.example/job{n}",
+                "description": "Analiza danych w SQL i raporty dla zarządu, ponad 20 znaków", "source": "Test",
+                "scraped_at": scraped_at}
+
+    jobs = [job(1, "2026-09-20T18:00:00"), job(2, "2026-09-20T19:30:00"), job(3, "2026-09-20T19:40:00")]
+    analyzed = [
+        # Ten sam brak dwa razy w jednej ofercie liczy się jako jedna oferta.
+        {"job": jobs[0], "match_percentage": 80, "reason": "r", "missing_skills": ["SQL", "sql."],
+         "highlights": ["Analityk danych", "SQL"]},
+        {"job": jobs[1], "match_percentage": 70, "reason": "r", "missing_skills": ["SQL"]},
+        {"job": jobs[2], "match_percentage": 75, "reason": "r", "missing_skills": ["SQL"]},
+    ]
+    decisions = {jobs[0]["link"]: "save", jobs[2]["link"]: "reject"}
+    paths["JOBS_DATABASE_PATH"].write_text(json.dumps(jobs), encoding="utf-8")
+    paths["ANALYZED_JOBS_PATH"].write_text(json.dumps(analyzed), encoding="utf-8")
+    paths["USER_DECISIONS_PATH"].write_text(json.dumps(decisions), encoding="utf-8")
+    paths["LAST_SCRAPE_RUN_PATH"].write_text(json.dumps({"started_at": "2026-09-20T19:00:00"}), encoding="utf-8")
+
+    try:
+        app_services.job_data_service.reload()
+        client = TestClient(server.app, base_url="http://127.0.0.1:8501")
+
+        all_offers = client.get("/api/offers?tab=Wszystkie").json()
+        new_links = sorted(row["link"] for row in all_offers["items"] if row["is_new"])
+        check("offers scraped after the last run start are new",
+              new_links == [jobs[1]["link"], jobs[2]["link"]])
+        check("fresh_count counts the whole list", all_offers.get("fresh_count") == 2)
+
+        gaps = client.get("/api/gaps?threshold=50").json()
+        sql = next((r for r in gaps["rows"] if r["skill"] == "SQL"), None)
+        check("gap ranks distinct offers without rejected ones", sql is not None and sql["offers"] == 2)
+        gap_list = client.get("/api/offers?tab=Wszystkie&gap=SQL&gap_threshold=50").json()
+        check("gap list total equals the ranked offer count", sql is not None and gap_list["total"] == sql["offers"])
+        check("gap list is ordered by match",
+              [row["link"] for row in gap_list["items"]] == [jobs[0]["link"], jobs[1]["link"]])
+
+        detail = client.get("/api/offers/detail", params={"link": jobs[0]["link"]}).json()
+        check("detail exposes highlights", detail["highlights"] == ["Analityk danych", "SQL"])
+        plain = client.get("/api/offers/detail", params={"link": jobs[1]["link"]}).json()
+        check("older scores have no highlights", plain["highlights"] == [])
+
+        bad_due = client.post("/api/offers/next-step", json={"link": jobs[0]["link"], "label": "Rozmowa", "due": "2026-13-01"})
+        check("next step rejects an invalid date", bad_due.status_code == 400)
+        undecided = client.post("/api/offers/next-step", json={"link": jobs[1]["link"], "label": "Rozmowa", "due": None})
+        check("next step requires a decision", undecided.status_code == 400)
+
+        saved = client.post("/api/offers/next-step",
+                            json={"link": jobs[0]["link"], "label": "  Rozmowa   z HR ", "due": "2026-09-26 10:00"})
+        check("next step on a legacy string decision is saved",
+              saved.status_code == 200 and saved.json()["offer"]["next_step"] == {"label": "Rozmowa z HR", "due": "2026-09-26 10:00"})
+        on_disk = json.loads(paths["USER_DECISIONS_PATH"].read_text(encoding="utf-8"))[jobs[0]["link"]]
+        check("legacy decision becomes an object that keeps its status",
+              isinstance(on_disk, dict) and on_disk["status"] == "save")
+
+        client.post("/api/offers/decision", json={"link": jobs[0]["link"], "status": "apply", "rating": 8, "stage": "interview"})
+        board = client.get("/api/applications").json()
+        card = next((i for i in board["items"] if i["link"] == jobs[0]["link"]), None)
+        check("next step survives a stage change and reaches the board",
+              card is not None and card["next_step"] == {"label": "Rozmowa z HR", "due": "2026-09-26 10:00"})
+
+        cleared = client.post("/api/offers/next-step", json={"link": jobs[0]["link"], "label": "", "due": None})
+        check("empty label removes the next step", cleared.status_code == 200 and cleared.json()["offer"]["next_step"] is None)
+    finally:
+        for name, path in originals.items():
+            setattr(app_services, name, path)
+        app_services.job_data_service.reload()
+        shutil.rmtree(temp_path, ignore_errors=True)
+
 
 def main():
     print("=" * 62)
@@ -769,7 +1685,18 @@ def main():
                  test_api_keys_configured, test_record_scrape, test_scraper_health,
                  test_idempotent_writes, test_olx_tempo_przy_blokadzie,
                  test_zdjete_z_portalu, test_olx_fetch_rownolegly,
-                 test_olx_opis_z_listingu, test_pipeline_final_status):
+                 test_olx_opis_z_listingu, test_pipeline_final_status,
+                 test_incremental_pipeline_selection,
+                 test_scoring_queue_semantics,
+                 test_pipeline_stop_and_resume_checkpoints,
+                 test_windows_process_safety,
+                 test_pipeline_stop_and_resume_lifecycle,
+                 test_http_security_and_dns_rebinding_protection,
+                 test_external_data_change_automatic_invalidation,
+                 test_playwright_chromium_prerequisites,
+                 test_pipeline_skipped_stage_progress,
+                 test_pipeline_stage_stats_and_eta,
+                 test_offer_api_backlog_contract):
         try:
             test()
         except Exception as e:

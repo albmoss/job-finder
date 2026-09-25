@@ -5,11 +5,13 @@ Powód: user_decisions.json i preference_profile.json to dane, których NIE DA S
 odtworzyć (setki ręcznych ocen). Zapis wprost do pliku oznacza, że przerwanie
 procesu w trakcie writeu zostawia obcięty/pusty plik i dane przepadają.
 """
-
 import json
 import logging
 import os
+import random
 import shutil
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -28,7 +30,6 @@ DEFAULT_KEEP = 10
 REGENERABLE_KEEP = 2
 _KEEP_BY_NAME = {
     "jobs_database.json": REGENERABLE_KEEP,
-    "analyzed_jobs_waterfall.json": REGENERABLE_KEEP,
 }
 
 
@@ -82,14 +83,33 @@ def save_json_atomic(filepath, data, backup: bool = False, keep: int = None, ind
     if backup:
         rotate_backup(filepath, keep=keep)
 
-    tmp = filepath.with_suffix(filepath.suffix + ".tmp")
+    tmp = filepath.with_name(f"{filepath.name}.{os.getpid()}_{threading.get_ident()}_{random.randint(1000, 9999)}.tmp")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=indent)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, filepath)
-        return True
+        # Na Windowsie równoległy odczyt (np. Streamlit, file watcher, inspekcja CLI)
+        # potrafi na ułamek milisekundy przytrzymać uchwyt pliku docelowego, co wywołuje
+        # [WinError 5] Access is denied lub [WinError 32] Sharing violation w os.replace.
+        # Zawężamy ponowienia wyłącznie do tych przejściowych konfliktów blokad.
+        max_attempts = 10
+        for attempt in range(max_attempts):
+            try:
+                os.replace(tmp, filepath)
+                return True
+            except (PermissionError, OSError) as e:
+                winerror = getattr(e, "winerror", None)
+                # Na Windowsie tylko 5 (Access Denied) i 32 (Sharing Violation) to przejściowe blokady
+                is_transient = (winerror in (5, 32)) if (os.name == "nt" and winerror is not None) else isinstance(e, PermissionError)
+                if not is_transient:
+                    logger.error(f"Nieprzejściowy błąd zapisu atomowego {filepath.name}: {e}")
+                    raise
+                if attempt == max_attempts - 1:
+                    logger.warning(f"Wyczerpano {max_attempts} prób zapisu atomowego {filepath.name} z powodu blokady: {e}")
+                    raise
+                time.sleep(0.005 * (attempt + 1))
+        return False
     except Exception as e:
         logger.error(f"Atomic write of {filepath.name} failed: {e}")
         if tmp.exists():
@@ -109,14 +129,21 @@ def load_json_safe(filepath, default=None):
     if default is None:
         default = {}
 
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return default
-    except Exception as e:
-        logger.error(f"{filepath.name} corrupt ({e}) - trying backup...")
-
+    for attempt in range(4):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return default
+        except (PermissionError, OSError, json.JSONDecodeError) as e:
+            if attempt < 3:
+                time.sleep(0.005 * (attempt + 1))
+                continue
+            logger.error(f"{filepath.name} corrupt ({e}) - trying backup...")
+            break
+        except Exception as e:
+            logger.error(f"{filepath.name} corrupt ({e}) - trying backup...")
+            break
     bdir = filepath.parent / BACKUP_DIR_NAME
     if bdir.exists():
         for candidate in sorted(bdir.glob(f"{filepath.name}.*.bak"), reverse=True):

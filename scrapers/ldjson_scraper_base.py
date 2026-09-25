@@ -78,6 +78,9 @@ class LdJsonPortalScraper:
     FLOOR_REQUEST_INTERVAL = 0.2    # dolna granica przyspieszania
     SPEEDUP_AFTER = 25              # tyle czystych odpowiedzi z rzędu -> skracamy odstęp
     DETAIL_THREADS = 3
+    # Co tyle pobranych opisów meldunek postępu. aplikuj.pl ściąga ~3,5 tys. stron przez
+    # kwadrans; bez meldunku arkusz pipeline'u stał, jakby proces się zawiesił.
+    PROGRESS_EVERY = 100
 
     USER_AGENTS = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
@@ -407,8 +410,15 @@ class LdJsonPortalScraper:
             return []
 
         jobs, no_ldjson, out_of_scope = [], 0, 0
+        started = time.monotonic()
         with ThreadPoolExecutor(max_workers=self.DETAIL_THREADS) as executor:
-            for result in executor.map(self._fetch_detail, links):
+            for done, result in enumerate(executor.map(self._fetch_detail, links), 1):
+                if done % self.PROGRESS_EVERY == 0 and done < len(links):
+                    rate = done / max(time.monotonic() - started, 1e-6)
+                    logger.info(
+                        f"{self.SOURCE_NAME}: {done}/{len(links)} descriptions - "
+                        f"{rate * 60:.0f}/min, ~{(len(links) - done) / rate / 60:.0f} min left"
+                    )
                 if result is None:
                     no_ldjson += 1
                     continue
