@@ -29,39 +29,17 @@ CV, and I decide on it in one click. Those decisions feed back into the prompt t
 the next run. Violet comes from me, blue runs on its own.
 
 ```mermaid
-flowchart TB
-    subgraph setup["1 · Set up"]
-        cv(["Upload CV"])
-        provider(["Pick model provider<br/>and API key"])
-    end
-
-    subgraph pipeline["2 · Pipeline"]
-        boards["Scrape, clean & dedupe<br/>10 job boards"] --> score["LLM scoring<br/>vs CV + profile"]
-    end
-
-    subgraph review["3 · Review"]
-        list["Ranked list<br/>match %, highlights, gaps"] --> decide(["Save · Apply<br/>Aspire · Reject<br/>rate 1–10"])
-    end
-
-    subgraph act["4 · Follow up"]
-        board(["Applications board<br/>stage + next step"])
-        gaps(["Skill gaps<br/>what the CV lacks"])
-    end
-
-    cv --> boards
-    provider -- "accept API cost, run" --> boards
-    score --> list
-    decide --> board
-    list --> gaps
-    decide -. "contrasting pairs" .-> profile[("Preference<br/>profile")]
-    profile -. "rewrites the prompt" .-> score
+flowchart LR
+    cv(["Upload CV"]) --> run["Scrape & LLM-score<br/>10 job boards"]
+    run --> list["Ranked<br/>list"]
+    list --> me(["Decide<br/>& rate"])
+    me --> apps(["Applications<br/>board"])
+    me -. "preference profile" .-> run
 
     classDef step fill:#161a33,stroke:#5A70FF,stroke-width:1.5px,color:#ffffff
     classDef me fill:#241a3d,stroke:#8B5CFF,stroke-width:1.5px,color:#ffffff
-    classDef stage fill:none,stroke:#5A70FF,stroke-width:1px,stroke-dasharray:4 4,color:#8b93c9
-    class boards,score,list step
-    class cv,provider,decide,board,gaps,profile me
-    class setup,pipeline,review,act stage
+    class run,list step
+    class cv,me,apps me
 ```
 
 ## Pipeline
