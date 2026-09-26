@@ -2,7 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from
 import type {
   ActivityRow,
   CVInfo,
-  EnvField,
+  EnvKeysResponse,
   GapFilter,
   OfferDetail,
   OfferListItem,
@@ -99,7 +99,7 @@ export const App: React.FC = () => {
 
   const [prerequisites, setPrerequisites] = useState<PipelinePrerequisites | null>(null);
   const [cvInfo, setCvInfo] = useState<CVInfo | null>(null);
-  const [envFields, setEnvFields] = useState<EnvField[]>([]);
+  const [envKeys, setEnvKeys] = useState<EnvKeysResponse | null>(null);
   const [isLaunchModalOpen, setIsLaunchModalOpen] = useState(false);
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
@@ -289,7 +289,7 @@ export const App: React.FC = () => {
 
   const loadEnvKeys = useCallback(async () => {
     try {
-      setEnvFields((await api.getEnvKeys()).fields);
+      setEnvKeys(await api.getEnvKeys());
     } catch (err) {
       console.error('Błąd pobierania kluczy .env:', err);
     }
@@ -767,7 +767,7 @@ export const App: React.FC = () => {
         onClose={() => setIsLaunchModalOpen(false)}
         prerequisites={prerequisites}
         cvInfo={cvInfo}
-        envFields={envFields}
+        envKeys={envKeys}
         onStartPipeline={(mode) => runPipelineAction(() => api.startPipeline(mode), 'Błąd uruchomienia', true)}
         onRefreshPrerequisites={loadPrerequisites}
         onRefreshCV={loadCV}

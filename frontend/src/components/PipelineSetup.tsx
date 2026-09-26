@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { Check, AlertTriangle, FileText, Key, Globe, Eye, EyeOff } from 'lucide-react';
-import type { CVInfo, EnvField, PipelinePrerequisites } from '../types';
+import { FileText, Eye, EyeOff } from 'lucide-react';
+import type { CVInfo, EnvKeysResponse } from '../types';
 import { api } from '../api';
+import { BACKUPS, plural } from '../plural';
 import '../styles/pipeline.css';
+import '../styles/applications.css';
 
 interface CvEditorProps {
   cvInfo: CVInfo | null;
@@ -120,28 +122,54 @@ export const CvEditor: React.FC<CvEditorProps> = ({ cvInfo, disabled, onSaved, s
 };
 
 interface KeysEditorProps {
-  envFields: EnvField[];
+  envKeys: EnvKeysResponse | null;
   full?: boolean;
   disabled?: boolean;
   onSaved: () => void;
   showToast: (msg: string, action?: { label: string; run: () => void }, done?: boolean) => void;
 }
 
-export const KeysEditor: React.FC<KeysEditorProps> = ({ envFields, full, disabled, onSaved, showToast }) => {
-  const [quickKey, setQuickKey] = useState('');
-  const [showQuickKey, setShowQuickKey] = useState(false);
+export const KeysEditor: React.FC<KeysEditorProps> = ({ envKeys, full, disabled, onSaved, showToast }) => {
+  const info = envKeys?.api_info;
+  const envFields = envKeys?.fields ?? [];
+  const [picked, setPicked] = useState<string | null>(null);
+  const [key, setKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  // null = pole nietknięte: zapis nie rusza wartości w .env
+  const [models, setModels] = useState<string | null>(null);
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
   const [updates, setUpdates] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
-  const saveQuick = async () => {
+  const providerId = picked ?? info?.provider ?? 'gemini';
+  const provider = info?.providers.find((p) => p.id === providerId);
+  const isCurrent = providerId === info?.provider;
+  const dirty = (picked !== null && !isCurrent) || Boolean(key.trim()) || models !== null || baseUrl !== null;
+
+  const pick = (id: string) => {
+    setPicked(id);
+    setKey('');
+    setModels(null);
+    setBaseUrl(null);
+  };
+
+  const saveLlm = async () => {
     setSaving(true);
     try {
-      await api.saveQuickGeminiKey(quickKey.trim());
-      showToast('Zapisano GEMINI_API_KEY_PRIMARY w .env');
-      setQuickKey('');
+      const res = await api.saveLlmSettings({
+        provider: providerId,
+        key: key.trim() || undefined,
+        models: models ?? undefined,
+        base_url: baseUrl ?? undefined,
+      });
+      showToast(res.message);
+      setPicked(null);
+      setKey('');
+      setModels(null);
+      setBaseUrl(null);
       onSaved();
     } catch (err) {
-      showToast(`Błąd zapisu klucza: ${err instanceof Error ? err.message : String(err)}`);
+      showToast(`Błąd zapisu ustawień modelu: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSaving(false);
     }
@@ -161,60 +189,121 @@ export const KeysEditor: React.FC<KeysEditorProps> = ({ envFields, full, disable
     }
   };
 
+  const busy = disabled || saving;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Szybki klucz Gemini */}
-      <div className="field">
-        <label className="field-label" htmlFor="quick-gemini-key">
-          Główny klucz Gemini (GEMINI_API_KEY_PRIMARY)
-        </label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <div style={{ position: 'relative', flex: 1 }}>
-            <input
-              id="quick-gemini-key"
-              className="input"
-              type={showQuickKey ? 'text' : 'password'}
-              placeholder="AIzaSy…"
-              value={quickKey}
-              disabled={disabled || saving}
-              onChange={(e) => setQuickKey(e.target.value)}
-              style={{ fontFamily: 'var(--mono)', paddingRight: 36 }}
-            />
-            <button
-              type="button"
-              className="iconbtn"
-              style={{
-                position: 'absolute',
-                right: 4,
-                top: 4,
-                width: 36,
-                height: 36,
-                background: 'none',
-              }}
-              onClick={() => setShowQuickKey(!showQuickKey)}
-              aria-label={showQuickKey ? 'Ukryj klucz' : 'Pokaż klucz'}
+      {info && provider && (
+        <>
+          <div className="field">
+            <span className="field-label" id="llm-provider-label">Dostawca modelu</span>
+            <div
+              className={`ab-stage-switch ${busy ? 'is-disabled' : ''}`}
+              role="radiogroup"
+              aria-labelledby="llm-provider-label"
+              style={{ alignSelf: 'flex-start' }}
             >
-              {showQuickKey ? <EyeOff size={15} /> : <Eye size={15} />}
-            </button>
+              {info.providers.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={p.id === providerId}
+                  disabled={busy}
+                  className={`ab-stage-segment press ${p.id === providerId ? 'is-active' : ''}`}
+                  onClick={() => p.id !== providerId && pick(p.id)}
+                >
+                  <span className="ab-stage-label">{p.label}</span>
+                </button>
+              ))}
+            </div>
+            <span className="field-help">
+              {isCurrent
+                ? info.ready
+                  ? `W użyciu · klucz ${info.primary_masked}` +
+                    (info.count > 1 ? ` + ${info.count - 1} ${plural(info.count - 1, BACKUPS)}` : '')
+                  : info.error
+                : 'Zapis przełączy ocenę ofert na tego dostawcę.'}
+            </span>
           </div>
 
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={disabled || saving || !quickKey.trim()}
-            onClick={saveQuick}
-          >
-            Zapisz klucz
-          </button>
-        </div>
-      </div>
+          <div className="field">
+            <label className="field-label" htmlFor="llm-key">
+              Klucz główny ({provider.key_env})
+            </label>
+            <div style={{ position: 'relative' }}>
+              <input
+                id="llm-key"
+                className="input"
+                type={showKey ? 'text' : 'password'}
+                placeholder={isCurrent && info.count > 0 ? '•••••••• (bez zmian)' : provider.key_hint}
+                value={key}
+                disabled={busy}
+                onChange={(e) => setKey(e.target.value)}
+                style={{ fontFamily: 'var(--mono)', paddingRight: 36 }}
+              />
+              <button
+                type="button"
+                className="iconbtn"
+                style={{ position: 'absolute', right: 4, top: 4, width: 36, height: 36, background: 'none' }}
+                onClick={() => setShowKey(!showKey)}
+                aria-label={showKey ? 'Ukryj klucz' : 'Pokaż klucz'}
+              >
+                {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+          </div>
+
+          <div className="field">
+            <label className="field-label" htmlFor="llm-models">
+              Modele po przecinku ({provider.models_env})
+            </label>
+            <input
+              id="llm-models"
+              className="input"
+              type="text"
+              placeholder={provider.default_models.join(', ')}
+              value={models ?? (isCurrent && info.models_custom ? info.models.join(', ') : '')}
+              disabled={busy}
+              onChange={(e) => setModels(e.target.value)}
+              style={{ fontFamily: 'var(--mono)', height: 38, fontSize: 12.5 }}
+            />
+          </div>
+          {provider.base_url_env && (
+            <div className="field">
+              <label className="field-label" htmlFor="llm-base-url">
+                Adres API ({provider.base_url_env})
+              </label>
+              <input
+                id="llm-base-url"
+                className="input"
+                type="text"
+                placeholder={provider.default_base_url}
+                value={baseUrl ?? (isCurrent && info.base_url !== provider.default_base_url ? info.base_url : '')}
+                disabled={busy}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                style={{ fontFamily: 'var(--mono)', height: 38, fontSize: 12.5 }}
+              />
+            </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button type="button" className="btn btn-primary" disabled={busy || !dirty} onClick={saveLlm}>
+              Zapisz ustawienia modelu
+            </button>
+            <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+              Puste pole modeli = lista domyślna; pierwszy model to pierwszy wybór.
+            </span>
+          </div>
+        </>
+      )}
 
       {/* Wszystkie pola .env */}
       {full && envFields.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ height: 1, background: 'var(--line)', margin: '4px 0' }} />
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>
-            Pozostałe wpisy środowiska (.env)
+            Klucze zapasowe i źródła ofert (.env)
           </div>
 
           <div className="pp-env-grid">
@@ -236,7 +325,7 @@ export const KeysEditor: React.FC<KeysEditorProps> = ({ envFields, full, disable
                   type={f.secret ? 'password' : 'text'}
                   placeholder={f.configured ? '•••••••• (bez zmian)' : 'wartość'}
                   value={updates[f.key] ?? ''}
-                  disabled={disabled || saving}
+                  disabled={busy}
                   onChange={(e) => setUpdates({ ...updates, [f.key]: e.target.value })}
                   style={{ fontFamily: 'var(--mono)', height: 38, fontSize: 12.5 }}
                 />
@@ -249,7 +338,7 @@ export const KeysEditor: React.FC<KeysEditorProps> = ({ envFields, full, disable
               type="button"
               className="btn btn-secondary"
               style={{ height: 34, fontSize: 12 }}
-              disabled={disabled || saving || Object.keys(updates).length === 0}
+              disabled={busy || Object.keys(updates).length === 0}
               onClick={saveAll}
             >
               Zapisz zmiany w .env
@@ -262,164 +351,3 @@ export const KeysEditor: React.FC<KeysEditorProps> = ({ envFields, full, disable
   );
 };
 
-export type SetupSectionKey = 'cv' | 'keys' | 'scrapers';
-
-export interface PipelineSetupProps {
-  prerequisites: PipelinePrerequisites | null;
-  cvInfo: CVInfo | null;
-  envFields: EnvField[];
-  disabled?: boolean;
-  onRefreshCV: () => void;
-  onRefreshEnvKeys: () => void;
-  onRefreshPrerequisites: () => void;
-  showToast: (msg: string, action?: { label: string; run: () => void }, done?: boolean) => void;
-}
-
-export const PipelineSetup: React.FC<PipelineSetupProps> = ({
-  prerequisites,
-  cvInfo,
-  envFields,
-  disabled,
-  onRefreshCV,
-  onRefreshEnvKeys,
-  onRefreshPrerequisites,
-  showToast,
-}) => {
-  const [openSection, setOpenSection] = useState<SetupSectionKey | null>(null);
-  const configuredKeysCount = envFields.filter((f) => f.configured).length;
-
-  const tiles = [
-    {
-      key: 'cv' as SetupSectionKey,
-      name: 'CV',
-      ok: Boolean(cvInfo?.ready),
-      desc: cvInfo?.ready ? `${cvInfo.filename} · ${cvInfo.words} słów` : 'brak — model nie ma wzorca',
-      Icon: FileText,
-    },
-    {
-      key: 'keys' as SetupSectionKey,
-      name: 'Klucze API',
-      ok: Boolean(prerequisites?.api_ready),
-      desc: prerequisites?.api_ready
-        ? `Gemini gotowy · ${configuredKeysCount} wpisów w .env`
-        : 'brak klucza Gemini',
-      Icon: Key,
-    },
-    {
-      key: 'scrapers' as SetupSectionKey,
-      name: 'Scrapery',
-      ok: Boolean(prerequisites?.playwright_ready),
-      desc: prerequisites?.playwright_ready
-        ? 'Playwright + Chromium'
-        : prerequisites?.playwright_msg || 'nie sprawdzono',
-      Icon: Globe,
-    },
-  ];
-
-  const handleSaved = () => {
-    onRefreshCV();
-    onRefreshEnvKeys();
-    onRefreshPrerequisites();
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-        {tiles.map(({ key, name, ok, desc, Icon }) => (
-          <div
-            key={key}
-            style={{
-              padding: '12px 14px',
-              borderRadius: 16,
-              background: 'rgba(255, 255, 255, 0.025)',
-              border: `1px solid ${openSection === key ? 'var(--stroke-strong)' : 'var(--stroke)'}`,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 13 }}>
-                <Icon size={15} style={{ color: 'var(--ink-2)' }} />
-                <span>{name}</span>
-                {ok ? (
-                  <Check size={14} style={{ color: 'var(--ink)' }} />
-                ) : (
-                  <AlertTriangle size={14} style={{ color: 'var(--ink)' }} />
-                )}
-              </div>
-
-              <button
-                type="button"
-                className="btn btn-quiet"
-                style={{ height: 26, padding: '0 8px', fontSize: 11 }}
-                onClick={() => setOpenSection(openSection === key ? null : key)}
-              >
-                {openSection === key ? 'Zwiń' : ok ? 'Zmień' : 'Uzupełnij'}
-              </button>
-            </div>
-
-            <div style={{ fontSize: 11.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {desc}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {openSection === 'cv' && (
-        <div className="pp-setup-drawer">
-          <div className="pp-setup-head">
-            <span>Ustawienia życiorysu (CV)</span>
-          </div>
-          <CvEditor cvInfo={cvInfo} disabled={disabled} onSaved={handleSaved} showToast={showToast} />
-        </div>
-      )}
-
-      {openSection === 'keys' && (
-        <div className="pp-setup-drawer">
-          <div className="pp-setup-head">
-            <span>Klucze API i środowisko</span>
-          </div>
-          <KeysEditor envFields={envFields} full disabled={disabled} onSaved={handleSaved} showToast={showToast} />
-        </div>
-      )}
-
-      {openSection === 'scrapers' && (
-        <div className="pp-setup-drawer">
-          <div className="pp-setup-head">
-            <span>Wymagania scraperów</span>
-          </div>
-          <div style={{ fontSize: 13, color: 'var(--ink-2)', lineHeight: 1.5 }}>
-            {prerequisites?.playwright_ready ? (
-              <p style={{ margin: 0 }}>
-                Przeglądarka Chromium (Playwright) jest poprawnie skonfigurowana. Scraping ze wszystkich portali jest dostępny.
-              </p>
-            ) : (
-              <div>
-                <p style={{ margin: '0 0 8px 0', color: 'var(--ink)' }}>
-                  {prerequisites?.playwright_msg || 'Chromium nie jest zainstalowane.'}
-                </p>
-                <p style={{ margin: 0, fontSize: 12, color: 'var(--ink-3)' }}>
-                  Możesz zainstalować przeglądarkę poleceniem <code style={{ fontFamily: 'var(--mono)' }}>playwright install chromium</code> albo uruchomić pipeline w trybie „Tylko ocena AI”.
-                </p>
-              </div>
-            )}
-          </div>
-          <div style={{ marginTop: 8 }}>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              style={{ height: 32, fontSize: 12 }}
-              onClick={() => {
-                onRefreshPrerequisites();
-                showToast('Sprawdzono wymagania ponownie.');
-              }}
-            >
-              Sprawdź ponownie
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};

@@ -14,6 +14,7 @@ analyzed_jobs_waterfall.json
 ranked_jobs.json
 jobs_database.json.tmp
 analyzed_jobs_waterfall.json.tmp
+benchmark_results.json
 
 # Stan runtime scraperow
 scraper_status.json
@@ -36,14 +37,10 @@ preference_profile.json
 
 # Backupy i katalogi robocze
 backups/
-.streamlit/
 temp_cv/
 cv-am/
 _archive/
 scratch/
-
-# Notatki robocze
-streamlit_refinement_checklist.md
 
 # Zrzuty ekranu i artefakty debugowania (poza tym z README)
 *.png

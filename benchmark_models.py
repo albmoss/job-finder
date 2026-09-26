@@ -1,5 +1,5 @@
 """
-Benchmark modeli Gemini na TWOICH ocenach.
+Benchmark modeli wybranego dostawcy (LLM_PROVIDER) na TWOICH ocenach.
 
 Zamiast wybierać model po nazwie, mierzymy: który model najlepiej odtwarza oceny,
 które wystawiłeś ręcznie. Każdy kandydat dostaje ten sam produkcyjny prompt
@@ -11,32 +11,24 @@ Metryki:
   - kompletność: czy model zwrócił wszystkie oferty (kluczowe przy batchach po 75)
   - czas      : ile trwało jedno wywołanie - decyduje o realnym czasie przeliczenia
 
+Kandydaci: domyślnie kaskada dostawcy (<DOSTAWCA>_MODELS albo lista domyślna),
+albo własna lista:  python benchmark_models.py model-a model-b
+
 Uruchomienie:  python benchmark_models.py
 """
 
-import json
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from google import genai
-from google.genai import types
-
-from config import GEMINI_API_KEYS
+from config import LLM
 from utils.links import canonical_link
+from utils.llm import ask_json
 from utils.safe_io import load_json_safe, save_json_atomic
 from waterfall_analysis import (BATCH_SIZE, JobEval, build_active_learning_context,
                                 create_prompt, load_cv)
-
-CANDIDATES = [
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-flash",
-]
 
 RESULTS_FILE = "benchmark_results.json"
 
@@ -93,30 +85,17 @@ def build_labeled_set(min_desc=150):
 
 
 def run_model(model_name, api_key, prompt, expected_n):
-    client = genai.Client(api_key=api_key)
     started = time.time()
     try:
-        resp = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=list[JobEval],
-                max_output_tokens=65535,
-                temperature=0.3,
-            ),
-        )
-        elapsed = time.time() - started
-        parsed = json.loads(resp.text)
-        usage = getattr(resp, "usage_metadata", None)
+        reply = ask_json(LLM, model_name, api_key, prompt, JobEval)
         return {
             "ok": True,
-            "elapsed": elapsed,
-            "items": parsed,
-            "returned": len(parsed),
+            "elapsed": time.time() - started,
+            "items": reply.data,
+            "returned": len(reply.data),
             "expected": expected_n,
-            "in_tokens": getattr(usage, "prompt_token_count", None) if usage else None,
-            "out_tokens": getattr(usage, "candidates_token_count", None) if usage else None,
+            "in_tokens": reply.in_tokens,
+            "out_tokens": reply.out_tokens,
         }
     except Exception as e:
         return {"ok": False, "elapsed": time.time() - started, "error": str(e)[:200]}
@@ -144,7 +123,7 @@ def run_model_batched(model_name, api_key, jobs, cv, context, batch_size=BATCH_S
             res["elapsed"] += elapsed
             return res
         for item in res["items"]:
-            i = item.get("id")
+            i = item.get("id") if isinstance(item, dict) else None
             if isinstance(i, int) and 0 <= i < len(chunk):
                 items.append({**item, "id": start + i})
         elapsed += res["elapsed"]
@@ -154,7 +133,11 @@ def run_model_batched(model_name, api_key, jobs, cv, context, batch_size=BATCH_S
             "expected": len(jobs), "in_tokens": in_tok, "out_tokens": out_tok}
 
 
-def main():
+def main(argv=None):
+    candidates = list(argv if argv is not None else sys.argv[1:]) or LLM.models
+    if not LLM.api_keys:
+        print(f"ERROR: {LLM.error}")
+        return 1
     labeled = build_labeled_set()
     if len(labeled) < 15:
         print(f"Not enough rated offers with a description ({len(labeled)}) - the benchmark would be meaningless.")
@@ -172,9 +155,10 @@ def main():
           f"characters per batch, {paczek} batch(es)\n")
 
     results = {}
-    for idx, model in enumerate(CANDIDATES):
-        key = GEMINI_API_KEYS[idx % len(GEMINI_API_KEYS)]
-        print(f"▶ {model} (klucz #{idx % len(GEMINI_API_KEYS)}) ...", flush=True)
+    print(f"Provider: {LLM.provider.label}\n")
+    for idx, model in enumerate(candidates):
+        key = LLM.api_keys[idx % len(LLM.api_keys)]
+        print(f"▶ {model} (klucz #{idx % len(LLM.api_keys)}) ...", flush=True)
 
         res = run_model_batched(model, key, jobs, cv, context)
 

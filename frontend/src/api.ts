@@ -194,9 +194,10 @@ export const api = {
       body: JSON.stringify({ keys }),
     }),
 
-  saveQuickGeminiKey: (key: string) =>
-    request<{ ok: boolean; message: string; api_info: EnvKeysResponse['api_info']; fields: EnvField[] }>('/env-keys/quick-gemini', {
+  /** `models`/`base_url`: pominięte = bez zmian, pusty tekst = wartość domyślna dostawcy. */
+  saveLlmSettings: (settings: { provider: string; key?: string; models?: string; base_url?: string }) =>
+    request<{ ok: boolean; message: string; api_info: EnvKeysResponse['api_info']; fields: EnvField[] }>('/env-keys/llm', {
       method: 'POST',
-      body: JSON.stringify({ key }),
+      body: JSON.stringify(settings),
     }),
 };

@@ -1,19 +1,16 @@
 """
 Job Finder - Backend HTTP Server (Starlette + Uvicorn)
-Zastępuje środowisko wykonawcze Streamlit.
 Wystawia API REST dla frontendu React/TypeScript, zarządza procesami, danymi i bezpieczeństwem.
 """
 
-from collections import deque
 from datetime import datetime
-import json
 import logging
 import math
 import os
 from pathlib import Path
 import re
 import sys
-from typing import Any, Dict, List, Optional
+from typing import List
 from urllib.parse import urlparse
 
 import uvicorn
@@ -34,7 +31,6 @@ from app_services import (
     WS_TABS,
     WS_TOOLS,
     check_pipeline_prerequisites,
-    check_playwright_chromium,
     fetch_job_from_link,
     get_api_keys_info,
     get_cv_info,
@@ -44,7 +40,7 @@ from app_services import (
     save_env_keys,
     save_manual_job,
     save_pasted_cv_text,
-    save_quick_gemini_key,
+    save_llm_settings,
     save_uploaded_cv,
 )
 from pipeline_manager import PipelineProcessManager
@@ -585,20 +581,22 @@ async def api_env_keys_save(request: Request) -> JSONResponse:
     })
 
 
-async def api_env_keys_quick_gemini(request: Request) -> JSONResponse:
+async def api_env_keys_llm(request: Request) -> JSONResponse:
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
 
-    key = (body.get("key") or "").strip()
-    if not key:
-        return JSONResponse({"error": "Klucz API nie może być pusty"}, status_code=400)
+    models, base_url = body.get("models"), body.get("base_url")
+    if not all(v is None or isinstance(v, str) for v in (body.get("key"), models, base_url)):
+        return JSONResponse({"error": "Pola key, models i base_url muszą być tekstem"}, status_code=400)
 
-    save_quick_gemini_key(key)
+    ok, msg = save_llm_settings(str(body.get("provider") or ""), body.get("key") or "", models, base_url)
+    if not ok:
+        return JSONResponse({"error": msg}, status_code=400)
     return JSONResponse({
         "ok": True,
-        "message": "Zapisano klucz Gemini w .env",
+        "message": msg,
         "api_info": get_api_keys_info(),
         "fields": get_env_fields_status(),
     })
@@ -651,7 +649,7 @@ routes = [
     Route("/api/cv/open-local", api_cv_open_local, methods=["POST"]),
     Route("/api/env-keys", api_env_keys_get, methods=["GET"]),
     Route("/api/env-keys", api_env_keys_save, methods=["POST"]),
-    Route("/api/env-keys/quick-gemini", api_env_keys_quick_gemini, methods=["POST"]),
+    Route("/api/env-keys/llm", api_env_keys_llm, methods=["POST"]),
 ]
 
 # Static files mount

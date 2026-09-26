@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
+from utils.llm import settings_from_env
+
 load_dotenv(Path(__file__).parent / ".env")
 
 BASE_DIR = Path(__file__).parent
@@ -14,34 +16,9 @@ JOBS_DATABASE_PATH = BASE_DIR / "jobs_database.json"
 # ofert na liście: scraped_at >= started_at.
 LAST_SCRAPE_RUN_PATH = BASE_DIR / "last_scrape_run.json"
 
-# Model domyślny. Właściwa kaskada modeli jest w waterfall_analysis.py (MODELS)
-# i została dobrana empirycznie - patrz benchmark_models.py.
-GEMINI_MODEL = "gemini-3.5-flash-lite"
-
-# (Nie trzymamy tu żadnych realnych kluczy - nawet wygasłych, nawet jako czarna lista.)
-_PLACEHOLDERS = {"YOUR_KEY_HERE", "CHANGEME", "TODO"}
-
-
-def _keys(*names):
-    """Klucze spod podanych zmiennych środowiskowych: bez pustych, bez powtórzeń."""
-    out = []
-    for name in names:
-        key = os.getenv(name, "").strip()
-        if key and key not in _PLACEHOLDERS and key not in out:
-            out.append(key)
-    return out
-
-
-# Pula do rotacji w kaskadzie modeli. Klucz główny JEST jej częścią: .env.example
-# każe wypełnić wyłącznie GEMINI_API_KEY_PRIMARY, a waterfall_analysis rotuje po
-# tej liście - gdy była budowana bez niego, świeży klon startował z pustą pulą
-# i analiza kręciła się w kółko, zamiast cokolwiek ocenić.
-GEMINI_API_KEYS = _keys(
-    "GEMINI_API_KEY_PRIMARY",
-    "GEMINI_API_KEY_1", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4",
-)
-
-GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
+# Dostawca modelu, kaskada modeli i pula kluczy do analizy ofert (LLM_PROVIDER
+# w .env; domyślnie Gemini) - patrz utils/llm.py i .env.example.
+LLM = settings_from_env(os.environ)
 
 # === Klucze API zewnętrznych portali ===
 # SOLID.Jobs — klucz niepotrzebny, publiczne API
@@ -184,27 +161,3 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
 ]
-
-AI_CONFIG = {
-    "temperature": 0.3,
-    "max_output_tokens": 500,
-    "system_prompt": """Jesteś doświadczonym rekruterem specjalizującym się w stanowiskach entry-level.
-
-Twoim zadaniem jest ocena dopasowania kandydata do oferty pracy.
-
-KRYTERIUM KRYTYCZNE:
-- Odrzuć oferty wymagające nauki zaawansowanych narzędzi/umiejętności trwającej dłużej niż 1 tydzień
-- Odrzuć oferty wymagające: zaawansowanego programowania, certyfikatów/uprawnień budowlanych, specjalistycznej wiedzy technicznej
-- Akceptuj oferty: biurowe, obsługa klienta, asystent, praktyki, prace fizyczne do przyuczenia
-
-Porównaj treść CV z opisem stanowiska i zwróć ocenę w formacie JSON:
-{
-    "match_percentage": <liczba 0-100>,
-    "reason": "<krótkie uzasadnienie po polsku, 2-3 zdania>",
-    "is_entry_level": <true/false - czy to prawdziwe stanowisko entry-level?>
-}
-
-Bądź krytyczny - lepiej odrzucić wątpliwe oferty niż zaproponować nieodpowiednie.""",
-    "rpm_limit": 5,
-    "batch_size": 50
-}

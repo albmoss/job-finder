@@ -44,12 +44,12 @@ def archive_rated(jobs, analyzed, decisions):
     Dopisz do rated_archive.json każdą ofertę z ręczną oceną, wraz z jej analizą AI.
     Archiwum rośnie i nigdy nie jest czyszczone - to nasz zbiór walidacyjny.
     """
-    rated_links = {
-        canonical_link(link)
-        for link, val in decisions.items()
-        if isinstance(val, dict) and val.get("rating") is not None
-    }
-    if not rated_links:
+    # Mapuj link kanoniczny -> dane decyzji (obsługa formatu słownikowego oraz niekanonicznych kluczy)
+    rated_by_canon = {}
+    for link, val in decisions.items():
+        if isinstance(val, dict) and val.get("rating") is not None:
+            rated_by_canon[canonical_link(link)] = val
+    if not rated_by_canon:
         return 0
 
     archive = load_json_safe(RATED_ARCHIVE, default=[])
@@ -61,7 +61,7 @@ def archive_rated(jobs, analyzed, decisions):
     jobs_by_link = {canonical_link(j.get("link", "")): j for j in jobs}
 
     added = 0
-    for link in rated_links:
+    for link, decision_val in rated_by_canon.items():
         if link in existing:
             continue
         entry = analysis_by_link.get(link)
@@ -71,7 +71,7 @@ def archive_rated(jobs, analyzed, decisions):
                 continue  # ani analizy, ani oferty - nie ma czego archiwizować
             entry = {"job": job, "match_percentage": None, "reason": "brak analizy AI"}
         record = dict(entry)
-        record["user_rating"] = decisions[link].get("rating") if link in decisions else None
+        record["user_rating"] = decision_val.get("rating") if isinstance(decision_val, dict) else None
         record["archived_at"] = datetime.now().isoformat()
         archive.append(record)
         added += 1

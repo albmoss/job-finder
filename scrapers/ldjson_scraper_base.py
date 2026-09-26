@@ -36,8 +36,8 @@ _LD_JSON_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-# Tytuły wykluczone z góry. Profil kandydata to entry-level (patrz AI_CONFIG
-# w config.py), a każda taka oferta to ~1-4 tys. znaków opisu wysłanych do modelu
+# Tytuły wykluczone z góry. Profil kandydata to entry-level (filtry doświadczenia
+# w SCRAPER_CONFIG), a każda taka oferta to ~1-4 tys. znaków opisu wysłanych do modelu
 # tylko po to, żeby dostać ocenę odrzucającą. Filtr jest celowo wąski - łapie
 # wyłącznie jednoznaczne sygnały seniority, żeby nie zgubić ofert do przyuczenia.
 _SENIOR_TITLE_RE = re.compile(

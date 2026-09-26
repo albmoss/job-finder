@@ -5,23 +5,18 @@ Niezależna warstwa usługowa dla backendu HTTP.
 
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-import hashlib
-import json
 import logging
-import math
 import os
 from pathlib import Path
 import re
-import sys
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from config import (
     JOBS_DATABASE_PATH,
     LAST_SCRAPE_RUN_PATH,
-    GEMINI_API_KEYS,
-    _PLACEHOLDERS,
 )
+from utils.llm import PLACEHOLDERS, PROVIDERS, settings_from_env
 from utils.cv_parser import CVParser
 from utils.data_models import JobDatabase, Job, JobMatch
 from utils.text_cleaner import detect_work_mode, strip_html
@@ -443,15 +438,6 @@ class JobDataService:
     def get_stats(self) -> Dict[str, Any]:
         with self._lock:
             self.ensure_loaded()
-            valid_db_links = {
-                canonical_link(j.link)
-                for j in self.raw_jobs
-                if (getattr(j, "description", None) or "").strip()
-                and (getattr(j, "description", None) or "").strip() != "Brak opisu"
-                and len((getattr(j, "description", None) or "").strip()) > 20
-            }
-            analyzed_links = {canonical_link(m.job.link) for m in self.analyzed_matches}
-            decided_links = {canonical_link(l) for l in self.user_decisions}
             try:
                 pending = get_pending_scoring_count(
                     jobs=self.raw_jobs,
@@ -460,6 +446,15 @@ class JobDataService:
                     base_dir=Path(__file__).parent,
                 )
             except Exception:
+                valid_db_links = {
+                    canonical_link(j.link)
+                    for j in self.raw_jobs
+                    if (getattr(j, "description", None) or "").strip()
+                    and (getattr(j, "description", None) or "").strip() != "Brak opisu"
+                    and len((getattr(j, "description", None) or "").strip()) > 20
+                }
+                analyzed_links = {canonical_link(m.job.link) for m in self.analyzed_matches}
+                decided_links = {canonical_link(l) for l in self.user_decisions}
                 pending = len((valid_db_links - analyzed_links) - decided_links)
 
             today = datetime.now().date()
@@ -901,67 +896,101 @@ def open_local_cv_pdf() -> Tuple[bool, str]:
         return False, f"Nie udało się otworzyć pliku: {e}"
 
 
-def get_api_keys_info() -> Dict[str, Any]:
-    base = Path(__file__).parent
-    env_path = base / ".env"
-    gemini_keys = []
-
-    if env_path.exists():
-        try:
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if "=" in line and not line.startswith("#"):
-                    k, v = line.split("=", 1)
-                    k, v = k.strip(), v.strip()
-                    if k.startswith("GEMINI_API_KEY") and v and v not in _PLACEHOLDERS:
-                        gemini_keys.append((k, v))
-        except Exception as e:
-            logger.warning(f"Błąd czytania .env: {e}")
-
-    if not gemini_keys:
-        for k in ("GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY_1", "GEMINI_API_KEY"):
-            v = os.getenv(k, "").strip()
-            if v and v not in _PLACEHOLDERS:
-                gemini_keys.append((k, v))
-
-    primary_key = next((v for k, v in gemini_keys if k == "GEMINI_API_KEY_PRIMARY"), "")
-    if not primary_key and gemini_keys:
-        primary_key = gemini_keys[0][1]
-
-    has_key = bool(primary_key)
-    masked = f"{primary_key[:4]}…{primary_key[-4:]}" if len(primary_key) > 8 else ("skonfigurowany" if primary_key else "brak")
-
-    return {
-        "ready": has_key,
-        "count": len(gemini_keys),
-        "primary_masked": masked,
-    }
+ENV_PATH = Path(__file__).parent / ".env"
 
 
-def save_quick_gemini_key(new_key: str):
-    env_path = Path(__file__).parent / ".env"
-    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    written, out = False, []
+def _read_env_file() -> Dict[str, str]:
+    """Niepuste wpisy z .env. Plik jest źródłem prawdy dla UI: edycja ręczna
+    też ma być widoczna bez restartu serwera."""
+    values: Dict[str, str] = {}
+    if not ENV_PATH.exists():
+        return values
+    try:
+        for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip()
+                if v and v not in PLACEHOLDERS:
+                    values[k] = v
+    except OSError as e:
+        logger.warning(f"Błąd odczytu .env: {e}")
+    return values
+
+
+def _write_env(updates: Dict[str, str]) -> None:
+    """Podmienia albo dopisuje wpisy w .env (pusta wartość = wpis wyczyszczony)
+    i od razu w środowisku procesu - pipeline startuje z jego kopią."""
+    lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else []
+    written, out = set(), []
     for line in lines:
         if "=" in line and not line.strip().startswith("#"):
             k = line.split("=", 1)[0].strip()
-            if k == "GEMINI_API_KEY_PRIMARY":
-                out.append(f"GEMINI_API_KEY_PRIMARY={new_key}")
-                written = True
+            if k in updates:
+                out.append(f"{k}={updates[k]}")
+                written.add(k)
                 continue
         out.append(line)
-    if not written:
-        out.append(f"GEMINI_API_KEY_PRIMARY={new_key}")
-    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
-    os.environ["GEMINI_API_KEY_PRIMARY"] = new_key
+    out.extend(f"{k}={v}" for k, v in updates.items() if k not in written)
+    ENV_PATH.write_text("\n".join(out) + "\n", encoding="utf-8")
+    for k, v in updates.items():
+        os.environ[k] = v
 
 
-ENV_FIELDS = [
-    ("GEMINI_API_KEY_PRIMARY", "Gemini - klucz główny", True),
-    ("GEMINI_API_KEY_1", "Gemini - zapas 1", True),
-    ("GEMINI_API_KEY_2", "Gemini - zapas 2", True),
-    ("GEMINI_API_KEY_3", "Gemini - zapas 3", True),
-    ("GEMINI_API_KEY_4", "Gemini - zapas 4", True),
+def _llm_settings():
+    return settings_from_env({**os.environ, **_read_env_file()})
+
+
+def get_api_keys_info() -> Dict[str, Any]:
+    """Stan dostawcy modelu dla UI - bez wartości kluczy."""
+    s = _llm_settings()
+    primary = s.api_keys[0] if s.api_keys else ""
+    return {
+        "ready": not s.error,
+        "error": s.error,
+        "count": len(s.api_keys),
+        "primary_masked": f"{primary[:4]}…{primary[-4:]}" if len(primary) > 8 else ("ustawiony" if primary else "brak"),
+        "provider": s.provider.id,
+        "models": s.models,
+        "models_custom": s.models_overridden,
+        "base_url": s.base_url,
+        "providers": [
+            {
+                "id": p.id,
+                "label": p.label,
+                "key_env": p.key_envs[0],
+                "key_hint": p.key_hint,
+                "models_env": p.models_env,
+                "default_models": list(p.default_models),
+                "base_url_env": p.base_url_env,
+                "default_base_url": p.default_base_url,
+            }
+            for p in PROVIDERS.values()
+        ],
+    }
+
+
+def save_llm_settings(provider: str, key: str = "", models: Optional[str] = None,
+                      base_url: Optional[str] = None) -> Tuple[bool, str]:
+    """Zapisuje wybór dostawcy. Pusty klucz zostawia dotychczasowy; `models` i
+    `base_url` podane jako pusty tekst wracają do wartości domyślnych dostawcy."""
+    p = PROVIDERS.get(provider)
+    if p is None:
+        return False, f"Nieznany dostawca: {provider}"
+    updates = {"LLM_PROVIDER": p.id}
+    if key.strip():
+        updates[p.key_envs[0]] = key.strip()
+    if models is not None:
+        updates[p.models_env] = ", ".join(m.strip() for m in models.split(",") if m.strip())
+    if base_url is not None and p.base_url_env:
+        updates[p.base_url_env] = base_url.strip()
+    try:
+        _write_env(updates)
+    except OSError as e:
+        return False, f"Błąd zapisu .env: {e}"
+    return True, f"Zapisano ustawienia modelu ({p.label}) w .env."
+
+
+_PORTAL_FIELDS = [
     ("ADZUNA_APP_ID", "Adzuna App ID", False),
     ("ADZUNA_APP_KEY", "Adzuna App Key", True),
     ("JOOBLE_API_KEY", "Jooble API Key", True),
@@ -969,58 +998,36 @@ ENV_FIELDS = [
 ]
 
 
+def _env_fields() -> List[Tuple[str, str, bool]]:
+    """Zapasowe klucze wybranego dostawcy i klucze portali. Klucz główny ma własne
+    pole w ustawieniach modelu (save_llm_settings)."""
+    p = _llm_settings().provider
+    backups = [(name, f"{p.label} - zapas {i}", True) for i, name in enumerate(p.key_envs[1:], 1)]
+    return backups + _PORTAL_FIELDS
+
+
 def get_env_fields_status() -> List[Dict[str, Any]]:
     """Zwraca metadane pól .env bez wysyłania wartości sekretów do przeglądarki."""
-    env_path = Path(__file__).parent / ".env"
-    configured_keys = set()
-    if env_path.exists():
-        try:
-            for line in env_path.read_text(encoding="utf-8").splitlines():
-                if "=" in line and not line.strip().startswith("#"):
-                    k, v = line.split("=", 1)
-                    k, v = k.strip(), v.strip()
-                    if v and v not in _PLACEHOLDERS:
-                        configured_keys.add(k)
-        except OSError as e:
-            logger.warning(f"Błąd odczytu .env: {e}")
-
-    out = []
-    for key, label, secret in ENV_FIELDS:
-        out.append({
-            "key": key,
-            "label": label,
-            "secret": secret,
-            "configured": key in configured_keys,
-        })
-    return out
+    configured = _read_env_file()
+    return [
+        {"key": key, "label": label, "secret": secret, "configured": key in configured}
+        for key, label, secret in _env_fields()
+    ]
 
 
 def save_env_keys(updates: Dict[str, str]) -> Tuple[bool, str]:
-    env_path = Path(__file__).parent / ".env"
-    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
-    written, out = set(), []
-    # Filter out empty or whitespace-only values that weren't changed
-    clean_updates = {k: v.strip() for k, v in updates.items() if v is not None and v.strip() != ""}
-
-    for line in lines:
-        if "=" in line and not line.strip().startswith("#"):
-            k = line.split("=", 1)[0].strip()
-            if k in clean_updates:
-                out.append(f"{k}={clean_updates[k]}")
-                written.add(k)
-                continue
-        out.append(line)
-    for k, v in clean_updates.items():
-        if k not in written:
-            out.append(f"{k}={v}")
+    """Zapis kluczy z formularza. Puste pola zostawiają dotychczasową wartość.
+    Przyjmuje tylko znane klucze - formularz nie może dopisać dowolnej zmiennej."""
+    allowed = {k for p in PROVIDERS.values() for k in p.key_envs} | {k for k, _, _ in _PORTAL_FIELDS}
+    unknown = sorted(k for k in updates if k not in allowed)
+    if unknown:
+        return False, f"Nieobsługiwane pola: {', '.join(unknown)}"
+    clean_updates = {k: v.strip() for k, v in updates.items() if v is not None and v.strip()}
     try:
-        env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
-        # Update process env for immediately visible changes
-        for k, v in clean_updates.items():
-            os.environ[k] = v
-        return True, "Zapisano klucze w .env."
-    except Exception as e:
+        _write_env(clean_updates)
+    except OSError as e:
         return False, f"Błąd zapisu .env: {e}"
+    return True, "Zapisano klucze w .env."
 
 
 def _get_chromium_executable_path() -> Optional[str]:
@@ -1061,7 +1068,7 @@ def check_pipeline_prerequisites() -> Dict[str, Any]:
     if not cv_info["ready"]:
         issues.append("Brak aktywnego CV (dodaj plik lub wklej treść w lewym panelu).")
     if not api_info["ready"]:
-        issues.append("Brak klucza Gemini API (skonfiguruj w .env lub lewym panelu).")
+        issues.append(api_info["error"])
 
     ready_skip = len(issues) == 0 and db_count > 0
     if db_count == 0:

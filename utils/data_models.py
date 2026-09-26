@@ -6,6 +6,7 @@ from dataclasses import dataclass, fields as dc_fields
 from typing import Optional
 import json
 import threading
+from utils.safe_io import save_json_atomic
 
 
 @dataclass
@@ -23,8 +24,8 @@ class Job:
     # Twardy sygnał martwej oferty - nie trzeba niczego szacować.
     valid_through: Optional[str] = None
     # Kiedy ofertę widzieliśmy OSTATNI raz i w ilu przebiegach się pojawiła.
-    # To jedyny sygnał wieku działający dla źródeł, które nie podają żadnej daty
-    # (Pracuj.pl to 62% bazy) - ogłoszenie wiszące tygodniami samo się zdradza.
+    # `last_seen` wykrywa oferty zdjęte z portalu (utils/liveness.py) - także
+    # dla źródeł, które nie podają żadnej daty (Pracuj.pl to 62% bazy).
     last_seen: Optional[str] = None
     times_seen: int = 1
     # Pozostałe portale, na których wisi ta sama oferta - wypełniane przez
@@ -185,9 +186,8 @@ class JobDatabase:
         """
         Odnotuj, że oferta nadal wisi na portalu.
 
-        `last_seen` i `times_seen` to jedyny sygnał wieku dla źródeł, które nie
-        podają żadnej daty (Pracuj.pl to 62% bazy) - ogłoszenie wiszące
-        tygodniami samo się zdradza liczbą przebiegów, w których je widziano.
+        `last_seen` to podstawa wykrywania ofert zdjętych z portalu
+        (utils/liveness.py); działa także dla źródeł, które nie podają żadnej daty.
         """
         job.last_seen = now
         job.times_seen = (job.times_seen or 1) + 1
@@ -346,5 +346,4 @@ class ScraperStatusManager:
             return {}
 
     def _write(self, data: dict):
-        with open(self.filepath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        save_json_atomic(self.filepath, data, backup=False)

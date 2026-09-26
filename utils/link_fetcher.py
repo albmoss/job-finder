@@ -122,15 +122,21 @@ with sync_playwright() as p:
                     found_title = None
                     found_company = None
                     found_city = None
+                    found_desc = None
                     
                     def find_job_info(d):
-                        nonlocal found_title, found_company, found_city
+                        nonlocal found_title, found_company, found_city, found_desc
                         if isinstance(d, dict):
                             # JJIT zwykle ma '__typename': 'Offer'
                             if d.get('__typename') == 'Offer':
                                 if d.get('title'): found_title = d['title']
                                 if d.get('companyName'): found_company = d['companyName']
                                 if d.get('city'): found_city = d['city']
+                                if not found_desc:
+                                    if d.get('body') and isinstance(d['body'], str) and len(d['body'].strip()) > 20:
+                                        found_desc = d['body']
+                                    elif d.get('description') and isinstance(d['description'], str) and len(d['description'].strip()) > 20:
+                                        found_desc = d['description']
                                 
                             # zapas: ogólne klucze w stanie
                             if not found_title and 'title' in d and isinstance(d['title'], str) and len(d['title']) > 3:
@@ -138,6 +144,13 @@ with sync_playwright() as p:
                                     found_title = d['title']
                                     found_company = d['companyName']
                                     if 'city' in d: found_city = d['city']
+                                    
+                            if not found_desc:
+                                for key in ('body', 'description'):
+                                    val = d.get(key)
+                                    if isinstance(val, str) and len(val.strip()) > 50:
+                                        found_desc = val
+                                        break
                                     
                             for dict_val in d.values():
                                 find_job_info(dict_val)
@@ -150,46 +163,61 @@ with sync_playwright() as p:
                     if found_title: result["title"] = found_title
                     if found_company: result["company"] = found_company
                     if found_city: result["location"] = found_city
-                    
-                    if result["title"]:
-                        return result  # Jeśli JJIT się udał, kończymy tutaj
+                    if found_desc:
+                        from utils.text_cleaner import strip_html
+                        result["description"] = strip_html(found_desc)
                 except Exception as ex:
                     logger.warning(f"Failed to parse JustJoin NEXT_DATA: {ex}")
             
-        # 1. Try to get title
-        title_tag = soup.find('title')
-        page_title = title_tag.text.strip() if title_tag else ""
-        
-        # Tytuł z Open Graph jako zapas
-        og_title = soup.find("meta", property="og:title")
-        if og_title and og_title.get("content"):
-             page_title = og_title["content"].strip()
-             
-        # Heurystyka na tytuł - typowe formaty to „Stanowisko at Firma”
-        # albo „Stanowisko - Firma - Lokalizacja”
-        if page_title:
-            title_set = False
-            # JustJoin.it: „Stanowisko (Poziom) - Firma”
-            if 'justjoin.it' in domain and " - " in page_title:
-                parts = page_title.split(" - ")
-                result["title"] = parts[0].strip()
-                result["company"] = parts[-1].strip()
-                title_set = True
+        # 1. Try to get title (jeśli nie znaleziono w stanie strony)
+        if not result["title"]:
+            title_tag = soup.find('title')
+            page_title = title_tag.text.strip() if title_tag else ""
+            
+            # Tytuł z Open Graph jako zapas
+            og_title = soup.find("meta", property="og:title")
+            if og_title and og_title.get("content"):
+                 page_title = og_title["content"].strip()
+                 
+            # Heurystyka na tytuł - typowe formaty to „Stanowisko at Firma”
+            # albo „Stanowisko - Firma - Lokalizacja”
+            if page_title:
+                title_set = False
+                # JustJoin.it: „Stanowisko (Poziom) - Firma”
+                if 'justjoin.it' in domain and " - " in page_title:
+                    parts = page_title.split(" - ")
+                    result["title"] = parts[0].strip()
+                    result["company"] = parts[-1].strip()
+                    title_set = True
+                    
+                if not title_set:
+                    separators = [" at ", " w ", " | ", " - ", " – "]
+                    for sep in separators:
+                        if sep in page_title:
+                            parts = page_title.split(sep)
+                            if len(parts) >= 2:
+                                result["title"] = parts[0].strip()
+                                result["company"] = parts[-1].strip() if " at " not in sep else parts[1].strip()
+                                title_set = True
+                                break
+                    
+                if not title_set:
+                    result["title"] = page_title
                 
-            if not title_set:
-                separators = [" at ", " w ", " | ", " - ", " – "]
-                for sep in separators:
-                    if sep in page_title:
-                        parts = page_title.split(sep)
-                        if len(parts) >= 2:
-                            result["title"] = parts[0].strip()
-                            result["company"] = parts[-1].strip() if " at " not in sep else parts[1].strip()
-                            title_set = True
-                            break
+        # 2. Try to get Description from meta (jeśli nie pobrano np. z __NEXT_DATA__)
+        placeholder = "Brak opisu (Opcja dodana ręcznie z linku)"
+        if not result.get("description") or result["description"] == placeholder:
+            og_desc = soup.find("meta", property="og:description")
+            meta_desc = soup.find("meta", attrs={"name": "description"})
+            
+            desc = ""
+            if og_desc and og_desc.get("content"):
+                desc = og_desc["content"].strip()
+            elif meta_desc and meta_desc.get("content"):
+                desc = meta_desc["content"].strip()
                 
-            if not title_set:
-                result["title"] = page_title
-                
+            if desc:
+                result["description"] = desc
         if 'justjoin.it' in domain and not result["company"]:
             # JustJoin.it trzyma nazwę firmy w pojedynczym h2
             h2s = soup.find_all('h2')
@@ -198,19 +226,6 @@ with sync_playwright() as p:
                     result["company"] = h2.text.strip()
                     break
                  
-        # 2. Try to get Description from meta
-        og_desc = soup.find("meta", property="og:description")
-        meta_desc = soup.find("meta", attrs={"name": "description"})
-        
-        desc = ""
-        if og_desc and og_desc.get("content"):
-            desc = og_desc["content"].strip()
-        elif meta_desc and meta_desc.get("content"):
-            desc = meta_desc["content"].strip()
-            
-        if desc:
-            result["description"] = desc
-            
         if not result["title"]:
              result["title"] = "Nie udało się pobrać tytułu"
              

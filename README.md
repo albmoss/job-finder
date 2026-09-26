@@ -5,14 +5,14 @@
 **Every job board in Poland, read overnight and ranked against one CV.**
 
 ![Python](https://img.shields.io/badge/Python-5A70FF?style=flat-square&logo=python&logoColor=white)
-![Gemini API](https://img.shields.io/badge/Gemini_API-8B5CFF?style=flat-square&logo=googlegemini&logoColor=white)
+![LLM: Gemini · OpenAI · Claude · local](https://img.shields.io/badge/LLM-Gemini_%C2%B7_OpenAI_%C2%B7_Claude_%C2%B7_local-8B5CFF?style=flat-square)
 ![Playwright](https://img.shields.io/badge/Playwright-5A70FF?style=flat-square)
 ![Starlette](https://img.shields.io/badge/Starlette-5A70FF?style=flat-square)
 ![React 19](https://img.shields.io/badge/React_19-5A70FF?style=flat-square&logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5A70FF?style=flat-square&logo=typescript&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-5A70FF?style=flat-square&logo=vite&logoColor=white)
 
-[How it works](#how-it-works) · [Pipeline](#pipeline) · [Quick start](#quick-start) · [Design notes](#design-notes)
+[How it works](#how-it-works) · [Pipeline](#pipeline) · [Quick start](#quick-start) · [Model provider](#model-provider) · [Design notes](#design-notes)
 
 <br>
 
@@ -26,21 +26,42 @@
 
 Ten job boards go in, one ranked list comes out. Every offer gets a match score against my
 CV, and I decide on it in one click. Those decisions feed back into the prompt that scores
-the next batch.
+the next run. Violet comes from me, blue runs on its own.
 
 ```mermaid
-flowchart LR
-    boards["10 job<br/>boards"] --> clean["Clean<br/>& dedupe"]
-    clean --> score["Gemini<br/>scoring"]
-    score --> ui["Ranked<br/>list"]
-    ui --> ratings(["My<br/>ratings"])
-    ratings -. "contrasting pairs" .-> profile[("Preference<br/>profile")]
+flowchart TB
+    subgraph setup["1 · Set up"]
+        cv(["Upload CV"])
+        provider(["Pick model provider<br/>and API key"])
+    end
+
+    subgraph pipeline["2 · Pipeline"]
+        boards["Scrape, clean & dedupe<br/>10 job boards"] --> score["LLM scoring<br/>vs CV + profile"]
+    end
+
+    subgraph review["3 · Review"]
+        list["Ranked list<br/>match %, highlights, gaps"] --> decide(["Save · Apply<br/>Aspire · Reject<br/>rate 1–10"])
+    end
+
+    subgraph act["4 · Follow up"]
+        board(["Applications board<br/>stage + next step"])
+        gaps(["Skill gaps<br/>what the CV lacks"])
+    end
+
+    cv --> boards
+    provider -- "accept API cost, run" --> boards
+    score --> list
+    decide --> board
+    list --> gaps
+    decide -. "contrasting pairs" .-> profile[("Preference<br/>profile")]
     profile -. "rewrites the prompt" .-> score
 
     classDef step fill:#161a33,stroke:#5A70FF,stroke-width:1.5px,color:#ffffff
     classDef me fill:#241a3d,stroke:#8B5CFF,stroke-width:1.5px,color:#ffffff
-    class boards,clean,score,ui step
-    class ratings,profile me
+    classDef stage fill:none,stroke:#5A70FF,stroke-width:1px,stroke-dasharray:4 4,color:#8b93c9
+    class boards,score,list step
+    class cv,provider,decide,board,gaps,profile me
+    class setup,pipeline,review,act stage
 ```
 
 ## Pipeline
@@ -55,7 +76,7 @@ One command, seven stages, always in this order. A failed stage stops the run, a
 | 1.5 | `migrate_normalize_links` | the same offer under `?utm_source=…` must not count twice |
 | 2 | `deduplicate_db` | one offer often sits on four boards at once |
 | 2.5 | `clean_db` | trims boilerplate so scoring does not burn tokens on it |
-| 3 | `waterfall_analysis` | cheap model first, stronger one for what it declines; API keys rotate |
+| 3 | `waterfall_analysis` | a cascade of models from the chosen provider; API keys rotate |
 | 4 | `eval_ranking` | checks the ranking against ratings I entered by hand |
 
 <div align="center">
@@ -69,7 +90,7 @@ One command, seven stages, always in this order. A failed stage stops the run, a
 ```bash
 pip install -r requirements.txt
 playwright install chromium
-cp .env.example .env                      # your Gemini API key(s)
+cp .env.example .env                      # pick a model provider, add its API key
 
 cd frontend && npm install && npm run build && cd ..
 PYTHONIOENCODING=utf-8 python server.py   # → http://127.0.0.1:8501
@@ -100,10 +121,39 @@ Success is exit code 0 **and** `PIPELINE COMPLETE`. For frontend work, `npm run 
 
 </details>
 
+## Model provider
+
+Scoring is not tied to one vendor. Set `LLM_PROVIDER` in `.env` or switch it in the UI
+before a run:
+
+| `LLM_PROVIDER` | Key | Default cascade |
+|---|---|---|
+| `gemini` (default) | `GEMINI_API_KEY_PRIMARY` | `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` → `gemini-3.6-flash` → `gemini-2.5-flash` |
+| `openai` | `OPENAI_API_KEY` | `gpt-6-luna` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` → `claude-sonnet-5` |
+
+`openai` speaks the Chat Completions API, so `OPENAI_BASE_URL` points it at any compatible
+server: OpenRouter, Groq, DeepSeek, Mistral, or a local Ollama / LM Studio. Your own cascade
+goes in `GEMINI_MODELS`, `OPENAI_MODELS` or `ANTHROPIC_MODELS`, comma-separated, first choice
+first. Extra keys (`…_1` to `…_4`) rotate when one hits a rate limit.
+
+```bash
+# a local model through Ollama, no API bill
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=http://localhost:11434/v1
+OPENAI_API_KEY=ollama
+OPENAI_MODELS=qwen3:14b
+```
+
+Every provider gets the same prompt and the same JSON schema. Only the Gemini cascade is
+benchmarked against my ratings; run `python benchmark_models.py <model> …` before trusting
+another one.
+
 ## Design notes
 
-- **Two models, not one.** The cheap one scores the bulk, the stronger one takes what it
-  declines. `benchmark_models.py` decides which sits where.
+- **A cascade, not one model.** The first model scores the bulk; when it hits a limit or
+  fails, the run moves to the next key, then down the list. `benchmark_models.py` decides
+  the order.
 - **The profile is built from contrasts.** Near-identical offers I rated differently teach the
   model more than a pile of good examples.
 - **Scores are never silently redone.** Existing scores stay; `--rescore-changed` and
