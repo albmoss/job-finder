@@ -52,9 +52,6 @@ TOKENS = {
     "mono": "'Geist Mono', ui-monospace, 'Cascadia Mono', monospace",
 }
 
-FONT_URL = "https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap"
-
-
 # Barwy stanów decyzji są wspólne dla wszystkich schematów - to one budują
 # pamięć wzrokową ("zielone = wysłane") i nie powinny się zmieniać razem
 # z akcentem. Każdy akcent musi być od nich odsunięty na kole barw, inaczej

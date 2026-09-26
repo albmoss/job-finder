@@ -8,7 +8,8 @@ import {
   Play,
   RefreshCw,
 } from 'lucide-react';
-import type { CVInfo, EnvField, PipelinePrerequisites } from '../types';
+import type { CVInfo, EnvKeysResponse, PipelinePrerequisites } from '../types';
+import { KEYS, plural } from '../plural';
 import { CvEditor, KeysEditor } from './PipelineSetup';
 import '../styles/pipeline.css';
 
@@ -19,7 +20,7 @@ export interface PipelineLaunchModalProps {
   onClose: () => void;
   prerequisites: PipelinePrerequisites | null;
   cvInfo: CVInfo | null;
-  envFields: EnvField[];
+  envKeys: EnvKeysResponse | null;
   onStartPipeline: (mode: PipelineMode) => void;
   onRefreshPrerequisites: () => void;
   onRefreshCV: () => void;
@@ -32,7 +33,7 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
   onClose,
   prerequisites,
   cvInfo,
-  envFields,
+  envKeys,
   onStartPipeline,
   onRefreshPrerequisites,
   onRefreshCV,
@@ -93,7 +94,8 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
     onRefreshEnvKeys();
   };
 
-  const configuredKeysCount = envFields.filter((f) => f.configured).length;
+  const llm = envKeys?.api_info;
+  const llmLabel = llm?.providers.find((p) => p.id === llm.provider)?.label ?? 'model';
   const dbCount = prerequisites?.db_count ?? 0;
 
   // Wiersze gotowości
@@ -212,11 +214,11 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
             <span className={`pp-ready-icon ${keysOk ? 'is-ok' : 'is-warn'}`}>
               {keysOk ? <Check size={15} /> : <AlertTriangle size={15} />}
             </span>
-            <span className="pp-ready-label">Klucze API</span>
+            <span className="pp-ready-label">Model AI</span>
             <span className="pp-ready-val">
-              {keysOk
-                ? `Gemini gotowy · ${configuredKeysCount} wpisów w .env`
-                : 'brak klucza Gemini'}
+              {keysOk && llm
+                ? `${llmLabel} · ${llm.models[0]} · ${llm.count} ${plural(llm.count, KEYS)}`
+                : llm?.error || 'brak klucza API'}
             </span>
             <button
               type="button"
@@ -263,9 +265,9 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
         {activeSetup === 'keys' && (
           <div className="pp-setup-drawer">
             <div className="pp-setup-head">
-              <span>Konfiguracja kluczy API</span>
+              <span>Model AI i klucze API</span>
             </div>
-            <KeysEditor envFields={envFields} full onSaved={refreshAll} showToast={showToast} />
+            <KeysEditor envKeys={envKeys} full onSaved={refreshAll} showToast={showToast} />
           </div>
         )}
 

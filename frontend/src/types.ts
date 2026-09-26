@@ -246,10 +246,28 @@ export interface EnvField {
   configured: boolean;
 }
 
+export interface LlmProvider {
+  id: string;
+  label: string;
+  key_env: string;
+  key_hint: string;
+  models_env: string;
+  default_models: string[];
+  base_url_env: string;
+  default_base_url: string;
+}
+
+/** Stan dostawcy modelu oceniającego oferty (LLM_PROVIDER w .env). */
 export interface ApiKeysInfo {
   ready: boolean;
+  error: string;
   count: number;
   primary_masked: string;
+  provider: string;
+  models: string[];
+  models_custom: boolean;
+  base_url: string;
+  providers: LlmProvider[];
 }
 
 export interface EnvKeysResponse {
@@ -267,7 +285,6 @@ export interface PipelinePrerequisites {
   playwright_ready: boolean;
   playwright_msg: string;
   db_count: number;
-  model?: string;
 }
 
 export interface ApplicationItem {

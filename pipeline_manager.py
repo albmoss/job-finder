@@ -4,8 +4,6 @@ Niezależny od bibliotek UI menedżer cyklu życia procesu, bezpiecznego zatrzym
 """
 
 from collections import deque
-from datetime import datetime
-import json
 import logging
 import os
 from pathlib import Path
@@ -987,7 +985,3 @@ class PipelineProcessManager:
                 "progress_label": "Oczekuje na uruchomienie" if not can_resume_fallback else "Gotowy do wznowienia",
             }
 
-
-def get_pipeline_manager():
-    """Zwraca globalny singleton PipelineProcessManager."""
-    return PipelineProcessManager.get_instance()

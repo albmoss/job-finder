@@ -1,8 +1,5 @@
-from google import genai
-from google.genai import types
 from pydantic import BaseModel
 import argparse
-import hashlib
 import json
 import time
 import os
@@ -13,7 +10,8 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import GEMINI_API_KEYS
+from config import LLM
+from utils.llm import LLMError, ask_json, mask_key
 from utils.links import canonical_link
 from utils.safe_io import save_json_atomic, rotate_backup
 from utils.console import force_utf8
@@ -32,9 +30,9 @@ class JobEval(BaseModel):
 
 BATCH_SIZE = 75
 
-# Darmowy plan Gemini liczy zapytania na minutę, więc liczy się odstęp MIĘDZY
-# zapytaniami, a nie sen przed każdym. Batch sam w sobie trwa 15-40 s (patrz
-# tabela modeli niżej), więc limit zwykle mija sam i nie ma na co czekać.
+# Darmowe plany (np. Gemini) liczą zapytania na minutę, więc liczy się odstęp MIĘDZY
+# zapytaniami, a nie sen przed każdym. Batch sam w sobie trwa 15-40 s, więc limit
+# zwykle mija sam i nie ma na co czekać.
 MIN_REQUEST_INTERVAL = 5    # sekundy od poprzedniego zapytania
 RETRY_INTERVAL = 15         # dłuższy odstęp po nieudanej próbie
 
@@ -45,7 +43,6 @@ MAX_STALLS = 3
 STALL_COOLDOWN = 300        # sekundy przerwy między rundami
 
 _last_request_at = 0.0
-_clients = {}
 
 
 def _wait_for_slot(interval: float):
@@ -57,26 +54,10 @@ def _wait_for_slot(interval: float):
     _last_request_at = time.monotonic()
 
 
-def _client_for(api_key: str):
-    """Klient genai per klucz. Tworzenie go od nowa przy każdej próbie zawiązuje
-    nowe połączenie HTTP, a kluczy jest kilka i wracają w rotacji."""
-    if api_key not in _clients:
-        _clients[api_key] = genai.Client(api_key=api_key)
-    return _clients[api_key]
-
-# Kolejność ustalona empirycznie (benchmark_models.py na 53 ofertach ocenionych
-# ręcznie, 3 przebiegi). Korelacja Spearmana z ocenami użytkownika / czas na batch:
-#   gemini-3.5-flash-lite   +0.840   15s   <- najlepsza korelacja, najszybszy
-#   gemini-3.1-flash-lite   +0.833   16s   <- najlepszy MAE (0.91), remis w korelacji
-#   gemini-3.6-flash        +0.802   40s   <- gorszy MIMO że nowszy i większy
-#   gemini-2.5-flash        +0.664  100s   <- ostatnia deska ratunku
-#
-# Wniosek wbrew intuicji: modele "lite" wygrywają. To zadanie to klasyfikacja
-# wg jawnej rubryki (profil preferencji), a nie otwarte rozumowanie - większy
-# model nie ma tu czego dołożyć, a na darmowym planie kosztuje czas i limity.
-# Zanim zmienisz tę listę, uruchom benchmark_models.py.
-MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]
-API_KEYS = GEMINI_API_KEYS
+# Kaskada modeli i pula kluczy wybranego dostawcy (LLM_PROVIDER w .env). Domyślna
+# kaskada Gemini jest ustalona benchmarkiem - tabela i wnioski w utils/llm.py.
+MODELS = LLM.models
+API_KEYS = LLM.api_keys
 INPUT_DB = "jobs_database.json"
 OUTPUT_FILE = "analyzed_jobs_waterfall.json"
 CV_FILE = "final_cv_text.txt"
@@ -89,15 +70,18 @@ def is_stop_requested() -> bool:
 
 
 def load_api_state():
+    """(klucz, model, start rescore_all). Para klucz/model obowiązuje tylko u tego
+    samego dostawcy - po zmianie LLM_PROVIDER indeksy wskazywałyby cudze modele."""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 state = json.load(f)
-                return (
-                    state.get("current_key_val", 0),
-                    state.get("current_model_idx", 0),
-                    state.get("rescore_all_started_at"),
-                )
+            same = state.get("provider", "gemini") == LLM.provider.id
+            return (
+                state.get("current_key_val", 0) if same else 0,
+                state.get("current_model_idx", 0) if same else 0,
+                state.get("rescore_all_started_at"),
+            )
         except Exception:
             pass
     return 0, 0, None
@@ -105,7 +89,7 @@ def load_api_state():
 
 def save_api_state(key_val, model_idx, rescore_all_started_at=None):
     try:
-        data = {"current_key_val": key_val, "current_model_idx": model_idx}
+        data = {"provider": LLM.provider.id, "current_key_val": key_val, "current_model_idx": model_idx}
         if rescore_all_started_at is not None:
             data["rescore_all_started_at"] = rescore_all_started_at
         with open(STATE_FILE, "w", encoding="utf-8") as f:
@@ -470,7 +454,7 @@ def _rotation(model_idx: int, key_idx: int):
 
     Najpierw wszystkie klucze dla bieżącego modelu, dopiero potem model niżej
     w kaskadzie: zmiana klucza nic nie kosztuje, a zejście na słabszy model
-    kosztuje jakość oceny (patrz tabela korelacji przy MODELS).
+    kosztuje jakość oceny (patrz tabela korelacji w utils/llm.py).
     """
     keys = list(range(key_idx, len(API_KEYS))) + list(range(key_idx))
     for m in list(range(model_idx, len(MODELS))) + list(range(model_idx)):
@@ -480,43 +464,21 @@ def _rotation(model_idx: int, key_idx: int):
         keys = list(range(len(API_KEYS)))
 
 
-def _classify(err: str) -> str:
-    """Czy z tego błędu wychodzi się zmianą klucza, czy podziałem batcha?"""
-    if "429" in err or "403" in err or "ResourceExhausted" in err:
-        return "rate_limit"
-    if "Expecting" in err or "Unterminated" in err or "JSON Validate Err" in err:
-        return "truncated"
-    if "API_KEY_INVALID" in err or "API key not valid" in err:
-        return "invalid_key"
-    return "other"
-
-
 def _ask_model(model_name: str, api_key: str, prompt: str, attempt: int) -> list:
-    """Jedno zapytanie do modelu. Błędów nie tłumaczy - od tego jest _classify."""
+    """Jedno zapytanie do modelu. Błędy przychodzą jako LLMError z rodzajem (`kind`)."""
     # Po nieudanej próbie odczekaj dłużej; poza tym pilnuj tylko minimalnego
     # odstępu MIĘDZY zapytaniami. Batch sam trwa 15-40 s, więc limit z darmowego
     # planu zwykle mija w jego trakcie i nie ma na co czekać osobno.
     _wait_for_slot(RETRY_INTERVAL if attempt > 1 else MIN_REQUEST_INTERVAL)
-
-    response = _client_for(api_key).models.generate_content(
-        model=model_name,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=list[JobEval],
-            max_output_tokens=65535,
-            temperature=0.3,
-        ),
-    )
-    return json.loads(response.text)
+    return ask_json(LLM, model_name, api_key, prompt, JobEval).data
 
 
 def _entries_from(parsed, batch, model_name, profile_ver):
     """Odpowiedź modelu -> wpisy wynikowe. Zwraca (wpisy, zbiór ocenionych ID)."""
     entries, seen_ids = [], set()
     for item in parsed:
-        idx = item.get("id")
-        if idx is None or not (0 <= idx < len(batch)) or idx in seen_ids:
+        idx = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(idx, int) or not (0 <= idx < len(batch)) or idx in seen_ids:
             continue
         seen_ids.add(idx)
         job = batch[idx]
@@ -557,16 +519,14 @@ def score_batch(batch, prompt, model_idx, key_idx, profile_ver):
         last_model = m_idx
 
         model_name, api_key = MODELS[m_idx], API_KEYS[k_idx]
-        masked = api_key[:4] + "..." + api_key[-4:]
+        masked = mask_key(api_key)
 
         for attempt in (1, 2):
             print(f"   Model: {model_name} | Key[{k_idx}] {masked} | Try: {attempt}")
             try:
                 parsed = _ask_model(model_name, api_key, prompt, attempt)
-            except json.JSONDecodeError as e:
-                raise ToxicBatch(str(e)[:80])
             except Exception as e:
-                kind = _classify(str(e))
+                kind = e.kind if isinstance(e, LLMError) else "other"
                 if kind == "truncated":
                     raise ToxicBatch(str(e)[:80])
                 if kind == "rate_limit":
@@ -610,9 +570,10 @@ def main(rescore_all: bool = False, rescore_changed: bool = False, resume: bool 
     # po kluczach nie wykonywała się ani razu, każdy batch kończył się "porażką
     # na wszystkich modelach", a etap spał po 5 minut i próbował w nieskończoność.
     if not API_KEYS:
-        print("ERROR: no Gemini API key configured "
-              "- set GEMINI_API_KEY_PRIMARY in .env (see .env.example).")
+        print(f"ERROR: {LLM.error or 'no API key configured (see .env.example).'}")
         return False
+    print(f"LLM provider: {LLM.provider.label} | models: {', '.join(MODELS)} "
+          f"| keys: {len(API_KEYS)}")
 
     cv_text = load_cv()
     all_jobs = load_jobs()

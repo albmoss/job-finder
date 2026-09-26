@@ -14,8 +14,6 @@ KEY IMPROVEMENTS OVER V2:
 Run this BEFORE waterfall_analysis.py to get the best results.
 """
 
-from google import genai
-from google.genai import types
 import json
 import os
 import sys
@@ -25,18 +23,17 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import GEMINI_API_KEYS
+from config import LLM
+from utils.llm import ask_json, mask_key
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe
 from utils.console import force_utf8
 
-# UWAGA: tutaj celowo INNA kolejność niż w waterfall_analysis.py.
+# UWAGA: profil ma własną kolejność modeli (LLM.profile_models), inną niż ocena ofert.
 # Tam mamy tysiące wywołań klasyfikujących wg gotowej rubryki - wygrywają modele lite.
 # Tutaj jest JEDNO wywołanie robiące otwartą syntezę preferencji z przykładów,
 # a jego wynik (profil) wpływa potem na każdą ocenę. Mocniejszy model się opłaca:
 # jeden wolniejszy call raz na jakiś czas kosztuje nic, a lepszy profil zyskuje wszystko.
-MODELS = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash"]
-API_KEYS = GEMINI_API_KEYS
 INPUT_DB = "jobs_database.json"
 DECISIONS_FILE = "user_decisions.json"
 RATED_ARCHIVE = "rated_archive.json"
@@ -397,28 +394,21 @@ Odpowiedz WYŁĄCZNIE w formacie JSON (bez markdown, bez komentarzy):
 
 
 def generate_profile(categories, cv_text):
-    """Send meta-analysis request to Gemini and parse the result."""
+    """Wyślij meta-analizę do modelu wybranego dostawcy i sparsuj wynik."""
 
     prompt = build_meta_prompt(categories, cv_text)
+    if not LLM.api_keys:
+        print(f"ERROR: {LLM.error}")
+        return None
 
-    for model_name in MODELS:
-        for key_idx, api_key in enumerate(API_KEYS):
+    for model_name in LLM.profile_models:
+        for key_idx, api_key in enumerate(LLM.api_keys):
             try:
-                masked = api_key[:4] + "..." + api_key[-4:]
-                print(f"   Trying Model: {model_name} | Key[{key_idx}] {masked}")
+                print(f"   Trying Model: {model_name} | Key[{key_idx}] {mask_key(api_key)}")
 
-                client = genai.Client(api_key=api_key)
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        max_output_tokens=8192  # Podniesione - model ma zwrócić więcej treści
-                    )
-                )
-
-                text = response.text.replace("```json", "").replace("```", "").strip()
-                profile = json.loads(text)
+                # Podniesione - model ma zwrócić więcej treści
+                profile = ask_json(LLM, model_name, api_key, prompt, max_tokens=8192,
+                                   temperature=None).data
 
                 # Sprawdzamy, czy wróciły wszystkie oczekiwane pola
                 required = ["preferred_role_types", "preferred_industries", "red_flags", "summary"]
@@ -447,7 +437,7 @@ def generate_profile(categories, cv_text):
             except Exception as e:
                 err = str(e)
                 print(f"   Error: {err[:120]}")
-                if "429" in err or "ResourceExhausted" in err:
+                if getattr(e, "kind", "") == "rate_limit":
                     import time
                     print("   ⏳ Rate limited. Waiting 30s...")
                     time.sleep(30)
@@ -470,7 +460,7 @@ def main():
         print("Aborting: No decisions to analyze.")
         sys.exit(1)
 
-    print("\nSending granular meta-analysis request to Gemini...")
+    print(f"\nSending granular meta-analysis request to {LLM.provider.label}...")
     profile = generate_profile(categories, cv_text)
 
     if profile:

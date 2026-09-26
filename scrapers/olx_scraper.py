@@ -23,7 +23,7 @@ from typing import List
 from scrapers.base_scraper import BaseScraper
 from utils.data_models import Job
 from utils.olx_details import fetch_offer_details, normalize_olx_link
-
+from utils.safe_io import save_json_atomic
 # Odstep miedzy podstronami ofert. Zmierzone na 15 ofertach kazde:
 #   0,50 s -> 14 opisow, 0 blokad
 #   0,25 s -> 9 opisow, juz 1 blokada
@@ -375,11 +375,14 @@ class OLXScraper(BaseScraper):
             # Stan zapisywany po każdej kategorii
             try:
                 import datetime
-                with open(state_file, 'w') as f:
-                    json.dump({
+                save_json_atomic(
+                    state_file,
+                    {
                         "date": datetime.datetime.now().strftime("%Y-%m-%d"),
-                        "completed": completed_categories
-                    }, f)
+                        "completed": completed_categories,
+                    },
+                    backup=False,
+                )
             except Exception as e:
                 logger.error(f"Could not save OLX category state: {e}")
                 

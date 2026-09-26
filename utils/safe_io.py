@@ -89,7 +89,7 @@ def save_json_atomic(filepath, data, backup: bool = False, keep: int = None, ind
             json.dump(data, f, ensure_ascii=False, indent=indent)
             f.flush()
             os.fsync(f.fileno())
-        # Na Windowsie równoległy odczyt (np. Streamlit, file watcher, inspekcja CLI)
+        # Na Windowsie równoległy odczyt (np. serwer HTTP, file watcher, inspekcja CLI)
         # potrafi na ułamek milisekundy przytrzymać uchwyt pliku docelowego, co wywołuje
         # [WinError 5] Access is denied lub [WinError 32] Sharing violation w os.replace.
         # Zawężamy ponowienia wyłącznie do tych przejściowych konfliktów blokad.

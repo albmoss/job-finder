@@ -9,7 +9,7 @@ nigdy się nie odświeżają i eval_ranking nie wykryje poprawy promptu ani mode
 Ten skrypt ocenia te same oferty jeszcze raz, aktualnym promptem/profilem/modelem
 (bez zapisywania czegokolwiek do produkcyjnych danych) i zestawia obie wersje.
 
-Uruchomienie:  python compare_before_after.py [--model gemini-3.5-flash-lite]
+Uruchomienie:  python compare_before_after.py [--model <model wybranego dostawcy>]
 """
 
 import argparse
@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from benchmark_models import run_model_batched, spearman
-from config import GEMINI_API_KEYS
+from config import LLM
 from eval_ranking import precision_at_k as _precision_at_k
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe
@@ -52,6 +52,9 @@ def main():
     ap.add_argument("--model", default=MODELS[0])
     ap.add_argument("--threshold", type=int, default=7)
     args = ap.parse_args()
+    if not LLM.api_keys:
+        print(f"ERROR: {LLM.error}")
+        return 1
 
     decisions = load_json_safe("user_decisions.json", default={})
     ratings = {
@@ -79,14 +82,14 @@ def main():
 
     print("=" * 66)
     print(f"BEFORE/AFTER COMPARISON on {len(jobs)} offers (same set)")
-    print(f"Model: {args.model}")
+    print(f"Model: {args.model} ({LLM.provider.label})")
     print("=" * 66)
 
     before = report("PRZED (zapisane wyniki)", [(old_scores[l], ratings[l]) for l in links], args.threshold)
 
     print("\nRescoring with the current prompt and profile...")
     context = build_active_learning_context(jobs)
-    res = run_model_batched(args.model, GEMINI_API_KEYS[0], jobs, load_cv(), context)
+    res = run_model_batched(args.model, LLM.api_keys[0], jobs, load_cv(), context)
 
     if not res["ok"]:
         print(f"FAILED: {res['error']}")

@@ -223,8 +223,9 @@ def run_all_scrapers(only=None, force=False, refresh=False):
 
     if refresh:
         refresh_sources([s.get_source_name() for s in all_scrapers])
+        from utils.known_links import reset_cache
+        reset_cache()
         force = True  # odświeżanie bez ponownego scrapowania nie miałoby sensu
-
     all_jobs = []
     scraper_results = {}
     

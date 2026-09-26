@@ -274,28 +274,6 @@ def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: 
         logger.info(f"{path.name}: {initial} ofert, brak duplikatow - plik bez zmian")
 
 
-def deduplicate_file(filepath, is_analyzed=False):
-    """Deduplikacja pojedynczego pliku (plan liczony z tego samego pliku)."""
-    path = Path(filepath)
-    if not path.exists():
-        logger.warning(f"File not found: {path}")
-        return
-
-    data = load_json_safe(path, default=[])
-    if not data:
-        return
-
-    decided = _decided_links()
-    all_jobs = {}
-    for item in data:
-        job = item["job"] if is_analyzed else item
-        _sanitize_nan(job)
-        all_jobs[canonical_link(job.get("link", ""))] = job
-
-    keep, provenance, _ = _plan(all_jobs, decided)
-    _apply(path, is_analyzed, keep, provenance, decided, data=data)
-
-
 def run():
     logger.info("Starting Highlander Protocol v3...")
 

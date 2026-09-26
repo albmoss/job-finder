@@ -20,7 +20,6 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 from utils.links import canonical_link
 from utils.liveness import zdjete_z_portalu
-from utils.offer_age import _as_date
 from utils.safe_io import load_json_safe
 
 
@@ -31,6 +30,21 @@ def _val(obj: Any, attr: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(attr, default)
     return getattr(obj, attr, default)
+
+
+def _as_date(value) -> Optional[date]:
+    """Znieś różnice formatów: '2026-08-07', ISO z czasem, ISO ze strefą, 'Z'."""
+    if not value or not isinstance(value, str):
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(text[:10]).date()
+    except ValueError:
+        return None
 
 
 def is_valid_job(job: Any) -> bool:
