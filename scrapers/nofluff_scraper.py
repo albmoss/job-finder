@@ -3,8 +3,7 @@ NoFluffJobs Scraper (Internal API Strategy)
 Uses NoFluffJobs' internal search API instead of Playwright for speed and reliability.
 
 NOTE: This uses an undocumented internal API (visible in browser DevTools).
-It may change without notice. If it breaks, revert to the Playwright version
-in _archive/ or check DevTools for updated endpoints.
+It may change without notice. If it breaks, check DevTools for updated endpoints.
 """
 
 import html

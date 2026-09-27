@@ -1,15 +1,13 @@
 """
 Paleta i kroje pisma aplikacji - jedno miejsce prawdy.
 
-Tokeny V2 (ciemny motyw) odpowiadają zmiennym `v2-*` z pliku projektowego
-`../design/jobfinder.pen` - nazwa tokenu CSS to nazwa zmiennej bez `v2-`.
-Backend podaje je w bootstrap API, frontend czyta z `theme_tokens.css`.
+Tokeny (ciemny motyw) backend podaje w bootstrap API, frontend czyta z `theme_tokens.css`.
 
     python ui_theme.py            # generuje frontend/src/theme_tokens.css
 """
 from pathlib import Path
 
-# Kolejność = kolejność w wygenerowanym pliku. Wartości z pen.dev (motyw dark).
+# Kolejność = kolejność w wygenerowanym pliku.
 TOKENS = {
     # powierzchnie
     "bg": "#0D0D0E",

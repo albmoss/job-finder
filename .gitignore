@@ -35,18 +35,13 @@ user_decisions.json
 rated_archive.json
 preference_profile.json
 
-# Backupy i katalogi robocze
+# Kopie zapasowe plików danych (utils/safe_io.py)
 backups/
-temp_cv/
-cv-am/
-_archive/
-scratch/
 
-# Zrzuty ekranu i artefakty debugowania (poza tym z README)
+# Zrzuty ekranu (poza tymi z README)
 *.png
 !docs/app.png
 !docs/pipeline.png
-screenshots/
 
 # Frontend
 node_modules/

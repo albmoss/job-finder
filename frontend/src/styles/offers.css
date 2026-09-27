@@ -1035,7 +1035,7 @@
   height: 22px;
 }
 
-/* Active decision button: dimmed fill + accent icon (per AGENTS.md) */
+/* Active decision button: dimmed fill + accent icon */
 .od-dock-btn.is-active {
   background: var(--fill-3);
   color: var(--accent);

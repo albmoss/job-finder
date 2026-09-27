@@ -1,9 +1,6 @@
 """
 Utility Functions Package
 Parsowanie CV, modele danych, normalizacja linków i bezpieczny zapis.
-
-Uwaga: GeminiClient został zastąpiony przez waterfall_analysis.py
-(kaskada modeli + rotacja kluczy) i przeniesiony do _archive/.
 """
 
 from .cv_parser import CVParser

@@ -11,9 +11,7 @@ interface MatchCardProps {
   still?: boolean;
 }
 
-/** Ruch odcisku według węzła „Shape” karty dopasowania w jobfinder.pen (wave_stream.glsl:
- *  u_period 5, u_running 0.59, u_depth 0.25, u_width 22) — wolno i cicho, ale bez rytmu:
- *  pojedyncze fale co 3,5–11 s (decyzja użytkownika). Laboratorium kształtu używa tych samych wartości. */
+/** Ruch odcisku: wolno i cicho, ale bez rytmu — pojedyncze fale co 3,5–11 s. */
 export const MATCH_STREAM_MOTION: Pick<StreamProps, 'loop' | 'depth' | 'width' | 'edge'> = {
   loop: { period: 5, running: 0.59, gap: [3.5, 11] },
   depth: 0.25,

@@ -3,9 +3,8 @@ import type { ActivityRow, PipelineStage, PipelineState, PipelineStatus, Scoring
 import type { StreamLoop } from './components/ui/Stream';
 
 /** Fale strumienia w trakcie przebiegu — widać, że pipeline pracuje także między paczkami
- *  (scraping trwa kwadrans bez jednej paczki). Czas przejścia jak `cross` danego miejsca
- *  (u_period / u_running z jobfinder.pen), ale siła ~⅔ — ciągłe fale przy pełnej sile
- *  wyglądały jak zmiana kształtu strumienia (decyzja użytkownika: subtelniej). */
+ *  (scraping trwa kwadrans bez jednej paczki). Czas przejścia jak `cross` danego miejsca,
+ *  ale siła ~⅔ — ciągłe fale przy pełnej sile wyglądały jak zmiana kształtu strumienia. */
 export const PILL_STREAM_LOOP: StreamLoop = { period: 1.6, running: 0.36, gap: [2, 5] };
 export const SHEET_STREAM_LOOP: StreamLoop = { period: 2.6, running: 0.4, gap: [2, 5] };
 

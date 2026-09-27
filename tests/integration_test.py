@@ -1553,7 +1553,7 @@ def test_pipeline_stage_stats_and_eta():
     check("details: final summary fills the tile even when some pages had no JobPosting",
           src["details_done"] == src["details_total"] == 3482, src)
 
-def test_offer_api_backlog_contract():
+def test_offer_api_contract():
     print("\n[24] Fresh offers, gap filter, next step and AI highlights over HTTP")
     import tempfile, shutil, json
     from pathlib import Path
@@ -1561,7 +1561,7 @@ def test_offer_api_backlog_contract():
     import app_services
     import server
 
-    temp_path = Path(tempfile.mkdtemp(prefix="test_backlog_api_"))
+    temp_path = Path(tempfile.mkdtemp(prefix="test_offer_api_"))
     paths = {
         "JOBS_DATABASE_PATH": temp_path / "jobs_database.json",
         "ANALYZED_JOBS_PATH": temp_path / "analyzed_jobs_waterfall.json",
@@ -1662,7 +1662,7 @@ def main():
                  test_playwright_chromium_prerequisites,
                  test_pipeline_skipped_stage_progress,
                  test_pipeline_stage_stats_and_eta,
-                 test_offer_api_backlog_contract):
+                 test_offer_api_contract):
         try:
             test()
         except Exception as e:

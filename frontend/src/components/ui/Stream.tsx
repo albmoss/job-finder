@@ -3,11 +3,9 @@ import FINGERPRINT from './fingerprint_shape.json';
 
 /* Strumień: kształt lejka (7 wysokości etapów) wypełniany kobalt → fiolet do `progress`.
    Fale to pojedyncze impulsy, które przechodzą od lewej i ściskają kształt — nie falowanie
-   całości. Impuls wypuszcza `pulse` (zdarzenie, np. paczka) albo `loop` (ciągły ruch jak
-   u_time/u_period/u_waves/u_running w ../design/wave_stream.glsl z pen.dev). */
+   całości. Impuls wypuszcza `pulse` (zdarzenie, np. paczka) albo `loop` (ciągły ruch). */
 
-/* Kształt odcisku oferty (karta dopasowania) siedzi w fingerprint_shape.json. Najwygodniej
-   stroić go w laboratorium: `npm run dev` → http://localhost:5173/fingerprint_lab.html. */
+/* Kształt odcisku oferty (karta dopasowania) siedzi w fingerprint_shape.json. */
 export type FingerprintShape = typeof FINGERPRINT;
 const glf = (n: number) => n.toFixed(3);
 
@@ -110,8 +108,8 @@ interface Wave {
 }
 
 /** Samoczynne fale: pojedyncze impulsy w losowych odstępach (`gap`, sekundy), bez rytmu.
- *  `period` i `running` jak u_period/u_running w ../design/wave_stream.glsl: przejście trwa
- *  period / running s, a `running` ścisza impuls; szerokość rośnie z losową amplitudą. */
+ *  Przejście trwa period / running s, a `running` ścisza impuls; szerokość rośnie
+ *  z losową amplitudą. */
 export interface StreamLoop {
   period: number;
   running: number;
@@ -313,7 +311,7 @@ export interface StreamProps {
   edge?: number;
   ha?: [number, number, number, number];
   hb?: [number, number, number, number];
-  /** Tylko laboratorium kształtu: nadpisuje fingerprint_shape.json. */
+  /** Nadpisuje kształt z fingerprint_shape.json. */
   shape?: FingerprintShape;
   className?: string;
 }
