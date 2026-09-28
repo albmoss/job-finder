@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import type { SkillGapsResponse, SkillGapRow } from '../types';
 import { api } from '../api';
 import { SWAP_CLASS, useBlurSwap } from '../swap';
-import { Puzzle, Info, CircleDashed, ChevronLeft, ChevronRight, ArrowRight } from 'lucide-react';
+import { Puzzle, Info, ChevronLeft, ChevronRight, ArrowRight } from 'lucide-react';
 import { OFFERS, plural } from '../plural';
 import '../styles/tools.css';
 
@@ -159,7 +159,6 @@ export const SkillGapsPanel: React.FC<SkillGapsPanelProps> = ({ onReady, onShowO
               <div className="chips">
                 {closestRows.map((r) => (
                   <span key={r.skill} className="chip gap" title={`Średnie dopasowanie: ${Math.round(r.mean_match)}%`}>
-                    <CircleDashed size={13} aria-hidden="true" />
                     <span>{r.skill}</span>
                     <span className="sg-chip-pct mono tnum">
                       {Math.round(r.mean_match)}%

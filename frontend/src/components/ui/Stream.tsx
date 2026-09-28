@@ -1,55 +1,58 @@
 import React, { useEffect, useRef } from 'react';
 import FINGERPRINT from './fingerprint_shape.json';
 
-/* Strumień: kształt lejka (7 wysokości etapów) wypełniany kobalt → fiolet do `progress`.
-   Fale to pojedyncze impulsy, które przechodzą od lewej i ściskają kształt — nie falowanie
-   całości. Impuls wypuszcza `pulse` (zdarzenie, np. paczka) albo `loop` (ciągły ruch). */
+/* Strumień: lustrzany pasek postępu w stylu gładkiej ścieżki audio — zaczyna i kończy się
+   cienko, szybko i łagodnie rośnie do pełnej grubości. Grubość zmienia się nieregularnie
+   (szum wartości, nie sinusoida), a każda oferta ma własny rytm, kontrast i grubość.
+   Wypełnienie: warstwy woalu (Mgła) z domieszką miękkiej gęstości i smug (Dym, `smoke`).
+   Wypełniany kobalt → fiolet do `progress`. Fale to pojedyncze impulsy, które przechodzą
+   od lewej i ściskają kształt — nie falowanie całości. Impuls wypuszcza `pulse`
+   (zdarzenie, np. paczka) albo `loop` (ciągły ruch). */
 
-/* Kształt odcisku oferty (karta dopasowania) siedzi w fingerprint_shape.json. */
+/* Parametry kształtu siedzą w fingerprint_shape.json (strojenie: laboratorium). */
 export type FingerprintShape = typeof FINGERPRINT;
 const glf = (n: number) => n.toFixed(3);
+
+/* Wypełnienie liczy krycie `a`, jasność `lum` i świecenie rdzenia `core` (0–1).
+   `hh` to wspólna sylwetka, `F`/`sw` rytm i kontrast szumu, `o` przesunięcie z ziarna oferty. */
+const fillBody = (fp: FingerprintShape): string => `
+  // Arkusze woalu idą za wspólnym profilem pm z własnym odchyleniem — przecinają się,
+  // a zmiany grubości nie uśredniają się do równego paska.
+  float cov = 0.0;
+  for (int i = 0; i < 5; i++) {
+    float fi = float(i);
+    float amp = 1.0 - ${glf(fp.spread)} * hash(s + fi * 7.0 + 2.0);
+    float pk = mix(pm, prof(x * F * (0.9 + 0.1 * fi) + fi * 13.7 + o - ph), 0.15);
+    float hk = max(amp * env * mix(neck, peak, pk), 0.5 * u_dpr);
+    cov += 1.0 - smoothstep(hk * 0.5, hk, ady);
+  }
+  cov /= 5.0;
+  // Dym: wąska gęstość wokół sylwetki ze smugami, lustrzanymi względem osi (liczone od |y|).
+  float u = ady / hh;
+  float dens = exp(-u * u * 2.2);
+  float flow = smoothstep(0.08, 0.6, vn(x * F * 4.0 + u * 2.0 + o - ph * 3.0) * vn(x * F * 2.2 - u * 1.3 + 29.0 + o - ph * 1.7));
+  float smoke = ${glf(fp.smoke)};
+  float density = mix(cov, 0.5 * cov + 0.5 * dens * (0.55 + 0.45 * flow), smoke);
+  a = clamp(density * (1.0 + mix(2.0, 1.5, smoke) * ${glf(fp.sheet)}), 0.0, 1.0);
+  lum = 0.55 + 0.5 * density + 0.2 * smoke * flow * dens;
+  core = smoothstep(0.55, 1.0, density) * ${glf(fp.edge)};`;
 
 const buildFrag = (fp: FingerprintShape) => `
 precision highp float;
 uniform vec2 u_res;
-uniform float u_progress, u_depth, u_width, u_seed, u_dpr, u_edge;
-uniform vec4 u_ha, u_hb;
+uniform float u_progress, u_depth, u_width, u_seed, u_dpr, u_edge, u_time;
 uniform vec3 u_track, u_start, u_end, u_hot;
 uniform float u_wp[6];
 uniform float u_wa[6];
 uniform float u_ws[6];
 float hash(float n) { return fract(sin(n * 12.9898 + 3.17) * 43758.5453); }
-float stageH(float i) {
-  if (i < 0.5) return u_ha.x; if (i < 1.5) return u_ha.y; if (i < 2.5) return u_ha.z;
-  if (i < 3.5) return u_ha.w; if (i < 4.5) return u_hb.x; if (i < 5.5) return u_hb.y;
-  return u_hb.z;
-}
-// Odcisk oferty: jak ścieżka audio, lustrzany względem osi. Szum gradientowy (bez płaskich
-// półek i prostych odcinków szumu wartości) w trzech oktawach pod wolną obwiednią „głośności”.
-// Dopasowanie steruje charakterem: wyższy % = grubszy i bardziej rozedrgany płomień.
-float gnoise(float x, float s) {
-  float i = floor(x); float f = x - i;
-  float u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-  float g0 = hash(s + i) * 2.0 - 1.0;
-  float g1 = hash(s + i + 1.0) * 2.0 - 1.0;
-  return mix(g0 * f, g1 * (f - 1.0), u) * 2.0;
-}
-float seedEdge(float x, float s, float m) {
-  float k = smoothstep(${glf(fp.matchFrom)}, ${glf(fp.matchTo)}, m);
-  float body = mix(${glf(fp.bodyFrom)}, ${glf(fp.bodyTo)}, k);
-  float fm = mix(${glf(fp.hillsFrom)}, ${glf(fp.hillsTo)}, k);
-  float vol = 1.0 + ${glf(fp.swell)} * gnoise(x * 2.6, s + 151.0);
-  float d = 0.66 * gnoise(x * 7.0 * fm, s) + 0.27 * gnoise(x * 16.0 * fm, s + 37.0)
-          + 0.07 * gnoise(x * 34.0 * fm, s + 83.0);
-  float ends = clamp(min(x, 1.0 - x) * 12.0, 0.0, 1.0);
-  float e = body * vol * (1.0 + mix(${glf(fp.peaksFrom)}, ${glf(fp.peaksTo)}, k) * d);
-  return clamp(max(e, ${glf(fp.minThick)}) * sqrt(ends), 0.04, ${glf(fp.maxThick)});
-}
-float profile(float x) {
-  float f = clamp(x * 7.0 - 0.5, 0.0, 6.0);
-  float i = floor(f);
-  float s = smoothstep(0.25, 0.75, f - i);
-  return mix(stageH(i), stageH(min(i + 1.0, 6.0)), s);
+float vn(float x) { float i = floor(x); float f = fract(x); return mix(hash(i), hash(i + 1.0), f * f * (3.0 - 2.0 * f)); }
+float fbm(float x) { return 0.55 * vn(x) + 0.3 * vn(x * 2.31 + 17.0) + 0.15 * vn(x * 5.13 + 41.0); }
+// Profil grubości 0–1: dwie gładkie oktawy (wyższe dawały „odręcznie rysowany”, drżący brzeg),
+// liniowo rozciągnięte; detail dokłada drobne drgania jak w obwiedni nagrania.
+float prof(float x) {
+  float n = 0.7 * vn(x) + 0.3 * vn(x * 2.13 + 17.0) + ${glf(fp.detail)} * 0.4 * (vn(x * 9.7 + 63.0) - 0.5);
+  return clamp((n - 0.2) / 0.6, 0.0, 1.0);
 }
 void main() {
   vec2 px = gl_FragCoord.xy;
@@ -69,26 +72,53 @@ void main() {
   }
   sq *= lit; glow *= lit;
   float x = px.x / W;
-  float dy = px.y - H * 0.5;
-  float ady = abs(dy);
-  // Ziarno: krawędź jak ścieżka audio, lustrzana względem osi; bez ziarna: lejek etapów.
+  // Odcisk oferty: przewężenia mają stałą grubość, a z dopasowaniem rosną górki (peak);
+  // pipeline (bez ziarna) ma najwyższe górki.
   float s = mod(floor(u_seed), 251.0) * 17.0;
-  float prof = u_seed > 0.5 ? seedEdge(x, s, u_progress) : profile(x);
-  float base = prof * 0.92 * H * 0.5;
-  // Fala ściska kształt najwyżej do 55% — nigdy do zera, żeby nic nie znikało w przejściu.
-  float hh = min(max(base * (1.0 - u_depth * sq), max(base * 0.55, 1.2 * u_dpr)), H * 0.5);
-  float inside = clamp((hh - ady) / u_dpr + 0.5, 0.0, 1.0);
-  float v = clamp(ady / hh, 0.0, 1.0);
+  float o = hash(s + 0.5) * 40.0;
+  // Każda oferta ma własny rytm i grubość przewężeń (variety: 0 = wszystkie jednakowe);
+  // wysokość górek zależy tylko od dopasowania.
+  float vr = ${glf(fp.variety)};
+  float F = ${glf(fp.swellFreq)} * mix(1.0, 0.7 + 0.7 * hash(s + 3.0), vr);
+  // Wzór wolno płynie w prawo (flow, szerokości szumu na sekundę); końce stoją w miejscu.
+  float ph = u_time * ${glf(fp.flow)};
+  // Z dopasowaniem (liniowo między progami) rosną górki, a przewężenia wolniej — 45% jest
+  // smukłe, 95% ma wysokie górki, ale nie jest równą rurą.
+  float k = u_seed > 0.5 ? clamp((u_progress - ${glf(fp.matchFrom)}) / ${glf(Math.max(fp.matchTo - fp.matchFrom, 0.01))}, 0.0, 1.0) : 1.0;
+  // Karta oferty: górki mogą wyjść poza płótno (miękki brzeg dymu jest wtedy lekko przycięty),
+  // byle środek był duży. Pipeline (arkusz, pasek) zostaje w płótnie: górki 1.0.
+  float peak = (u_seed > 0.5 ? mix(${glf(fp.bodyFrom)}, ${glf(fp.bodyTo)}, k) : 1.0) * H * 0.5;
+  float neck = ${glf(fp.bodyFrom * (1 - fp.swing))} * (u_seed > 0.5 ? 1.0 + 1.5 * k : 1.8) * mix(1.0, 0.75 + 0.5 * hash(s + 4.0), vr) * H * 0.5;
+  // Obwiednia jak w ścieżce audio: cienki, łagodny początek, najszybszy wzrost w połowie
+  // rozbiegu i miękkie dojście do pełnej grubości (krzywa S). Lewy i prawy rozbieg mają
+  // różną długość. Fala z impulsu ściska całość najwyżej do 55%.
+  float tl = clamp(x / (${glf(fp.taper)} * (0.7 + 0.6 * hash(s + 8.0))), 0.0, 1.0);
+  float tr = clamp((1.0 - x) / (${glf(fp.taper)} * (0.7 + 0.6 * hash(s + 9.0))), 0.0, 1.0);
+  float te = min(tl, tr);
+  float env = te * te * (3.0 - 2.0 * te) * max(1.0 - u_depth * sq, 0.55);
+  // Oś lekko płynie góra–dół; przy końcach wraca na środek.
+  float off = ${glf(fp.drift)} * peak * env * (2.0 * fbm(x * F * 0.7 + 90.0 + o - ph * 0.5) - 1.0);
+  float ady = abs(px.y - H * 0.5 - off);
+  float pm = prof(x * F + o - ph);
+  float hh = max(env * mix(neck, peak, pm), 0.5 * u_dpr);
   float along = clamp(px.x / max(head, 1.0), 0.0, 1.0);
-  vec3 c = mix(u_track * 1.25, u_start, smoothstep(0.0, 0.55, along));
-  c = mix(c, u_end, smoothstep(0.45, 1.0, along));
-  c *= 0.86 + 0.14 * (1.0 - v * v);
-  c = mix(c, u_hot, clamp(glow * 0.45 * (0.4 + 0.6 * along), 0.0, 0.7));
+  vec3 lc = mix(u_track * 1.25, u_start, smoothstep(0.0, 0.55, along));
+  lc = mix(lc, u_end, smoothstep(0.45, 1.0, along));
   float dh = (px.x - head) / u_dpr;
-  c = mix(c, u_hot, exp(-dh * dh / 4.0) * 0.8 * u_edge);
-  vec3 wait = u_track * (0.9 + 0.1 * (1.0 - v));
+  float headLight = exp(-dh * dh / 4.0) * 0.8 * u_edge;
+  float a = 0.0; float lum = 0.0; float core = 0.0;
+  ${fillBody(fp)}
+  // Nitka na osi — cienki początek i koniec jak w ścieżce audio.
+  float thread = (1.0 - smoothstep(0.3 * u_dpr, 1.1 * u_dpr, ady)) * step(0.0005, x) * step(x, 0.9995);
+  a = max(a, thread * 0.7);
+  // Rdzeń świeci barwą, nie bielą: jaśniejszy odcień tego samego koloru.
+  vec3 c = lc * lum + lc * lc * 0.55 * core;
+  c = mix(c, u_hot, clamp(glow * 0.3 * (0.4 + 0.6 * along), 0.0, 0.8));
+  c = mix(c, u_hot, headLight);
+  vec3 wait = u_track * (0.7 + 0.45 * lum);
   vec3 col = mix(wait, c, lit);
-  gl_FragColor = vec4(col * inside, inside);
+  float grain = (fract(sin(dot(px, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * ${glf(fp.grain)};
+  gl_FragColor = vec4(col * (1.0 + grain) * a, a);
 }`;
 const FRAG = buildFrag(FINGERPRINT);
 
@@ -122,8 +152,6 @@ interface StreamOptions {
   cross: number;
   seed: number;
   edge: number;
-  ha: [number, number, number, number];
-  hb: [number, number, number, number];
   loop: StreamLoop | null;
 }
 
@@ -267,8 +295,8 @@ class StreamRenderer {
     gl.uniform1f(this.loc('u_seed'), o.seed);
     gl.uniform1f(this.loc('u_dpr'), this.dpr);
     gl.uniform1f(this.loc('u_edge'), o.edge);
-    gl.uniform4f(this.loc('u_ha'), ...o.ha);
-    gl.uniform4f(this.loc('u_hb'), ...o.hb);
+    // Czas płynięcia wzoru; przy ograniczonym ruchu wzór stoi.
+    gl.uniform1f(this.loc('u_time'), this.reduce.matches ? 0 : now / 1000);
     gl.uniform3f(this.loc('u_track'), ...this.colors.track);
     gl.uniform3f(this.loc('u_start'), ...this.colors.start);
     gl.uniform3f(this.loc('u_end'), ...this.colors.end);
@@ -301,7 +329,7 @@ export interface StreamProps {
   /** Ciągłe fale: odcisk oferty stale, pipeline w trakcie przebiegu. Pierwsza fala rusza
    *  od lewej przy zamontowaniu lub włączeniu. Przekazuj stałą referencję, nie literał. */
   loop?: StreamLoop;
-  /** >0: wysokości etapów losowane z ziarna (odcisk oferty); 0: `ha`/`hb`. */
+  /** >0: kształt odcisku oferty z ziarna, grubość rośnie z `progress`; 0: stały kształt pipeline'u. */
   seed?: number;
   depth?: number;
   width?: number;
@@ -309,8 +337,6 @@ export interface StreamProps {
   cross?: number;
   /** 1: jasna krawędź na czole wypełnienia. */
   edge?: number;
-  ha?: [number, number, number, number];
-  hb?: [number, number, number, number];
   /** Nadpisuje kształt z fingerprint_shape.json. */
   shape?: FingerprintShape;
   className?: string;
@@ -326,8 +352,6 @@ export const Stream: React.FC<StreamProps> = ({
   width = 20,
   cross = 4,
   edge = 1,
-  ha = [0.18, 0.95, 0.95, 0.9],
-  hb = [0.8, 0.55, 0.4, 0],
   shape,
   className,
 }) => {
@@ -342,7 +366,7 @@ export const Stream: React.FC<StreamProps> = ({
     try {
       r = new StreamRenderer(
         cv,
-        { depth, width, cross, seed, edge, ha, hb, loop: loop ?? null },
+        { depth, width, cross, seed, edge, loop: loop ?? null },
         progress,
         shape ? buildFrag(shape) : FRAG,
       );

@@ -13,7 +13,6 @@ import {
   Laptop,
   GraduationCap,
   Timer,
-  CircleDashed,
   Check,
 } from 'lucide-react';
 import { MatchCard } from './MatchCard';
@@ -316,7 +315,6 @@ export const OfferDetailPanel: React.FC<OfferDetailPanelProps> = ({
               <span>W skrócie</span>
               {hasGaps && (
                 <span className="od-kw-legend">
-                  <CircleDashed aria-hidden="true" />
                   luka względem CV
                 </span>
               )}
@@ -329,7 +327,6 @@ export const OfferDetailPanel: React.FC<OfferDetailPanelProps> = ({
               ))}
               {(offer.missing_skills ?? []).map((skill, idx) => (
                 <span key={`g${idx}`} className="chip gap">
-                  <CircleDashed aria-hidden="true" />
                   {skill}
                 </span>
               ))}

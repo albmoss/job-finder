@@ -739,7 +739,7 @@
   display: flex;
   align-items: center;
   gap: 28px;
-  padding: 18px 22px;
+  padding: 14px 22px;
   border-radius: 22px;
   background: var(--fill-faint);
   border: 1px solid var(--fill-2);
@@ -782,7 +782,7 @@
 
 .od-match-stream {
   flex: 1;
-  height: 84px;
+  height: 64px;
   min-width: 0;
   display: block;
 }
@@ -898,9 +898,13 @@
   font-size: 11px;
 }
 
-.od-kw-legend svg {
-  width: 12px;
-  height: 12px;
+/* Próbka wyglądu luki: ten sam przerywany obrys co `.chip.gap`. */
+.od-kw-legend::before {
+  content: "";
+  width: 16px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px dashed var(--gap-dash);
 }
 
 /* Recruitment stage switch row */

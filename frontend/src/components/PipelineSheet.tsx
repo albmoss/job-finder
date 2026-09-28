@@ -206,6 +206,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
       // Liczby tylko tam, gdzie stan przebiegu je naprawdę ma; reszta pokazuje czas etapu.
       let topVal = durStr ?? '—';
       let subVal = stateWord;
+      let hasMetric = true;
       const totalFound = sources.reduce((acc, s) => acc + (s.found ?? 0), 0);
       const diet = stageStats?.phase2_5;
       if (idx === 1 && totalFound > 0) {
@@ -229,6 +230,8 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
       } else if (idx === 5 && scoring && (scoring.processed > 0 || scoring.total)) {
         topVal = scoring.processed.toLocaleString('pl-PL');
         subVal = scoring.total ? `z ${scoring.total.toLocaleString('pl-PL')} nowych` : 'ocenionych';
+      } else {
+        hasMetric = false;
       }
 
       return {
@@ -238,7 +241,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
         isWait,
         topVal,
         subVal,
-        durStr: durStr ?? stateWord,
+        durStr: hasMetric ? durStr ?? stateWord : null,
       };
     });
   }, [stages, currentStageIdx, pipeline?.current_stage_idx, isCompleted, isStopping, isFailed, isStopped, scoring, sources, stageStats, nowSec]);
@@ -440,15 +443,6 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
 
         {/* 7 kolumn etapów */}
         <div className="pp-flow">
-          <div className="pp-cols">
-            {stageCols.map((c, i) => (
-              <div key={i} className={`c ${c.isCur ? 'cur' : ''} ${c.isWait ? 'wait' : ''}`}>
-                <b>{c.topVal}</b>
-                <span>{c.subVal}</span>
-              </div>
-            ))}
-          </div>
-
           {/* Strumień shaderowy */}
           <div className="pp-band">
             <Stream
@@ -459,8 +453,6 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
               width={26}
               cross={3.94 / 0.6}
               edge={1}
-              ha={[0.1, 0.6, 0.8, 0.84]}
-              hb={[0.72, 0.44, 0.26, 0]}
               className="pp-sheet-canvas"
             />
           </div>
@@ -482,7 +474,9 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
               {stageCols.map((c, i) => (
                 <div key={i} className={`c ${c.isCur ? 'cur' : ''} ${c.isWait ? 'wait' : ''}`}>
                   <b>{c.name}</b>
-                  <span>{c.durStr}</span>
+                  <strong>{c.topVal}</strong>
+                  <span>{c.subVal}</span>
+                  {c.durStr && <time>{c.durStr}</time>}
                 </div>
               ))}
             </div>
@@ -523,13 +517,11 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
                 ))}
               </div>
 
-              <div className="hint">
-                {scoring?.total === 0
-                  ? 'nic nowego do oceny'
-                  : packs
-                    ? 'paczka zapisuje się atomowo — stop po niej nic nie gubi'
-                    : 'liczba paczek pojawi się ze startem oceny AI'}
-              </div>
+              {(scoring?.total === 0 || !packs) && (
+                <div className="hint">
+                  {scoring?.total === 0 ? 'nic nowego do oceny' : 'liczba paczek pojawi się ze startem oceny AI'}
+                </div>
+              )}
             </div>
           )}
 
@@ -601,7 +593,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
                   const opacity = 1 - (lastLogs.length - 1 - idx) * 0.22;
                   return (
                     <div key={idx} className="pp-tk" style={{ opacity }}>
-                      <time>{l.time || '—'}</time>
+                      {l.time && <time>{l.time}</time>}
                       <span title={l.text}>{l.text}</span>
                     </div>
                   );

@@ -28,6 +28,7 @@ TOKENS = {
     "fill-active": "rgba(255, 255, 255, 0.09)",
     "stroke": "rgba(255, 255, 255, 0.07)",
     "stroke-strong": "rgba(255, 255, 255, 0.12)",
+    "gap-dash": "rgba(255, 255, 255, 0.24)",
     "line": "rgba(255, 255, 255, 0.08)",
     "track": "#2A2A2D",
     "level": "rgba(237, 235, 230, 0.25)",
