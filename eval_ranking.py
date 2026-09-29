@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from utils.decisions import effective_rating
 from utils.safe_io import load_json_safe
 from utils.console import force_utf8
 
@@ -28,16 +29,22 @@ DECISIONS_FILE = "user_decisions.json"
 
 
 def load_manual_ratings() -> dict:
-    """Zwróć {link: rating} tylko dla ocen wystawionych ręcznie."""
+    """
+    Zwróć {link: rating} dla ręcznych decyzji. „Zapisz” i „Wysłane” bez suwaka liczą się
+    jak 9/10, „Odrzuć” jak 1/10 - ta sama reguła co w profilu preferencji.
+    """
     raw = load_json_safe(DECISIONS_FILE, default={})
     ratings = {}
     for link, val in raw.items():
         # Legacy string ("reject") = masowe czyszczenie po słowie kluczowym - pomijamy
-        if isinstance(val, dict) and val.get("rating") is not None:
-            try:
-                ratings[link] = int(val["rating"])
-            except (TypeError, ValueError):
-                continue
+        if not isinstance(val, dict):
+            continue
+        try:
+            rating = effective_rating(val)
+        except (TypeError, ValueError):
+            continue
+        if rating is not None:
+            ratings[link] = rating
     return ratings
 
 

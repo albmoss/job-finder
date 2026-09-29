@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import LLM
 from utils.llm import ask_json, mask_key
+from utils.decisions import decision_snapshot, effective_rating
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe
 from utils.console import force_utf8
@@ -130,26 +131,18 @@ def categorize_decisions_granular(all_jobs):
 
         if isinstance(d, dict):
             status = d.get('status', 'rated')
-            rating = d.get('rating')
 
             if status == 'aspirational':
                 aspirational.append({
                     "title": title, "company": company,
-                    "description": description, "rating": rating,
+                    "description": description, "rating": d.get('rating'),
                     "location": location, "source": source
                 })
                 continue
 
+            rating = effective_rating(d)
             if rating is None:
-                # Decyzje bez oceny liczbowej - sam status
-                if status in ('save', 'apply'):
-                    # traktujemy jak 9/10
-                    rating = 9
-                elif status == 'reject':
-                    # traktujemy jak 1/10
-                    rating = 1
-                else:
-                    continue
+                continue
 
             for tier_name, tier_cfg in TIERS.items():
                 lo, hi = tier_cfg["range"]
@@ -202,7 +195,7 @@ def categorize_decisions_granular(all_jobs):
     if legacy_rejects:
         print(f"   (including {len(legacy_rejects)} legacy rejects merged into hard_no)")
 
-    return {"tiers": tiers, "aspirational": aspirational}
+    return {"tiers": tiers, "aspirational": aspirational, "decisions": decision_snapshot(decisions)}
 
 
 def format_tier_text(items, tier_name, tier_cfg):
@@ -476,7 +469,9 @@ def main():
                 "rather_not_3_4": len(tiers["rather_not"]),
                 "hard_no_1_2": len(tiers["hard_no"]),
                 "aspirational": len(categories["aspirational"])
-            }
+            },
+            # Stan decyzji, z którego powstał profil - serwer liczy z niego, ile doszło od tej pory.
+            "decisions": categories["decisions"],
         }
 
         temp_file = OUTPUT_FILE + ".tmp"

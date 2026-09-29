@@ -7,6 +7,7 @@ export const CHARS: PluralForms = ['znak', 'znaki', 'znaków'];
 export const NEW_ONES: PluralForms = ['nowa', 'nowe', 'nowych'];
 export const KEYS: PluralForms = ['klucz', 'klucze', 'kluczy'];
 export const BACKUPS: PluralForms = ['zapasowy', 'zapasowe', 'zapasowych'];
+export const DECISIONS: PluralForms = ['decyzja', 'decyzje', 'decyzji'];
 
 export function plural(n: number, [one, few, many]: PluralForms): string {
   const abs = Math.abs(n);

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import type { ActivityRow, PipelineState, Stats } from '../types';
 import { Stream } from './ui/Stream';
-import { KEYS, OFFERS, plural } from '../plural';
+import { DECISIONS, KEYS, NEW_ONES, OFFERS, plural } from '../plural';
 import {
   SHEET_STREAM_LOOP,
   STAGE_SHORT_NAMES,
@@ -23,6 +23,7 @@ import {
   fitGrid,
   formatClock,
   formatDuration,
+  formatStamp,
   parseLogLine,
   pipelineStatus,
   scoringPacks,
@@ -50,7 +51,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
   onClose,
   pipeline,
   activityRows: _activityRows,
-  stats: _stats,
+  stats,
   onStop,
   onForceStop,
   onResume,
@@ -344,6 +345,18 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
 
   const activeCooldownKey = keyItems.find((k) => k.isCool);
 
+  // Profil preferencji nie przelicza się sam: decyzje (też „Wysłane”) trafiają do oceny AI
+  // dopiero przez niego, więc przycisk pokazuje, ile ich jeszcze czeka.
+  const profileNew = stats?.profile_new_decisions ?? 0;
+  let profileTip = 'Przelicz profil preferencji z decyzji';
+  if (stats && !stats.profile_generated_at) profileTip = 'Zbuduj profil preferencji z decyzji — ocena AI jeszcze go nie ma';
+  else if (stats?.profile_generated_at) {
+    const since = formatStamp(stats.profile_generated_at);
+    profileTip = profileNew > 0
+      ? `Przelicz profil preferencji (z ${since}) — ocena AI nie zna jeszcze ${profileNew} decyzji`
+      : `Przelicz profil preferencji — aktualny, z ${since}`;
+  }
+
   // Pulse dla Stream
   const batchPulse = scoring?.processed ?? scoring?.batch ?? 0;
 
@@ -631,13 +644,14 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
 
               <button
                 type="button"
-                className="iconbtn"
+                className="iconbtn pp-step-profile"
                 onClick={() => onRunStep('profile')}
-                data-tip="Przelicz profil preferencji z decyzji"
-                aria-label="Przelicz profil preferencji"
+                data-tip={profileTip}
+                aria-label={profileNew > 0 ? `Przelicz profil preferencji (${profileNew} ${plural(profileNew, NEW_ONES)} ${plural(profileNew, DECISIONS)})` : 'Przelicz profil preferencji'}
                 disabled={isRunning || isStopping}
               >
                 <Brain size={16} />
+                {profileNew > 0 && <span className="pp-step-badge" aria-hidden="true">{profileNew}</span>}
               </button>
 
               <button

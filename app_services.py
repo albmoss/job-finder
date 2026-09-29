@@ -21,6 +21,7 @@ from utils.cv_parser import CVParser
 from utils.data_models import JobDatabase, Job, JobMatch
 from utils.text_cleaner import detect_work_mode, strip_html
 from utils.safe_io import save_json_atomic, load_json_safe
+from utils.decisions import decisions_since_profile
 from utils.links import canonical_link
 from utils.liveness import zdjete_z_portalu
 from utils.scoring_queue import get_pending_scoring_count
@@ -476,6 +477,8 @@ class JobDataService:
                     if dt and (today - dt.date()).days >= 14:
                         stale_count += 1
 
+            profile_meta = (load_json_safe(PREFERENCE_PROFILE_PATH, default={}) or {}).get("_metadata") or {}
+
             return {
                 "raw_count": len(self.raw_jobs),
                 "analyzed_count": len(self.analyzed_matches),
@@ -483,6 +486,8 @@ class JobDataService:
                 "decisions_count": len(self.user_decisions),
                 "funnel": self.get_funnel_stages(),
                 "applications_stale": stale_count,
+                "profile_generated_at": profile_meta.get("generated_at"),
+                "profile_new_decisions": decisions_since_profile(self.user_decisions, profile_meta),
             }
 
     def get_applications(self) -> Dict[str, Any]:

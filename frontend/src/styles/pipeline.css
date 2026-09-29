@@ -849,6 +849,30 @@
   gap: 6px;
 }
 
+/* Liczba decyzji, których profil preferencji jeszcze nie uwzględnia. */
+.pp-step-profile {
+  position: relative;
+}
+
+.pp-step-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--ink);
+  color: var(--surface-solid);
+  box-shadow: 0 0 0 2px var(--surface-solid);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .pp-confirm-rescore {
   display: inline-flex;
   align-items: center;

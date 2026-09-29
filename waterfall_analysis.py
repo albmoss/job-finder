@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import LLM
 from utils.llm import LLMError, ask_json, mask_key
+from utils.decisions import effective_rating
 from utils.links import canonical_link
 from utils.safe_io import save_json_atomic, rotate_backup
 from utils.console import force_utf8
@@ -298,16 +299,14 @@ INSTRUKCJA OCENIANIA:
         company = job['company']
         info = f"- {title} w firmie {company}"
         
-        # `'rating' in d` nie wystarcza: zapis bez gwiazdki daje
-        # {"status": "save", "rating": null}, a None >= 8 rzuca TypeError
-        # i wywala caly etap, zanim przetworzy pierwsza oferte.
-        rating = d.get('rating') if isinstance(d, dict) else None
-        if rating is not None:
+        if isinstance(d, dict):
+            rating = effective_rating(d)
+            if rating is None:
+                continue
             if rating >= 8: favorites.append(f"{info} (Ocena: {rating}/10)")
             elif rating <= 3: rejected.append(f"{info} (Ocena: {rating}/10)")
-        elif isinstance(d, str):
-            if d == 'apply' or d == 'save': favorites.append(f"{info} (Zapisane w ulubionych)")
-            elif d == 'reject': rejected.append(f"{info} (Odrzucone stanowczo)")
+        elif d == 'apply' or d == 'save': favorites.append(f"{info} (Zapisane w ulubionych)")
+        elif d == 'reject': rejected.append(f"{info} (Odrzucone stanowczo)")
             
     favorites_text = "\n".join(favorites[-30:]) if favorites else "Brak"
     rejected_text = "\n".join(rejected[-30:]) if rejected else "Brak"

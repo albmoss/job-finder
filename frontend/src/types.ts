@@ -6,6 +6,10 @@ export interface Stats {
   funnel: Record<string, number>;
   /** Aplikacje (bez archiwum), które stoją na etapie co najmniej 14 dni. */
   applications_stale: number;
+  /** ISO czasu wygenerowania profilu preferencji; null, gdy profilu nie ma. */
+  profile_generated_at: string | null;
+  /** Decyzje nowe, zmienione albo cofnięte od ostatniego profilu — ocena AI ich jeszcze nie zna. */
+  profile_new_decisions: number;
 }
 
 export type StageStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
