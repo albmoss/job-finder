@@ -163,8 +163,9 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
     return res;
   }, [pipeline?.logs]);
 
-  // Karta „Na żywo” jest szersza od dwóch pozostałych — mieści cztery ostatnie komunikaty.
-  const lastLogs = useMemo(() => parsedLogs.slice(-4), [parsedLogs]);
+  // Karta „Na żywo” wypełnia się od dołu: najnowszy komunikat na dole, starsze wygaszają się
+  // ku górze karty. Ile się zmieści, tyle widać — nadmiar ucina maska u góry.
+  const lastLogs = useMemo(() => parsedLogs.slice(-16), [parsedLogs]);
 
   // Czas trwania przebiegu
   const elapsedStr = useMemo(() => {
@@ -246,21 +247,18 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
     });
   }, [stages, currentStageIdx, pipeline?.current_stage_idx, isCompleted, isStopping, isFailed, isStopped, scoring, sources, stageStats, nowSec]);
 
-  // Linia stacji: stacje stoją na środkach 7 kolumn. Biała linia łączy gotowe etapy, kobaltowy
-  // odcinek prowadzi od ostatniego gotowego do biegnącego — widać, który odcinek trwa.
+  // Linia stacji: stacje stoją na środkach 7 kolumn. Jedna linia łączy pierwszą stację
+  // z bieżącą (albo z ostatnią gotową, gdy nic nie biegnie); bieżącą wyróżnia sama kropka.
   const stationPct = (i: number) => ((i + 0.5) / STAGE_SHORT_NAMES.length) * 100;
-  let lastDoneIdx = -1;
+  let lineEndIdx = -1;
   stageCols.forEach((c, i) => {
-    if (c.isDone) lastDoneIdx = i;
+    if (c.isDone || c.isCur) lineEndIdx = i;
   });
-  const doneLineStyle = { left: `${stationPct(0)}%`, width: `${Math.max(0, stationPct(lastDoneIdx) - stationPct(0))}%` };
-  const runLineStyle = isRunning && currentStageIdx >= 1
-    ? { left: `${stationPct(currentStageIdx - 1)}%`, width: `${stationPct(currentStageIdx) - stationPct(currentStageIdx - 1)}%` }
-    : null;
+  const doneLineStyle = { left: `${stationPct(0)}%`, width: `${Math.max(0, stationPct(lineEndIdx) - stationPct(0))}%` };
 
   // Paczki (Karta 1): tyle kafelków, ile paczek ma przebieg; siatka dopasowuje rozmiar
   // kafelka do wolnego pola karty (fitGrid), więc 3 paczki i 300 paczek wypełniają ją tak samo.
-  const packs = scoringPacks(scoring, nowSec);
+  const packs = scoringPacks(scoring);
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
   const [gridBox, setGridBox] = useState({ w: 0, h: 0 });
   useEffect(() => {
@@ -273,41 +271,39 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
     return () => ro.disconnect();
   }, [gridEl]);
 
-  // Kolor gotowego kafelka idzie po siatce jak strumień: kobalt → fiolet.
+  // Kolor gotowego kafelka idzie po siatce jak strumień: kobalt → fiolet. Kafelek w pracy
+  // (bieżąca paczka, biegnące źródło) ładuje się w pętli tym samym kolorem.
   const tileTone = (i: number, n: number) => ({ '--t': n > 1 ? i / (n - 1) : 0 }) as React.CSSProperties;
   const packCells = Array.from({ length: packs?.total ?? 0 }, (_, i) => {
     let stateClass = '';
-    let styleObj = tileTone(i, packs?.total ?? 0);
-    if (isCompleted || (packs && i < packs.done)) {
-      stateClass = 'done';
-    } else if (packs && i === packs.done && isRunning) {
-      stateClass = packs.current === null ? 'cur is-busy' : 'cur';
-      styleObj = { ...styleObj, '--p': packs.current ?? 0 } as React.CSSProperties;
-    }
-    return { packIdx: i + 1, stateClass, styleObj };
+    if (isCompleted || (packs && i < packs.done)) stateClass = 'done';
+    else if (packs && i === packs.done && isRunning) stateClass = 'cur';
+    return { packIdx: i + 1, stateClass, styleObj: tileTone(i, packs?.total ?? 0) };
   });
 
-  // Przed oceną AI karta paczek pokazuje źródła: kafelek = źródło, wypełnienie = pobrane
-  // opisy (meldunki scraperów). Inaczej przez cały scraping stało siedem pustych kratek.
+  // Przed oceną AI karta paczek pokazuje źródła: kafelek = źródło. Scrapery pracują
+  // równolegle, więc w pętli ładuje się każde biegnące źródło — wszystkie w jednym rytmie.
   const sourcesDone = sources.filter((s) => s.state === 'done' || s.state === 'skipped').length;
   const sourcesFound = sources.reduce((acc, s) => acc + (s.found ?? 0), 0);
   const sourceCells = sources.map((s, i) => {
-    const hasDetails = !!s.details_total;
     const live = s.state === 'running' && isRunning;
     let stateClass = '';
-    let styleObj = tileTone(i, sources.length);
     if (s.state === 'done' || s.state === 'skipped') stateClass = 'done';
-    else if (live) {
-      stateClass = hasDetails ? 'cur' : 'cur is-busy';
-      const fraction = hasDetails ? Math.min(1, (s.details_done ?? 0) / (s.details_total ?? 1)) : 0;
-      styleObj = { ...styleObj, '--p': fraction } as React.CSSProperties;
-    }
-    const tip = hasDetails && live
-      ? `${s.name}: opisy ${(s.details_done ?? 0).toLocaleString('pl-PL')} / ${(s.details_total ?? 0).toLocaleString('pl-PL')}`
+    else if (live) stateClass = 'cur';
+    const tip = live && s.details_total
+      ? `${s.name}: opisy ${(s.details_done ?? 0).toLocaleString('pl-PL')} / ${s.details_total.toLocaleString('pl-PL')}`
       : s.found !== null
         ? `${s.name}: ${s.found.toLocaleString('pl-PL')} ${plural(s.found, OFFERS)}`
         : s.name;
-    return { name: s.name, stateClass, tip, styleObj };
+    return { name: s.name, stateClass, tip, styleObj: tileTone(i, sources.length) };
+  });
+
+  // Pętle ładowania startują z kafelkiem, więc równoległe źródła rozjeżdżały się w fazie
+  // (jedno pełne, drugie puste). Wspólny start na osi dokumentu trzyma je w jednym rytmie.
+  useEffect(() => {
+    sheetRef.current?.getAnimations({ subtree: true }).forEach((a) => {
+      if (a instanceof CSSAnimation && a.animationName === 'pp-pack-load' && a.startTime !== 0) a.startTime = 0;
+    });
   });
   const showSources = !scoring && sources.length > 0;
   const grid = fitGrid(showSources ? sources.length : packCells.length, gridBox.w, gridBox.h);
@@ -461,7 +457,6 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
           <div className="pp-stations">
             <div className="line">
               <div className="pp-done-line" style={doneLineStyle} />
-              {runLineStyle && <div className="pp-run-line" style={runLineStyle} />}
               {stageCols.map((c, i) => {
                 let dotClass = 'pp-station-dot st';
                 if (c.isDone) dotClass += ' done';
@@ -586,18 +581,14 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
 
             <div className="pp-ticker">
               {lastLogs.length === 0 ? (
-                <div className="small" style={{ marginTop: 8 }}>Brak bieżących komunikatów</div>
+                <div className="small">Brak bieżących komunikatów</div>
               ) : (
-                lastLogs.map((l, idx) => {
-                  // Najnowszy u dołu w pełnym kolorze, starsze coraz bledsze.
-                  const opacity = 1 - (lastLogs.length - 1 - idx) * 0.22;
-                  return (
-                    <div key={idx} className="pp-tk" style={{ opacity }}>
-                      {l.time && <time>{l.time}</time>}
-                      <span title={l.text}>{l.text}</span>
-                    </div>
-                  );
-                })
+                lastLogs.map((l, idx) => (
+                  <div key={parsedLogs.length - lastLogs.length + idx} className="pp-tk">
+                    <time>{l.time}</time>
+                    <span title={l.text}>{l.text}</span>
+                  </div>
+                ))
               )}
             </div>
           </div>

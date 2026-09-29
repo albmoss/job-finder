@@ -433,36 +433,6 @@
   transition: width 400ms var(--ease-out);
 }
 
-/* Odcinek biegnącego etapu: kobalt jak strumień, światło płynie ku bieżącej stacji. */
-.pp-stations .line .pp-run-line {
-  position: absolute;
-  top: 50%;
-  height: 2px;
-  margin-top: -0.5px;
-  border-radius: 1px;
-  overflow: hidden;
-  background: linear-gradient(90deg, color-mix(in oklab, var(--accent-2) 45%, transparent), var(--accent));
-}
-
-.pp-stations .line .pp-run-line::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 30%;
-  background: linear-gradient(90deg, transparent, var(--accent-hot), transparent);
-  animation: pp-run-flow 1.8s var(--ease-out) infinite;
-}
-
-@keyframes pp-run-flow {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(340%); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pp-stations .line .pp-run-line::after { animation: none; display: none; }
-}
-
 .pp-stations .st {
   position: relative;
   justify-self: center;
@@ -645,34 +615,14 @@
   background: var(--fill-3);
 }
 
-/* Bieżący kafelek „ładuje się” tym samym kolorem: szacunek z tempa paczek, tyk co sekundę. */
+/* Kafelek w pracy ładuje się od lewej w pętli; wszystkie biegnące w jednym rytmie
+   (wspólny start ustawia PipelineSheet). */
 .pp-pack.cur::before {
   content: "";
   position: absolute;
   inset: 0;
   transform-origin: left center;
-  transform: scaleX(var(--p, 0));
-  transition: transform 1s linear;
-}
-
-.pp-pack.cur::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1.5px;
-  background: var(--accent-hot);
-  left: calc(var(--p, 0) * 100%);
-  opacity: 0.9;
-  transition: left 1s linear;
-}
-
-/* Bez tempa (pierwsza paczka, źródło bez meldunków): ładowanie w pętli. */
-.pp-pack.cur.is-busy::before {
   animation: pp-pack-load 1.8s var(--ease-out) infinite;
-}
-.pp-pack.cur.is-busy::after {
-  display: none;
 }
 @keyframes pp-pack-load {
   0% { transform: scaleX(0); opacity: 1; }
@@ -680,9 +630,7 @@
   100% { transform: scaleX(1); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .pp-pack.cur::before,
-  .pp-pack.cur::after { transition: none; }
-  .pp-pack.cur.is-busy::before { animation: none; transform: scaleX(0.5); }
+  .pp-pack.cur::before { animation: none; transform: scaleX(0.5); }
 }
 
 .pp-card .hint {
@@ -770,35 +718,48 @@
   margin-top: 4px;
 }
 
-/* Ticker logów na żywo */
+/* Ticker logów na żywo: zajmuje całe pole karty, najnowszy komunikat na dole,
+   starsze wygasają ku górze (maska), nadmiar ucina się u góry. */
 .pp-ticker {
+  flex: 1 1 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  justify-content: flex-end;
+  gap: 6px;
   overflow: hidden;
+  mask-image: linear-gradient(to bottom, transparent, black 55%);
 }
 
 .pp-tk {
+  flex: none;
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
-  transition: opacity 300ms ease;
 }
 
+/* Stała szerokość kolumny czasu: komunikaty bez znacznika trzymają tę samą krawędź. */
 .pp-tk time {
   flex: none;
+  width: 8ch;
   font-family: var(--mono);
   font-size: 10px;
   color: var(--ink-3);
 }
 
 .pp-tk span {
+  min-width: 0;
   font-size: 12px;
-  color: var(--ink);
+  line-height: 1.35;
+  color: var(--ink-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.pp-tk:last-child span {
+  color: var(--ink);
 }
 
 /* Rozwinięty dziennik w arkuszu */

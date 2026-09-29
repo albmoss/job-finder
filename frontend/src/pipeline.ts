@@ -137,17 +137,15 @@ export interface ScoringPacks {
   size: number;
   total: number;
   done: number;
-  /** 0–1: szacunek postępu bieżącej paczki ze średniego czasu paczki; null = brak tempa. */
-  current: number | null;
 }
 
 /**
- * Paczki oceny AI: ile jest w przebiegu, ile gotowych i jak daleko jest bieżąca. Rozmiar
+ * Paczki oceny AI: ile jest w przebiegu i ile gotowych. Rozmiar
  * paczki podaje telemetria (`batch_size` z „Target Batch Size”); przebieg uruchomiony przez
  * serwer sprzed tego pola go nie ma — wtedy rozmiar wynika z kolejki: „Batch k (…, R remaining)”
  * liczy R przed zdjęciem paczki, więc k − 1 paczek zabrało total − R ofert.
  */
-export function scoringPacks(scoring: ScoringTelemetry | null | undefined, nowSec: number): ScoringPacks | null {
+export function scoringPacks(scoring: ScoringTelemetry | null | undefined): ScoringPacks | null {
   if (!scoring?.total) return null;
   let size = scoring.batch_size ?? 0;
   if (!size && scoring.batch > 1 && scoring.remaining != null) {
@@ -157,12 +155,7 @@ export function scoringPacks(scoring: ScoringTelemetry | null | undefined, nowSe
   const total = Math.ceil(scoring.total / size);
   // Ostatnia paczka bywa niepełna (5574 = 74 × 75 + 24) — po ocenie wszystkiego liczy się jako gotowa.
   const done = scoring.processed >= scoring.total ? total : Math.floor(scoring.processed / size);
-  let current: number | null = null;
-  if (done > 0 && scoring.first_batch_at && scoring.last_done_at) {
-    const perPack = (scoring.last_done_at - scoring.first_batch_at) / (scoring.processed / size);
-    if (perPack > 0) current = Math.min(0.92, Math.max(0, (nowSec - scoring.last_done_at) / perPack));
-  }
-  return { size, total, done, current };
+  return { size, total, done };
 }
 
 export interface GridFit {
