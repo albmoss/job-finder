@@ -106,7 +106,7 @@ before a run:
 
 | `LLM_PROVIDER` | Key | Default cascade |
 |---|---|---|
-| `gemini` (default) | `GEMINI_API_KEY_PRIMARY` | `gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` → `gemini-3.6-flash` → `gemini-2.5-flash` |
+| `gemini` (default) | `GEMINI_API_KEY_PRIMARY` | `gemini-3.1-flash-lite` → `gemini-3.5-flash-lite` → `gemini-3.7-flash` → `gemini-2.5-flash` |
 | `openai` | `OPENAI_API_KEY` | `gpt-6-luna` |
 | `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` → `claude-sonnet-5` |
 

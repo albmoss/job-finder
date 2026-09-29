@@ -53,18 +53,19 @@ PROVIDERS: dict[str, Provider] = {
         label="Google Gemini",
         key_envs=_key_envs("GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY"),
         models_env="GEMINI_MODELS",
-        # Kolejność ustalona empirycznie (benchmark_models.py na 53 ofertach ocenionych
-        # ręcznie, 3 przebiegi). Korelacja Spearmana z ocenami użytkownika / czas na batch:
-        #   gemini-3.5-flash-lite   +0.840   15s   <- najlepsza korelacja, najszybszy
-        #   gemini-3.1-flash-lite   +0.833   16s   <- najlepszy MAE (0.91), remis w korelacji
-        #   gemini-3.6-flash        +0.802   40s   <- gorszy MIMO że nowszy i większy
-        #   gemini-2.5-flash        +0.664  100s   <- ostatnia deska ratunku
-        # Wniosek wbrew intuicji: modele "lite" wygrywają. To zadanie to klasyfikacja
-        # wg jawnej rubryki (profil preferencji), a nie otwarte rozumowanie - większy
-        # model nie ma tu czego dołożyć, a na darmowym planie kosztuje czas i limity.
-        # Zanim zmienisz tę listę, uruchom benchmark_models.py.
-        default_models=("gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
-                        "gemini-3.6-flash", "gemini-2.5-flash"),
+        # Kolejność ustalona empirycznie (benchmark_models.py na 68 ofertach ocenionych
+        # ręcznie, 2026-09-29). Korelacja Spearmana z ocenami użytkownika / MAE / czas:
+        #   gemini-3.1-flash-lite   +0.814 / +0.809   MAE 1.20 / 1.08   20-22s  <- 2 przebiegi
+        #   gemini-3.5-flash-lite   +0.798 / +0.806   MAE 1.32 / 1.26   26-28s  <- 2 przebiegi
+        #   gemini-3.7-flash        +0.863            MAE 1.28          86s     <- 1 przebieg
+        # Flash (3.5-3.8) odpowiadał wtedy prawie wyłącznie 503 „high demand” - 1 udana
+        # próba na 24 - więc na czele kaskady tylko by opóźniał. Wcześniejszy pomiar
+        # (53 oferty): 3.6-flash +0.802 przy 40s, 2.5-flash +0.664 przy 100s.
+        # To zadanie to klasyfikacja wg jawnej rubryki (profil preferencji), a nie
+        # otwarte rozumowanie - większy model niewiele tu dokłada, a na darmowym planie
+        # kosztuje czas i limity. Zanim zmienisz tę listę, uruchom benchmark_models.py.
+        default_models=("gemini-3.1-flash-lite", "gemini-3.5-flash-lite",
+                        "gemini-3.7-flash", "gemini-2.5-flash"),
         default_profile_models=("gemini-3.6-flash", "gemini-3.5-flash",
                                 "gemini-3.5-flash-lite", "gemini-2.5-flash"),
         key_hint="AIza…",
