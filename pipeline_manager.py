@@ -204,6 +204,8 @@ class PipelineProcessManager:
         self._pipeline_stopped_seen = False
         self._started_at = None
         self._finished_at = None
+        self._echo = None
+        self._pending_sync = None
         self._telemetry = {"sources": [], "scoring": None, "stages": {}}
         self._init_stages("full")
 
@@ -430,8 +432,29 @@ class PipelineProcessManager:
             if sc.get("key") is not None:
                 sc["cooldowns"][str(sc["key"])] = round(time.time() + sleep_s, 1)
             return
+
+    def _release_finished_process(self):
+        """
+        Po zakończeniu własnego procesu oddaje widok przebiegowi, który zapisał stan
+        z innego procesu (np. uruchomionemu z terminala): plik stanu ma wtedy inny PID.
+        """
+        proc = self._process
+        if proc is None or proc.poll() is None:
+            return
+        if self._thread is not None and self._thread.is_alive():
+            return
+        if not STATE_LOCK_FILE.exists():
+            return
+        data = load_json_safe(STATE_LOCK_FILE, default=None)
+        if isinstance(data, dict) and data.get("pid") and data.get("pid") != proc.pid:
+            self._process = None
+            self._process_create_time = None
+            self._cmd = data.get("cmd")
+            self._mode = data.get("mode") or "full"
+
     def is_running(self):
         with self._lock:
+            self._release_finished_process()
             if self._process is not None:
                 poll = self._process.poll()
                 if poll is None:
@@ -452,7 +475,8 @@ class PipelineProcessManager:
                     pass
             return False
 
-    def start_pipeline(self, mode="full", cmd=None, is_resume=False):
+    def start_pipeline(self, mode="full", cmd=None, is_resume=False, echo=None):
+        """`echo`: funkcja dostająca każdą linię wyjścia procesu (np. druk w konsoli)."""
         with self._lock:
             if self.is_running():
                 active_pid = self._process.pid if (self._process and self._process.poll() is None) else "inny proces"
@@ -465,6 +489,7 @@ class PipelineProcessManager:
 
             self._mode = mode
             self._cmd = cmd
+            self._echo = echo
             if not is_resume:
                 self._init_stages(mode)
                 self._active_stage_idx = 0
@@ -540,6 +565,10 @@ class PipelineProcessManager:
             if not self.is_running():
                 return False, "Pipeline nie jest obecnie uruchomiony."
 
+            if self._process is None:
+                disk_state = load_json_safe(STATE_LOCK_FILE, default=None) or {}
+                return self._stop_foreign_run(disk_state, force)
+
             if self._status == "stopping":
                 force = True
 
@@ -600,6 +629,36 @@ class PipelineProcessManager:
             return True, "Wymuszono natychmiastowe zatrzymanie procesu (trwająca paczka mogła nie zostać zapisana)."
 
         return True, "Wysłano żądanie zatrzymania. Pipeline dokończy bieżącą paczkę i zapisze wyniki przed wyjściem."
+
+    def _stop_foreign_run(self, disk_state, force):
+        """
+        Zatrzymuje przebieg prowadzony przez inny proces (np. uruchomiony z terminala).
+        Plik stanu należy do tamtego procesu, więc ten menedżer go nie nadpisuje:
+        zostawia flagę stopu, a przy wymuszeniu kończy drzewo procesów.
+        Właściciel przebiegu zapisze stan końcowy sam.
+        """
+        if STOP_FLAG_FILE.exists():
+            force = True
+        try:
+            STOP_FLAG_FILE.touch()
+        except Exception as e:
+            logger.warning(f"Błąd tworzenia pliku flagi stopu: {e}")
+            return False, f"Nie udało się zgłosić zatrzymania: {e}"
+        if not force:
+            return True, "Wysłano żądanie zatrzymania. Pipeline dokończy bieżącą paczkę i zapisze wyniki przed wyjściem."
+
+        pid = disk_state.get("pid")
+        logger.info(f"Wymuszono natychmiastowe zatrzymanie procesu pipeline'u (PID: {pid}).")
+        if not _terminate_process_tree(pid, disk_state.get("create_time")):
+            return False, "Nie udało się zakończyć procesu pipeline'u."
+        return True, "Wymuszono natychmiastowe zatrzymanie procesu (trwająca paczka mogła nie zostać zapisana)."
+
+    def wait(self):
+        """Czeka na koniec przebiegu uruchomionego przez ten menedżer; zwraca kod wyjścia procesu."""
+        thread = self._thread
+        while thread is not None and thread.is_alive():
+            thread.join(0.5)
+        return self._exit_code
 
     def resume_pipeline(self):
         """
@@ -672,6 +731,12 @@ class PipelineProcessManager:
     def _sync_state_to_disk(self, force=False):
         now = time.time()
         if not force and (now - self._last_disk_sync) < 0.35:
+            # Odroczony zapis: inaczej ostatnia linia przed dłuższą ciszą (np. start paczki
+            # przed wywołaniem modelu) nie trafia na dysk, a stamtąd czyta go serwer.
+            if self._pending_sync is None:
+                self._pending_sync = threading.Timer(0.4, self._flush_pending_sync)
+                self._pending_sync.daemon = True
+                self._pending_sync.start()
             return
         self._last_disk_sync = now
         try:
@@ -702,6 +767,11 @@ class PipelineProcessManager:
         except Exception as e:
             logger.warning(f"Błąd zapisu stanu procesu: {e}")
 
+    def _flush_pending_sync(self):
+        with self._lock:
+            self._pending_sync = None
+        self._sync_state_to_disk(force=True)
+
     def _reader_loop(self):
         proc = self._process
         stages = self._stages
@@ -711,6 +781,8 @@ class PipelineProcessManager:
 
         try:
             for raw_line in proc.stdout:
+                if self._echo:
+                    self._echo(raw_line.rstrip("\r\n"))
                 line = raw_line.rstrip()
                 if not line:
                     continue
@@ -760,8 +832,9 @@ class PipelineProcessManager:
             code = -1
             with self._lock:
                 self._error_message = str(e)
+        stop_requested = STOP_FLAG_FILE.exists()
         try:
-            if STOP_FLAG_FILE.exists():
+            if stop_requested:
                 STOP_FLAG_FILE.unlink()
         except Exception:
             pass
@@ -775,7 +848,8 @@ class PipelineProcessManager:
             any_failed = any(s["status"] == "failed" for s in stages)
             is_standalone = bool(self._cmd and not any("run_final_pipeline" in str(arg) for arg in self._cmd))
 
-            if self._pipeline_stopped_seen or self._status in ("stopping", "stopped"):
+            if (self._pipeline_stopped_seen or self._status in ("stopping", "stopped")
+                    or (stop_requested and not self._pipeline_complete_seen)):
                 self._status = "stopped"
                 self._success = False
                 if self._active_stage_idx < len(stages) and stages[self._active_stage_idx]["status"] == "running":
@@ -815,6 +889,7 @@ class PipelineProcessManager:
 
     def get_state(self):
         with self._lock:
+            self._release_finished_process()
             if self._process is not None:
                 is_alive = self._process.poll() is None
                 if not is_alive and self._status == "running":
@@ -903,6 +978,9 @@ class PipelineProcessManager:
                                 status = "failed"
                             else:
                                 status = "idle"
+
+                        if is_alive and status == "running" and STOP_FLAG_FILE.exists():
+                            status = "stopping"
 
                         if not is_alive:
                             if status in ("running", "stopping"):

@@ -1642,6 +1642,81 @@ def test_offer_api_contract():
         shutil.rmtree(temp_path, ignore_errors=True)
 
 
+def test_foreign_run_visible_to_server():
+    print("\n[25] Run started outside the server is visible and stoppable from the server")
+    import tempfile, shutil, time
+    from unittest.mock import patch
+    import pipeline_manager as pm
+    from pipeline_manager import PipelineProcessManager, load_json_safe
+
+    temp_path = Path(tempfile.mkdtemp(prefix="test_foreign_run_"))
+    state_file = temp_path / "pipeline_run_state.json"
+    stop_flag = temp_path / "pipeline_stop_requested.flag"
+    # Nazwa jak prawdziwy punkt wejścia: menedżer rozpoznaje po niej przebieg pipeline'u.
+    child = temp_path / "run_final_pipeline.py"
+    child.write_text(
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "flag = Path(sys.argv[1])\n"
+        "print('── PHASE 3: AI analysis (waterfall)', flush=True)\n"
+        "print('Batch 1 (Processing 75 jobs, 150 remaining in queue)...', flush=True)\n"
+        "deadline = time.time() + 15\n"
+        "while not flag.exists() and time.time() < deadline:\n"
+        "    time.sleep(0.05)\n"
+        "print('PIPELINE STOPPED', flush=True)\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+
+    with patch.object(pm, "STATE_LOCK_FILE", state_file), \
+         patch.object(pm, "STOP_FLAG_FILE", stop_flag), \
+         patch.object(pm, "CHECKPOINT_FILE", temp_path / "pipeline_checkpoint.json"):
+        try:
+            server = PipelineProcessManager()
+            server.start_pipeline(mode="standalone", cmd=[sys.executable, "-c", "pass"])
+            server.wait()
+            check("server's own earlier run finished", server.get_state()["status"] == "completed")
+
+            echoed = []
+            owner = PipelineProcessManager()
+            started, _ = owner.start_pipeline(
+                mode="full", cmd=[sys.executable, "-u", str(child), str(stop_flag)], echo=echoed.append)
+            check("terminal run started", started is True)
+
+            deadline = time.time() + 10
+            state = server.get_state()
+            while time.time() < deadline and not (
+                    state.get("running") and state["stages"][5]["status"] == "running"
+                    and (state["telemetry"].get("scoring") or {}).get("batch") == 1):
+                time.sleep(0.1)
+                state = server.get_state()
+            check("server sees the terminal run as running", state.get("running") is True and state["status"] == "running")
+            check("server shows the terminal run's stage", state["stages"][5]["status"] == "running")
+            check("server shows the terminal run's batches",
+                  state["telemetry"]["scoring"]["batch"] == 1 and state["telemetry"]["scoring"]["remaining"] == 150)
+            check("server shows the terminal run's log", any("PHASE 3" in line for line in state["logs"]))
+
+            refused, _ = server.start_pipeline(mode="full", cmd=[sys.executable, "-c", "pass"])
+            check("server refuses a second run while the terminal run lives", refused is False)
+
+            owner_pid = load_json_safe(state_file, default={}).get("pid")
+            stop_ok, _ = server.stop_pipeline(force=False)
+            check("server accepts a stop request for the terminal run", stop_ok is True)
+            check("stop request leaves the owner's state file intact",
+                  load_json_safe(state_file, default={}).get("pid") == owner_pid)
+            stopping = server.get_state()["status"]
+
+            code = owner.wait()
+            final = server.get_state()
+            check("server shows stopping until the run exits", stopping in ("stopping", "stopped"))
+            check("terminal run exits after the stop flag", code == 1)
+            check("server shows the terminal run as stopped", final["running"] is False and final["status"] == "stopped")
+            check("stopped terminal run can be resumed from the server", final["can_resume"] is True)
+            check("terminal output is echoed", "PIPELINE STOPPED" in echoed)
+        finally:
+            shutil.rmtree(temp_path, ignore_errors=True)
+
+
 def main():
     print("=" * 62)
     print("  INTEGRATION TESTS (no API calls)")
@@ -1662,7 +1737,8 @@ def main():
                  test_playwright_chromium_prerequisites,
                  test_pipeline_skipped_stage_progress,
                  test_pipeline_stage_stats_and_eta,
-                 test_offer_api_contract):
+                 test_offer_api_contract,
+                 test_foreign_run_visible_to_server):
         try:
             test()
         except Exception as e:

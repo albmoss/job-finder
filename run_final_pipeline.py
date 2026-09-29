@@ -274,9 +274,36 @@ def run_pipeline(skip_scraping=False, rescore_all=False, rescore_changed=False, 
     clear_checkpoint()
     return _finish(phase_results, stopped=False)
 
+
+def run_in_manager(argv) -> int:
+    """
+    Przebieg z terminala idzie przez PipelineProcessManager jako proces potomny.
+    Stan trafia wtedy do pipeline_run_state.json i interfejs pokazuje go tak samo
+    jak przebieg uruchomiony przyciskiem; wyjście procesu drukuje się w konsoli.
+    """
+    from pipeline_manager import PipelineProcessManager
+
+    mgr = PipelineProcessManager()
+    mode = "skip_scraping" if "--skip-scraping" in argv else "full"
+    cmd = [sys.executable, "-u", str(Path(__file__).resolve()), *argv]
+    ok, msg = mgr.start_pipeline(mode=mode, cmd=cmd, echo=lambda line: print(line, flush=True))
+    if not ok:
+        print(msg)
+        return 1
+    try:
+        code = mgr.wait()
+    except KeyboardInterrupt:
+        # Ctrl+C trafia też do procesu potomnego (wspólna konsola); czekamy, aż zapisze stan.
+        try:
+            code = mgr.wait()
+        except KeyboardInterrupt:
+            return 130
+    return 1 if code is None else code
+
+
 if __name__ == "__main__":
     if not os.environ.get("PIPELINE_MANAGED"):
-        clear_stop_flag()
+        sys.exit(run_in_manager(sys.argv[1:]))
     skip_scraping = "--skip-scraping" in sys.argv
     rescore_all = "--rescore-all" in sys.argv
     rescore_changed = "--rescore-changed" in sys.argv
