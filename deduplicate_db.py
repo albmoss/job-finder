@@ -15,8 +15,14 @@ wersja nie widziała w ogóle.
 
 DLACZEGO FAŁSZYWE SKLEJENIE JEST TANIE: scalony rekord zachowuje linki do
 wszystkich wystąpień w polu `also_on`. Nawet gdy klucz połączy dwie różne
-oferty tej samej agencji o identycznym tytule, druga nadal jest jednym
-kliknięciem - a UI pokazuje "także na: ...".
+oferty tej samej agencji o identycznym tytule, link do drugiej zostaje w bazie.
+
+JEDNA OFERTA, KILKA MIAST: NoFluffJobs, JustJoinIT i RocketJobs dają osobny link
+na każdą lokalizację (`…-remote`, `…-wroclaw`), z tym samym tekstem. Klucz
+z miastem ich nie łączy, więc lista pokazywała tę samą ofertę trzy razy, a każda
+kopia szła osobno do płatnej oceny. Drugi klucz - firma | tytuł | cały opis -
+skleja takie grupy mimo różnych miast. Sam tytuł bez opisu nie wystarcza: firma
+potrafi szukać na to samo stanowisko w dwóch miastach do dwóch różnych zespołów.
 
 WAŻNE: przy wyborze, który duplikat zachować, oferta z decyzją użytkownika ma
 pierwszeństwo przed dłuższym opisem. Inaczej deduplikacja kasowała ofertę,
@@ -26,6 +32,7 @@ Bez pandas celowo: `to_dict('records')` wstawia NaN w brakujące pola, a NaN
 serializuje się do JSON-a jako gołe `NaN`, czego nie da się potem wczytać.
 """
 
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -55,6 +62,9 @@ _WS = re.compile(r"\s+")
 # na czymś jeszcze, inaczej wszystkie "ukryta firma | magazynier | warszawa"
 # zlałyby się w jeden rekord.
 _GENERIC_COMPANY = ("praca", "ukryta", "confidential", "pracodawca", "klient", "firma")
+
+# Lokalizacje zdalne po normalize_city - przy sklejaniu miast wygrywa taki wariant.
+_REMOTE = {"remote", "zdalnie", "zdalna", "praca zdalna", "fully remote"}
 
 
 def normalize_company(company: str) -> str:
@@ -90,6 +100,23 @@ def normalize_city(location: str) -> str:
 
 def _clean_description(text: str) -> str:
     return re.sub(r"[\W_]+", "", (text or "").lower())
+
+
+# Krótszy opis to zwykle zaślepka portalu ("Zobacz ogłoszenie"), a nie tekst oferty -
+# równość zaślepek niczego nie dowodzi.
+_MIN_SAME_TEXT = 200
+
+
+def same_text_key(job: dict):
+    """Klucz tej samej oferty wystawionej pod kilkoma miastami: firma | tytuł | skrót opisu."""
+    company = normalize_company(job.get("company"))
+    if not company or any(k in company for k in _GENERIC_COMPANY):
+        return None
+    text = _clean_description(job.get("description"))
+    if len(text) < _MIN_SAME_TEXT:
+        return None
+    digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
+    return f"{company}|{normalize_title(job.get('title'))}|{digest}"
 
 
 def create_fingerprint(job: dict) -> str:
@@ -177,13 +204,38 @@ def _plan(all_jobs: dict, decided: set) -> tuple:
     for link, job in all_jobs.items():
         groups.setdefault(create_fingerprint(job), []).append(link)
 
+    # Grupy z różnych miast, które łączy identyczny tekst oferty, stają się jedną.
+    parent = {key: key for key in groups}
+
+    def root(key):
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    first_by_text = {}
+    for link, job in all_jobs.items():
+        text_key = same_text_key(job)
+        if text_key is None:
+            continue
+        fp = create_fingerprint(job)
+        if text_key in first_by_text:
+            parent[root(fp)] = root(first_by_text[text_key])
+        else:
+            first_by_text[text_key] = fp
+    merged = {}
+    for key, links in groups.items():
+        merged.setdefault(root(key), []).extend(links)
+
     keep, provenance = set(), {}
     stats = {"groups": 0, "cross": 0, "extra_decided": 0, "dropped": 0}
 
-    for links in groups.values():
+    for links in merged.values():
+        # Przy równych opisach zostaje wariant zdalny - obejmuje każde miasto.
         links.sort(key=lambda l: (
             0 if l in decided else 1,
             -len(all_jobs[l].get("description") or ""),
+            0 if normalize_city(all_jobs[l].get("location")) in _REMOTE else 1,
             l,
         ))
 
