@@ -16,6 +16,7 @@ from .adzuna_api import AdzunaAPIScraper
 from .jooble_api import JoobleAPIScraper
 from .careerjet_api import CareerjetAPIScraper
 
+from .ats_feeds import ATSFeedsScraper
 # Portale ogólne (nie-IT) na wspólnej bazie ld+json
 from .ldjson_scraper_base import LdJsonPortalScraper
 from .praca_pl_scraper import PracaPlScraper
@@ -38,6 +39,7 @@ __all__ = [
     'AdzunaAPIScraper',
     'JoobleAPIScraper',
     'CareerjetAPIScraper',
+    'ATSFeedsScraper',
     # Portale ogólne (ld+json)
     'LdJsonPortalScraper',
     'PracaPlScraper',

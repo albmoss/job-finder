@@ -218,12 +218,13 @@ class PipelineProcessManager:
 
     def _init_stages(self, mode):
         stages_def = [
-            {"id": "phase0", "num": "00", "title": "Archiwizacja starych ofert", "pattern": r"PHASE 0\b"},
+            # Profil z CV (PHASE 0.5) jest częścią etapu 00 - tor ma zostać siedmioetapowy.
+            {"id": "phase0", "num": "00", "title": "Archiwizacja i profil z CV", "pattern": r"PHASE 0(?:\.5)?\b"},
             {"id": "phase1", "num": "01", "title": "Pobieranie ofert ze źródeł", "pattern": r"PHASE 1\b(?![\.\d])"},
             {"id": "phase1_5", "num": "1.5", "title": "Normalizacja linków", "pattern": r"PHASE 1\.5\b"},
             {"id": "phase2", "num": "02", "title": "Deduplikacja bazy ofert", "pattern": r"PHASE 2\b(?![\.\d])"},
             {"id": "phase2_5", "num": "2.5", "title": "Czyszczenie opisów ofert", "pattern": r"PHASE 2\.5\b"},
-            {"id": "phase3", "num": "03", "title": "Analiza i ocena AI", "pattern": r"PHASE 3\b"},
+            {"id": "phase3", "num": "03", "title": "Dopasowanie do CV", "pattern": r"PHASE 3\b"},
             {"id": "phase4", "num": "04", "title": "Ewaluacja rankingu", "pattern": r"PHASE 4\b"},
         ]
         self._stages = []
@@ -262,18 +263,16 @@ class PipelineProcessManager:
 
     def _ensure_scoring(self) -> dict:
         if self._telemetry["scoring"] is None:
-            key_count = self._telemetry.get("key_count")
             self._telemetry["scoring"] = {
                 "total": None,
                 "processed": 0,
-                "batch": 0,
-                "batch_size": None,
-                "remaining": None,
-                "model": None,
-                "key": None,
-                "key_count": key_count,
-                "cooldowns": {},
-                # Tempo oceny: start pierwszej paczki i koniec ostatniej udanej (epoch s).
+                # Etap dopasowania (matching/run.py): odrzucone przez przesiew,
+                # do oceny, ocenione i tempo z linii „Scored X/Y (R/s)”.
+                "prefilter_rejected": None,
+                "to_score": None,
+                "scored": 0,
+                "rate": None,
+                # Tempo oceny: pierwszy i ostatni meldunek postępu (epoch s).
                 "first_batch_at": None,
                 "last_done_at": None,
             }
@@ -281,18 +280,11 @@ class PipelineProcessManager:
 
     def _telemetry_snapshot(self) -> dict:
         scoring = self._telemetry["scoring"]
-        snapshot = {
+        return {
             "sources": [dict(src) for src in self._telemetry["sources"]],
-            "scoring": None,
+            "scoring": dict(scoring) if scoring else None,
             "stages": {k: dict(v) for k, v in self._telemetry["stages"].items()},
-            "key_count": self._telemetry.get("key_count"),
         }
-        if scoring:
-            sc_copy = dict(scoring)
-            if isinstance(sc_copy.get("cooldowns"), dict):
-                sc_copy["cooldowns"] = dict(sc_copy["cooldowns"])
-            snapshot["scoring"] = sc_copy
-        return snapshot
 
     def _parse_telemetry(self, line: str):
         # Źródła ofert (scrapery)
@@ -381,56 +373,27 @@ class PipelineProcessManager:
             diet["chars_after"] += int(m.group(1).replace(",", ""))
             return
 
-        # Analiza i punktacja AI (waterfall)
-        m = re.search(r"Processing\s+(\d+)\s+jobs\s*\(Target Batch Size:\s*(\d+)", line)
+        # Dopasowanie (matching/run.py). Wzorce = treść logów tego modułu.
+        m = re.search(r"Prefilter:\s*(\d+)\s+rejected\b.*\|\s*to score:\s*(\d+)", line)
         if m:
             sc = self._ensure_scoring()
-            sc["total"] = int(m.group(1))
-            sc["batch_size"] = int(m.group(2))
+            sc["prefilter_rejected"] = int(m.group(1))
+            sc["to_score"] = sc["total"] = int(m.group(2))
+            stages["phase3"] = {"prefilter_rejected": int(m.group(1)), "to_score": int(m.group(2))}
             return
 
-        m = re.search(r"Nothing left to do", line)
+        m = re.search(r"Scored\s+(\d+)/(\d+)\s*\(([\d.]+)/s\)", line)
         if m:
             sc = self._ensure_scoring()
-            sc["total"] = 0
-            sc["remaining"] = 0
-            return
-
-        m = re.search(r"Batch\s+(\d+)\s*\(Processing\s+\d+\s+jobs,\s+(\d+)\s+remaining in queue\)", line)
-        if m:
-            sc = self._ensure_scoring()
-            sc["batch"] = int(m.group(1))
-            sc["remaining"] = int(m.group(2))
+            now = round(time.time(), 1)
+            sc["scored"] = sc["processed"] = int(m.group(1))
+            sc["to_score"] = sc["total"] = int(m.group(2))
+            sc["rate"] = float(m.group(3))
             if sc["first_batch_at"] is None:
-                sc["first_batch_at"] = round(time.time(), 1)
-            return
-
-        m = re.search(r"Success!\s+Processed\s+(\d+)\s+out of\s+\d+", line)
-        if m:
-            sc = self._ensure_scoring()
-            sc["processed"] += int(m.group(1))
-            sc["last_done_at"] = round(time.time(), 1)
-            return
-
-        m = re.search(r"Loaded API State:\s*Model\[\d+\]\s*Key\[(\d+)\]", line)
-        if m:
-            sc = self._ensure_scoring()
-            sc["key"] = int(m.group(1))
-            return
-
-        m = re.search(r"Model:\s*(.+?)\s*\|\s*Key\[(\d+)\]", line)
-        if m:
-            sc = self._ensure_scoring()
-            sc["model"] = m.group(1).strip()
-            sc["key"] = int(m.group(2))
-            return
-
-        m = re.search(r"Rate limit hit\.\s*Sleeping\s+(\d+)s", line)
-        if m:
-            sc = self._ensure_scoring()
-            sleep_s = int(m.group(1))
-            if sc.get("key") is not None:
-                sc["cooldowns"][str(sc["key"])] = round(time.time() + sleep_s, 1)
+                sc["first_batch_at"] = now
+            sc["last_done_at"] = now
+            phase3 = stages.setdefault("phase3", {})
+            phase3.update({"scored": sc["scored"], "total": sc["total"], "rate": sc["rate"]})
             return
 
     def _release_finished_process(self):
@@ -496,17 +459,7 @@ class PipelineProcessManager:
             self._logs.clear()
             self._started_at = time.time()
             self._finished_at = None
-            # Liczba kluczy od startu przebiegu: karta kluczy w arkuszu nie stoi pusta
-            # przez cały scraping (telemetria oceny powstaje dopiero przy pierwszej paczce).
-            key_count = None
-            try:
-                from app_services import get_api_keys_info
-                info = get_api_keys_info()
-                if info and info.get("count", 0) > 0:
-                    key_count = int(info["count"])
-            except Exception:
-                pass
-            self._telemetry = {"sources": [], "scoring": None, "stages": {}, "key_count": key_count}
+            self._telemetry = {"sources": [], "scoring": None, "stages": {}}
             self._running = True
             self._status = "running"
             self._success = None
@@ -717,8 +670,6 @@ class PipelineProcessManager:
                     cmd.append("--skip-scraping")
                 if options.get("rescore_all"):
                     cmd.append("--rescore-all")
-                if options.get("rescore_changed"):
-                    cmd.append("--rescore-changed")
 
                 self._active_stage_idx = first_idx
 

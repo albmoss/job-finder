@@ -7,8 +7,8 @@ user_decisions.json nie pasowały do linków w bazie po ich znormalizowaniu.
 
 Skrypt sprowadza linki do postaci kanonicznej (bez query stringa) w:
   - jobs_database.json
-  - analyzed_jobs_waterfall.json
   - user_decisions.json
+match_results.json ma klucze kanoniczne od początku (matching/run.py).
 
 Przy kolizjach zachowuje rekord bogatszy (dłuższy opis / decyzja z oceną).
 Idempotentny - można uruchamiać wielokrotnie.
@@ -23,7 +23,6 @@ from utils.links import canonical_link as normalize
 from utils.safe_io import load_json_safe, save_json_atomic
 
 JOBS_DB = "jobs_database.json"
-ANALYZED_DB = "analyzed_jobs_waterfall.json"
 DECISIONS = "user_decisions.json"
 
 
@@ -67,34 +66,6 @@ def migrate_jobs():
         save_json_atomic(JOBS_DB, merged, backup=True)
 
 
-def migrate_analyzed():
-    data = load_json_safe(ANALYZED_DB, default=[])
-    if not data:
-        print(f"  {ANALYZED_DB}: empty, skipping")
-        return
-
-    by_link = {}
-    zmienione = 0
-    for item in data:
-        job = item.get("job") or {}
-        link = normalize(job.get("link", ""))
-        if link != job.get("link"):
-            zmienione += 1
-        job["link"] = link
-        # Przy duplikacie zostaw ten z dłuższym uzasadnieniem (zwykle pełniejsza analiza)
-        prev = by_link.get(link)
-        if prev is None or len(item.get("reason") or "") > len(prev.get("reason") or ""):
-            by_link[link] = item
-
-    merged = list(by_link.values())
-    print(f"  {ANALYZED_DB}: {len(data)} -> {len(merged)} (scalono {len(data) - len(merged)})")
-    # Zapis tylko przy realnej zmianie: przy juz znormalizowanej bazie
-    # ten etap przepisywal caly plik razem z kopia zapasowa, zeby
-    # odtworzyc go bajt w bajt.
-    if zmienione or len(merged) != len(data):
-        save_json_atomic(ANALYZED_DB, merged, backup=True)
-
-
 def migrate_decisions():
     decisions = load_json_safe(DECISIONS, default={})
     if not decisions:
@@ -130,7 +101,6 @@ def main():
     print("MIGRATION: link normalisation")
     print("=" * 60)
     migrate_jobs()
-    migrate_analyzed()
     migrate_decisions()
     print("=" * 60)
     print("Done. Backups of the previous versions are in backups/")

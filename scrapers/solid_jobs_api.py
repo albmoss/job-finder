@@ -15,7 +15,17 @@ from typing import List
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
+from utils.offer_fields import (
+    norm_seniority,
+    norm_work_modes,
+    norm_contracts,
+    norm_schedules,
+    norm_skills,
+    make_salary,
+    make_language,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +36,28 @@ CAMPAIGN_ID = "job-scratcher"  # Parametr wymagany: małe litery, cyfry, myślni
 PAGE_SIZE = 200
 
 
+
+# SOLID.Jobs akceptuje / zwraca: Intern, Junior, Regular, Senior
+SOLID_LEVEL_MAP = {
+    "intern": "Intern",
+    "junior": "Junior",
+    "mid": "Regular",
+    "senior": "Senior",
+    "lead": "Senior",
+    "manager": "Senior",
+}
 class SolidJobsAPIScraper:
     """Scraper na publicznym REST API SOLID.Jobs - klucz niepotrzebny."""
 
     def __init__(self, config: dict):
         self.config = config
         cfg = config.get("solid_jobs", {}) or {}
-        self.location_filter = (cfg.get("location") or config.get("location", "Warszawa")).lower()
-        # API zwraca experienceLevel: Junior / Regular / Senior
-        self.allowed_levels = {lv.lower() for lv in cfg.get("experience_levels", ["Junior"])}
+        default_city = cfg.get("location") or config.get("location", "Warszawa")
+        self.location_filter = scope_city(default_city).lower()
+        raw_levels = scope_levels()
+        self.allowed_levels = {
+            SOLID_LEVEL_MAP[lv].lower() for lv in raw_levels if lv in SOLID_LEVEL_MAP
+        } or {"junior", "intern"}
         self.keep_unknown_level = cfg.get("keep_unknown_level", True)
         self.session = requests.Session()
         self.session.headers.update({
@@ -127,94 +150,107 @@ class SolidJobsAPIScraper:
         return all_offers
 
     def _parse_offer(self, offer: dict) -> Job:
-        """Convert API offer dict to Job dataclass."""
+        """Convert API offer dict to Job dataclass with structured fields."""
         title = offer.get("title", offer.get("name", "Unknown"))
         
-        # Firma bywa stringiem albo słownikiem, zależnie od endpointu
         company_raw = offer.get("company", offer.get("companyName", "Unknown"))
         if isinstance(company_raw, dict):
             company = company_raw.get("name", company_raw.get("display_name", "Unknown"))
         else:
             company = str(company_raw) if company_raw else "Unknown"
         
-        # SOLID.Jobs zwraca pełny URL z parametrami kampanii
         link = offer.get("url", "")
         if not link:
             slug = offer.get("slug", offer.get("jobOfferKey", ""))
             link = f"https://solid.jobs/offer/{slug}"
         
-        # Opis sklejamy z tego, co jest
-        desc_parts = []
-        if offer.get("description"):
-            desc_parts.append(offer["description"])
-        if offer.get("skills"):
-            skills = offer["skills"]
-            if isinstance(skills, list):
-                skill_strs = []
-                for s in skills:
-                    if isinstance(s, dict):
-                        name = s.get("name", "")
-                        level = s.get("level", "")
-                        skill_strs.append(f"{name} ({level})" if level else name)
+        # Opis z portalu bez doklejanych metadanych
+        desc = (offer.get("description") or "").strip()
+        description = desc if desc else f"Oferta z SOLID.Jobs: {title}"
+
+        # Poziom doświadczenia
+        seniority = norm_seniority(offer.get("experienceLevel"))
+
+        # Tryb pracy
+        modes = []
+        if offer.get("isRemote"):
+            modes.append("remote")
+        if offer.get("isHybrid"):
+            modes.append("hybrid")
+        if not modes and offer.get("locations"):
+            modes.append("onsite")
+        work_modes = norm_work_modes(modes)
+
+        # Wymiar czasu pracy
+        schedules = norm_schedules(offer.get("contractTime"))
+
+        # Umiejętności: rozdzielenie wymagane / mile widziane wg level != 'NiceToHave'
+        skills = offer.get("skills") or []
+        req_skills = []
+        nice_skills = []
+        if isinstance(skills, list):
+            for s in skills:
+                if isinstance(s, dict):
+                    if s.get("level") == "NiceToHave":
+                        nice_skills.append(s.get("name", ""))
                     else:
-                        skill_strs.append(str(s))
-                if skill_strs:
-                    desc_parts.append("Umiejętności: " + ", ".join(skill_strs))
-        if offer.get("technologies"):
-            techs = offer["technologies"]
-            if isinstance(techs, list):
-                desc_parts.append("Technologie: " + ", ".join(t if isinstance(t, str) else t.get("name", "") for t in techs))
-        
-        # UWAGA: opis jest sklejany dopiero na końcu. Wcześniej robiono to tutaj,
-        # a benefity i tryb pracy dopisywano do desc_parts JUŻ PO sklejeniu -
-        # przez co nigdy nie trafiały do opisu oferty.
+                        req_skills.append(s.get("name", ""))
+                elif isinstance(s, str):
+                    req_skills.append(s)
+        skills_required = norm_skills(req_skills) or norm_skills(offer.get("technologies"))
+        skills_nice = norm_skills(nice_skills)
 
-        # Poziom doświadczenia - istotny sygnał dla oceny dopasowania
-        if offer.get("experienceLevel"):
-            desc_parts.append(f"Poziom: {offer['experienceLevel']}")
+        # Języki
+        langs = []
+        for l in offer.get("languages") or []:
+            if isinstance(l, dict):
+                name = l.get("name")
+                lvl = l.get("level")
+                parsed = make_language(name, level=lvl, required=True)
+                if parsed:
+                    langs.append(parsed)
+        languages = langs or None
 
+        # Wynagrodzenie i typ umowy
+        sal = offer.get("salary")
+        salary = None
+        contract_types = None
+        if isinstance(sal, dict):
+            low = sal.get("from")
+            high = sal.get("to")
+            currency = sal.get("currency", "PLN")
+            period = sal.get("period")
+            emp_type = sal.get("employmentType")
+            contract = norm_contracts(emp_type)
+            contract_code = contract[0] if contract else None
+            gross = False if contract_code == "b2b" else (True if contract_code == "uop" else None)
+            salary = make_salary(low, high, currency=currency, period=period, gross=gross, contract=contract_code)
+            contract_types = contract
+        elif offer.get("salaryFrom") or offer.get("salaryTo"):
+            salary = make_salary(
+                min_value=offer.get("salaryFrom"),
+                max_value=offer.get("salaryTo"),
+                currency=offer.get("salaryCurrency", "PLN"),
+            )
+
+        # Daty
+        posted_date = offer.get("validFrom") or offer.get("updatedAt") or None
+        valid_through = offer.get("validTo") or None
+
+        # Kategoria
+        category = offer.get("category") or offer.get("division") or None
+
+        # Lokalizacja
         locations = offer.get("locations", [])
         if isinstance(locations, list) and locations:
-            location = locations[0]
+            location = str(locations[0])
         else:
-            location = offer.get("city", offer.get("location", ""))
-            if isinstance(location, dict):
-                location = location.get("name", location.get("city", ""))
-        
-        if offer.get("isRemote"):
-            desc_parts.append("Tryb pracy: Zdalnie")
-        elif offer.get("isHybrid"):
-            desc_parts.append("Tryb pracy: Hybrydowo")
-
-        benefits = offer.get("benefits", [])
-        if benefits and isinstance(benefits, list):
-            desc_parts.append("Benefity: " + ", ".join(str(b) for b in benefits))
-
-        # Wynagrodzenie ze strukturalnego obiektu salary
-        salary = offer.get("salary", {})
-        salary_parts = []
-        if isinstance(salary, dict):
-            if salary.get("from"):
-                salary_parts.append(f"od {salary['from']:.0f}")
-            if salary.get("to"):
-                salary_parts.append(f"do {salary['to']:.0f}")
-            if salary.get("currency"):
-                salary_parts.append(salary["currency"])
-            if salary.get("period"):
-                salary_parts.append(f"/{salary['period']}")
-            if salary.get("employmentType"):
-                salary_parts.append(f"({salary['employmentType']})")
-        elif offer.get("salaryFrom"):
-            salary_parts.append(f"od {offer['salaryFrom']}")
-        if offer.get("salaryTo"):
-            salary_parts.append(f"do {offer['salaryTo']}")
-        if offer.get("salaryCurrency"):
-            salary_parts.append(offer["salaryCurrency"])
-        if salary_parts:
-            desc_parts.append(f"Wynagrodzenie: {' '.join(salary_parts)}")
-
-        # Sklejenie DOPIERO teraz, gdy wszystkie fragmenty są zebrane
-        description = "\n".join(p for p in desc_parts if p) or f"Oferta z SOLID.Jobs: {title}"
+            loc = offer.get("city", offer.get("location", ""))
+            if isinstance(loc, dict):
+                location = loc.get("name", loc.get("city", ""))
+            else:
+                location = str(loc) if loc else None
+        location = location or scope_city(self.config.get("location", "Warszawa"))
 
         return Job(
             title=title,
@@ -222,10 +258,20 @@ class SolidJobsAPIScraper:
             link=link,
             description=description,
             source=self.get_source_name(),
-            location=str(location) if location else None,
-            scraped_at=datetime.now().isoformat()
+            location=location,
+            posted_date=posted_date,
+            valid_through=valid_through,
+            scraped_at=datetime.now().isoformat(),
+            seniority=seniority,
+            work_modes=work_modes,
+            contract_types=contract_types,
+            schedules=schedules,
+            salary=salary,
+            skills_required=skills_required,
+            skills_nice=skills_nice,
+            languages=languages,
+            category=category,
         )
-
     def run(self) -> List[Job]:
         """Pobierz oferty ze wszystkich działów i odfiltruj wg lokalizacji i poziomu."""
         logger.info(

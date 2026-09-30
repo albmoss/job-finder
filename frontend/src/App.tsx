@@ -3,7 +3,6 @@ import type {
   ActivityRow,
   CVInfo,
   EnvKeysResponse,
-  GapFilter,
   OfferDetail,
   OfferListItem,
   PipelinePrerequisites,
@@ -16,7 +15,7 @@ import { Check, Info } from 'lucide-react';
 import { isPipelineBusy, pipelineStatus } from './pipeline';
 import { shouldIgnoreShortcut } from './keys';
 import { SWAP_OUT_MS, SWAP_SETTLE_MS, useBlurSwap, type SwapPhase } from './swap';
-import { ADD_LINK_VIEW, APPLICATIONS_VIEW, GAPS_VIEW, isOfferTab } from './views';
+import { ADD_LINK_VIEW, APPLICATIONS_VIEW, isOfferTab } from './views';
 import { TopBar } from './components/TopBar';
 import { OfferListPanel, SEARCH_INPUT_ID } from './components/OfferListPanel';
 import { OfferDetailPanel } from './components/OfferDetailPanel';
@@ -26,7 +25,6 @@ import { PipelineSheet } from './components/PipelineSheet';
 import { PipelineLaunchModal } from './components/PipelineLaunchModal';
 import { HelpModal } from './components/HelpModal';
 import { ApplicationsBoard } from './components/ApplicationsBoard';
-import { SkillGapsPanel } from './components/SkillGapsPanel';
 import { AddFromLinkPanel } from './components/AddFromLinkPanel';
 import { TooltipLayer } from './components/ui/TooltipLayer';
 import './theme_tokens.css';
@@ -86,11 +84,6 @@ export const App: React.FC = () => {
   const [pageMarks, setPageMarks] = useState<(number | null)[] | null>(null);
   // Nowe od startu ostatniego pobierania (cała lista, nie strona).
   const [fresh, setFresh] = useState<{ count: number; since: string | null }>({ count: 0, since: null });
-  // „Pokaż N ofert” z panelu braków: lista Wszystkie zawężona do ofert z tym brakiem.
-  const [gapFilter, setGapFilter] = useState<GapFilter | null>(null);
-  const gapFilterRef = useRef(gapFilter);
-  gapFilterRef.current = gapFilter;
-
   const [selectedLink, setSelectedLink] = useState<string | null>(null);
   const [selectedOffer, setSelectedOffer] = useState<OfferDetail | null>(null);
 
@@ -244,7 +237,7 @@ export const App: React.FC = () => {
     const reqId = ++offersRequestIdRef.current;
     setLoadingOffers(true);
     try {
-      const res = await api.getOffers(tab, query, pageNum, PAGE_SIZE, gapFilterRef.current);
+      const res = await api.getOffers(tab, query, pageNum, PAGE_SIZE);
       if (reqId !== offersRequestIdRef.current) return null;
       setOffers(res.items);
       setTotalOffers(res.total);
@@ -320,7 +313,7 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     loadOffers(activeView, search, page);
-  }, [activeView, search, page, gapFilter, loadOffers]);
+  }, [activeView, search, page, loadOffers]);
 
   useEffect(() => {
     if (intro !== 'play') return;
@@ -348,8 +341,7 @@ export const App: React.FC = () => {
         handleCloseDetail();
         // Lista pokazuje oferty poprzedniej kategorii, dopóki nie przyjdą nowe — wyostrzenie czeka.
         if (isOfferTab(view)) setLoadingOffers(true);
-        setLoadingTool(view === APPLICATIONS_VIEW || view === GAPS_VIEW);
-        setGapFilter(null);
+        setLoadingTool(view === APPLICATIONS_VIEW);
       }
       setActiveView(view);
       setPage(1);
@@ -359,19 +351,6 @@ export const App: React.FC = () => {
     if (changed) setPendingView(view);
     runViewSwap(commit, !changed);
   }, [handleCloseDetail, runViewSwap]);
-
-  const showGapOffers = useCallback((skill: string, threshold: number) => {
-    navigate('Wszystkie', () => {
-      setSearch('');
-      setGapFilter({ skill, threshold });
-    });
-  }, [navigate]);
-
-  const clearGapFilter = useCallback(() => {
-    setLoadingOffers(true);
-    setGapFilter(null);
-    setPage(1);
-  }, []);
 
   // Panele zamontowane pod rozmyciem nie grają zwykłego wejścia (opacity + przesunięcie).
   // Anulowana animacja CSS nie wraca, dopóki nie zmieni się jej nazwa.
@@ -680,8 +659,6 @@ export const App: React.FC = () => {
               pageMarks={pageMarks}
               freshCount={fresh.count}
               freshSince={fresh.since}
-              gapFilter={gapFilter}
-              onClearGap={clearGapFilter}
               listSwap={listSwap.phase}
               selectedLink={selectedLink}
               onSelectOffer={handleSelectOffer}
@@ -705,7 +682,6 @@ export const App: React.FC = () => {
             ) : (
               <OverviewPanel
                 activeTab={activeView}
-                gapSkill={gapFilter?.skill ?? null}
                 total={totalOffers}
                 stats={stats}
                 activityRows={activityRows}
@@ -726,7 +702,6 @@ export const App: React.FC = () => {
           />
         )}
 
-        {activeView === GAPS_VIEW && <SkillGapsPanel onReady={onToolReady} onShowOffers={showGapOffers} />}
 
         {activeView === ADD_LINK_VIEW && (
           <AddFromLinkPanel

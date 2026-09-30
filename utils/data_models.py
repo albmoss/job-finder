@@ -7,6 +7,7 @@ from typing import Optional
 import json
 import threading
 from utils.safe_io import save_json_atomic
+from utils.offer_fields import STRUCTURED_FIELDS
 
 
 @dataclass
@@ -33,11 +34,31 @@ class Job:
     # wyłącznie znane pola, a to_dict() robi asdict(): każdy klucz spoza
     # dataclassy zniknąłby przy pierwszym zapisie scrapera.
     also_on: Optional[list] = None
+    # Cechy strukturalne - kody i kształty opisane w utils/offer_fields.py.
+    # Scraper wypełnia to, co portal podaje jako osobne pola; resztę
+    # (lata doświadczenia, języki) uzupełnia z treści utils.offer_fields.text_features.
+    # None = portal tego nie podał.
+    seniority: Optional[list] = None
+    work_modes: Optional[list] = None
+    contract_types: Optional[list] = None
+    schedules: Optional[list] = None
+    salary: Optional[dict] = None
+    skills_required: Optional[list] = None
+    skills_nice: Optional[list] = None
+    languages: Optional[list] = None
+    category: Optional[str] = None
+    years_required: Optional[int] = None
     
     def __post_init__(self):
         from utils.text_cleaner import clean_job_description
+        from utils.offer_fields import languages_from_text, years_from_text
         if self.description:
             self.description = clean_job_description(self.description)
+            # Pola z portalu mają pierwszeństwo; treść uzupełnia tylko braki.
+            if self.years_required is None:
+                self.years_required = years_from_text(self.description)
+            if self.languages is None:
+                self.languages = languages_from_text(self.description)
     
     def to_dict(self):
         """
@@ -70,45 +91,26 @@ _JOB_FIELDS = tuple(f.name for f in dc_fields(Job))
 
 @dataclass
 class JobMatch:
-    """Oferta razem z oceną dopasowania od modelu."""
+    """Oferta razem z oceną dopasowania."""
     job: Job
-    match_percentage: int
-    reason: str
-    is_entry_level: bool
-    missing_skills: Optional[list[str]] = None
+    match_percentage: Optional[int] = None
     user_decision: Optional[str] = None  # „apply”, „reject” albo None
-    learnable_in_month: bool = False
-    industry: str = "Other"
-    # Słowa kluczowe streszczające ofertę; mają je tylko oferty ocenione po dodaniu pola.
-    highlights: Optional[list[str]] = None
 
     def to_dict(self):
         """Convert to dictionary for JSON serialization"""
         return {
             'job': self.job.to_dict(),
             'match_percentage': self.match_percentage,
-            'reason': self.reason,
-            'is_entry_level': self.is_entry_level,
-            'missing_skills': self.missing_skills or [],
             'user_decision': self.user_decision,
-            'learnable_in_month': self.learnable_in_month,
-            'industry': self.industry,
-            'highlights': self.highlights or [],
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict):
         job = Job.from_dict(data['job'])
         return cls(
             job=job,
-            match_percentage=data['match_percentage'],
-            reason=data['reason'],
-            is_entry_level=data.get('is_entry_level', False),
-            missing_skills=data.get('missing_skills', []),
+            match_percentage=data.get('match_percentage'),
             user_decision=data.get('user_decision'),
-            learnable_in_month=data.get('learnable_in_month', False),
-            industry=data.get('industry', 'Other'),
-            highlights=data.get('highlights') or [],
         )
 
 
@@ -233,11 +235,15 @@ class JobDatabase:
             # śladu i zapis zostałby pominięty razem z uzupełnionymi datami.
             self._mark_seen(known, now)
             touched += 1
-            # Uzupełnij daty, jeśli poprzedni przebieg ich nie miał, a ten ma
+            # Uzupełnij daty i cechy, których poprzedni przebieg nie znał, a ten zna
             if job.posted_date and not known.posted_date:
                 known.posted_date = job.posted_date
             if job.valid_through and not known.valid_through:
                 known.valid_through = job.valid_through
+            for name in STRUCTURED_FIELDS:
+                value = getattr(job, name)
+                if value is not None and getattr(known, name) is None:
+                    setattr(known, name, value)
 
         for link in seen_again:
             job = by_link.get(canonical_link(link)) if link else None

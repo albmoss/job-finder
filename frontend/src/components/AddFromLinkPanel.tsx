@@ -144,11 +144,7 @@ export const AddFromLinkPanel: React.FC<AddFromLinkPanelProps> = ({
       is_gone: false,
       work_mode: '',
       match_percentage: null,
-      reason: null,
-      industry: null,
-      is_entry_level: false,
-      learnable_in_month: false,
-      missing_skills: [],
+      fields: {},
       description_blocks: blocks,
       raw_description: draft.description,
       status: null,
@@ -159,7 +155,6 @@ export const AddFromLinkPanel: React.FC<AddFromLinkPanelProps> = ({
       dot_color: null,
       dot_label: null,
       next_step: null,
-      highlights: [],
     };
   }, [draft]);
 

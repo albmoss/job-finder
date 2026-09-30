@@ -39,7 +39,7 @@ class GoWorkScraper(LdJsonPortalScraper):
 
     def __init__(self, config: dict):
         super().__init__(config)
-        self.city_slug = self.cfg.get("city_slug", self.location_filter)
+        self.city_slug = self.cfg.get("city_slug") or self.city_slug
 
     def build_listing_url(self, page: int) -> str:
         base = f"https://www.gowork.pl/praca/{self.city_slug};l"

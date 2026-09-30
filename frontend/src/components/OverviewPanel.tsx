@@ -15,8 +15,6 @@ import '../styles/offers.css';
 
 interface OverviewPanelProps {
   activeTab: string;
-  /** Lista zawężona z panelu braków — wtedy zdanie mówi o braku, nie o całej zakładce. */
-  gapSkill: string | null;
   total: number;
   stats: Stats | null;
   activityRows: ActivityRow[];
@@ -47,7 +45,6 @@ function getDecisionIcon(status: string) {
 
 export const OverviewPanel: React.FC<OverviewPanelProps> = ({
   activeTab,
-  gapSkill,
   total,
   stats,
   activityRows,
@@ -57,9 +54,8 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({
 }) => {
   const numStr = total.toLocaleString('pl-PL');
 
-  const sentence = gapSkill
-    ? `ofert, którym brakuje „${gapSkill}”`
-    : activeTab === 'Dopasowane'
+  const sentence =
+    activeTab === 'Dopasowane'
       ? total > 0
         ? 'ofert czeka na Twoją decyzję'
         : 'Wszystko przejrzane'

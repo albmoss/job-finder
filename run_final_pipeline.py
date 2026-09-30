@@ -1,13 +1,14 @@
 """
-Główny pipeline: scraping -> czyszczenie -> analiza AI -> ewaluacja.
+Główny pipeline: profil z CV -> scraping -> czyszczenie -> dopasowanie -> ewaluacja.
 
 Kolejność ma znaczenie:
   0. Archiwizacja+purge  - chroni ręczne oceny PRZED usunięciem starych ofert
+  0.5 Profil z CV        - miasto i poziom z CV wyznaczają zakres scraperów
   1. Scraping            - pomija źródła zescrapowane dziś
   1.5 Normalizacja linków - musi być przed deduplikacją, inaczej ta sama oferta
                             pod dwoma URL-ami przejdzie jako dwie różne
-  2. Deduplikacja + czyszczenie tokenów
-  3. Analiza AI (kaskada modeli + rotacja kluczy)
+  2. Deduplikacja + czyszczenie opisów
+  3. Dopasowanie         - przesiew w kodzie + ocena Jev (matching/run.py)
   4. Ewaluacja rankingu  - jedyny sposób, żeby stwierdzić czy cokolwiek się poprawiło
 """
 
@@ -117,15 +118,14 @@ def _finish(phase_results, stopped=False):
 
     return complete
 
-def run_pipeline(skip_scraping=False, rescore_all=False, rescore_changed=False, resume=False):
+def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
     print("\n" + "=" * 60)
-    print("PIPELINE: scraping -> analysis -> evaluation")
+    print("PIPELINE: CV profile -> scraping -> matching -> evaluation")
     print("=" * 60)
 
     options = {
         "skip_scraping": skip_scraping,
         "rescore_all": rescore_all,
-        "rescore_changed": rescore_changed,
     }
 
     if resume:
@@ -136,8 +136,6 @@ def run_pipeline(skip_scraping=False, rescore_all=False, rescore_changed=False, 
             skip_scraping = saved_options["skip_scraping"]
         if "rescore_all" in saved_options:
             rescore_all = saved_options["rescore_all"]
-        if "rescore_changed" in saved_options:
-            rescore_changed = saved_options["rescore_changed"]
         options.update(saved_options)
         logger.info(f"Resuming pipeline from checkpoint (completed stages: {', '.join(sorted(completed_stages)) or 'none'}).")
     else:
@@ -176,6 +174,25 @@ def run_pipeline(skip_scraping=False, rescore_all=False, rescore_changed=False, 
         "phase0",
         "PHASE 0: Archive ratings + drop offers older than 14 days",
         purge_stale_offers.main,
+    )
+    if not ok:
+        return _finish(phase_results, stopped=stopped)
+
+    # 0.5 Profil kandydata z CV - scrapery biorą z niego miasto i poziomy
+    def _profile():
+        from utils.cv_profile import ensure_profile
+        profile = ensure_profile()
+        if profile is None:
+            print("No CV found - upload a CV in the app before running the pipeline.")
+            return False
+        print(f"CV profile: {profile.get('seniority')} | {profile.get('city')} | "
+              f"{len(profile.get('skills') or [])} skills")
+        return True
+
+    ok, stopped = _execute_stage(
+        "phase0_5",
+        "PHASE 0.5: Candidate profile from CV",
+        _profile,
     )
     if not ok:
         return _finish(phase_results, stopped=stopped)
@@ -233,7 +250,7 @@ def run_pipeline(skip_scraping=False, rescore_all=False, rescore_changed=False, 
     if not ok:
         return _finish(phase_results, stopped=stopped)
 
-    # Walidacja bazy przed AI
+    # Walidacja bazy przed dopasowaniem
     if is_stop_requested():
         save_checkpoint(completed_stages, options, stopped=True)
         return _finish(phase_results, stopped=True)
@@ -241,19 +258,19 @@ def run_pipeline(skip_scraping=False, rescore_all=False, rescore_changed=False, 
     jobs = JobDatabase(str(JOBS_DATABASE_PATH)).load_jobs()
     logger.info(f"The database holds {len(jobs)} offers.")
     if not jobs:
-        logger.error("Database empty - aborting before AI analysis.")
+        logger.error("Database empty - aborting before matching.")
         phase_results["Database validation"] = False
         save_checkpoint(completed_stages, options, failed_stage="phase3")
         return _finish(phase_results)
 
-    # 3. Analiza AI
-    def _analyze():
-        import waterfall_analysis
-        return waterfall_analysis.main(rescore_all=rescore_all, rescore_changed=rescore_changed, resume=resume)
+    # 3. Dopasowanie: przesiew w kodzie + ocena Jev
+    def _match():
+        from matching import run as matching_run
+        return matching_run.main(["--rescore-all"] if rescore_all else [])
     ok, stopped = _execute_stage(
         "phase3",
-        "PHASE 3: AI analysis (waterfall)",
-        _analyze,
+        "PHASE 3: Matching (prefilter + Jev)",
+        _match,
     )
     if not ok:
         return _finish(phase_results, stopped=stopped)
@@ -306,6 +323,5 @@ if __name__ == "__main__":
         sys.exit(run_in_manager(sys.argv[1:]))
     skip_scraping = "--skip-scraping" in sys.argv
     rescore_all = "--rescore-all" in sys.argv
-    rescore_changed = "--rescore-changed" in sys.argv
     resume = "--resume" in sys.argv
-    sys.exit(0 if run_pipeline(skip_scraping=skip_scraping, rescore_all=rescore_all, rescore_changed=rescore_changed, resume=resume) else 1)
+    sys.exit(0 if run_pipeline(skip_scraping=skip_scraping, rescore_all=rescore_all, resume=resume) else 1)

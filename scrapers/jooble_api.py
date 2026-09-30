@@ -15,25 +15,49 @@ from typing import List
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
+from utils.offer_fields import (
+    norm_contracts,
+    norm_schedules,
+    norm_seniority,
+    norm_work_modes,
+    salary_from_text,
+)
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://jooble.org/api"
-
-
+BASE_URL = "https://pl.jooble.org/api"
 class JoobleAPIScraper:
     """Scraper na darmowym API agregatora Jooble."""
 
     def __init__(self, config: dict):
         self.config = config
         self.api_key = config.get("jooble_api_key", "") or os.getenv("JOOBLE_API_KEY", "")
-        self.location = config.get("location", "Warszawa")
+        self.location = scope_city(default=config.get("location", "Warszawa"))
         self.session = requests.Session()
         self.session.headers.update({
             "Content-Type": "application/json",
             "User-Agent": "JobScratcher/1.0"
         })
+
+    @staticmethod
+    def _keyword_sets_from_levels(levels: list[str]) -> list[str]:
+        mapping = {
+            "intern": ["praktykant stażysta", "intern trainee"],
+            "junior": ["junior", "asystent bez doświadczenia"],
+            "mid": ["specjalista", "mid developer"],
+            "senior": ["senior", "starszy specjalista"],
+            "lead": ["lead", "lider"],
+            "manager": ["kierownik", "manager"],
+        }
+        kws = []
+        for lvl in levels:
+            kws.extend(mapping.get(lvl, []))
+        return list(dict.fromkeys(kws)) if kws else [
+            "junior praktykant stażysta",
+            "asystent trainee bez doświadczenia",
+        ]
 
     def get_source_name(self) -> str:
         return "Jooble"
@@ -68,17 +92,17 @@ class JoobleAPIScraper:
         company = item.get("company", "Unknown")
         link = item.get("link", "")
         
-        description = item.get("snippet", item.get("description", ""))
-        
-        salary = item.get("salary", "")
-        if salary:
-            description += f"\nWynagrodzenie: {salary}"
-        
-        job_type = item.get("type", "")
-        if job_type:
-            description += f"\nTyp: {job_type}"
-        
-        location = item.get("location", "")
+        description = (item.get("snippet") or item.get("description") or "").strip()
+        salary = item.get("salary") or ""
+        salary_obj = salary_from_text(salary) if salary else None
+
+        job_type = item.get("type") or ""
+        contract_types = norm_contracts(job_type) if job_type else None
+        schedules = norm_schedules(job_type) if job_type else None
+
+        location = item.get("location") or None
+        work_modes = norm_work_modes(location) or norm_work_modes(title)
+        seniority = norm_seniority(title)
         posted_date = item.get("updated", item.get("created", ""))
 
         return Job(
@@ -87,8 +111,13 @@ class JoobleAPIScraper:
             link=link,
             description=description,
             source=self.get_source_name(),
-            location=location if location else None,
+            location=location,
             posted_date=posted_date,
+            salary=salary_obj,
+            contract_types=contract_types,
+            schedules=schedules,
+            work_modes=work_modes,
+            seniority=seniority,
             scraped_at=datetime.now().isoformat()
         )
 
@@ -103,10 +132,7 @@ class JoobleAPIScraper:
         seen_links = set()
         
         # Search with multiple keyword sets to maximize coverage
-        keyword_sets = [
-            "junior praktykant stażysta",
-            "asystent trainee bez doświadczenia",
-        ]
+        keyword_sets = self._keyword_sets_from_levels(scope_levels())
         
         for keywords in keyword_sets:
             page = 1

@@ -265,13 +265,11 @@ def _plan(all_jobs: dict, decided: set) -> tuple:
     return keep, provenance, stats
 
 
-def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: set, data=None):
+def _apply(path: Path, keep: set, provenance: dict, decided: set, data=None):
     """
-    Zapisz plik zachowując wyłącznie rekordy wskazane przez wspólny plan.
+    Zapisz plik zachowując wyłącznie rekordy wskazane przez plan.
 
-    `data` to zawartość wczytana już przez wołającego. Plan i tak powstaje na
-    treści obu plików, więc bez tego argumentu każdy z nich (27 i 35 MB) był
-    parsowany drugi raz tylko po to, żeby dostać te same obiekty.
+    `data` to zawartość wczytana już przez wołającego (plik ma ~30 MB).
     """
     if data is None:
         if not path.exists():
@@ -283,14 +281,10 @@ def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: 
         logger.info(f"{path.name} is empty - skipping.")
         return
 
-    def job_of(item):
-        return item["job"] if is_analyzed else item
-
     initial = len(data)
     final, seen_links, nan_fixed, scalone = [], set(), 0, 0
 
-    for item in data:
-        job = job_of(item)
+    for job in data:
         nan_fixed += _sanitize_nan(job)
         link = canonical_link(job.get("link", ""))
 
@@ -301,11 +295,11 @@ def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: 
         extra = provenance.get(link)
         if extra and _merge_provenance(job, extra):
             scalone += 1
-        final.append(item)
+        final.append(job)
 
     # Sanity check: żadna oceniona oferta nie mogła zniknąć
-    before = sum(1 for i in data if canonical_link(job_of(i).get("link", "")) in decided)
-    after = sum(1 for i in final if canonical_link(job_of(i).get("link", "")) in decided)
+    before = sum(1 for j in data if canonical_link(j.get("link", "")) in decided)
+    after = sum(1 for j in final if canonical_link(j.get("link", "")) in decided)
     if after < before:
         logger.error(
             f"Deduplication would remove {before - after} rated offers "
@@ -327,33 +321,28 @@ def _apply(path: Path, is_analyzed: bool, keep: set, provenance: dict, decided: 
 
 
 def run():
+    """
+    Deduplikacja jobs_database.json. Wyniki dopasowania (match_results.json)
+    nie wymagają osobnego przejścia: matching/run.py usuwa wyniki ofert,
+    których nie ma już w bazie.
+    """
     logger.info("Starting Highlander Protocol v3...")
 
-    files = [
-        (Path("analyzed_jobs_waterfall.json"), True),
-        (Path("jobs_database.json"), False),
-    ]
-
+    path = Path("jobs_database.json")
     decided = _decided_links()
 
-    # Unia obu plików - dla każdego linku bierzemy wariant z najdłuższym opisem,
-    # żeby decyzja opierała się na najlepszej dostępnej wersji rekordu.
-    # Wczytana zawartość leci dalej do _apply: to te same obiekty, więc drugi
-    # odczyt tych plików (27 i 35 MB) niczego by nie wniósł.
-    loaded, all_jobs = {}, {}
-    for path, is_analyzed in files:
-        if not path.exists():
+    # Dla każdego linku bierzemy wariant z najdłuższym opisem, żeby decyzja
+    # opierała się na najlepszej dostępnej wersji rekordu.
+    data = load_json_safe(path, default=[]) if path.exists() else []
+    all_jobs = {}
+    for job in data:
+        _sanitize_nan(job)
+        link = canonical_link(job.get("link", ""))
+        if not link:
             continue
-        loaded[path] = load_json_safe(path, default=[])
-        for item in loaded[path]:
-            job = item["job"] if is_analyzed else item
-            _sanitize_nan(job)
-            link = canonical_link(job.get("link", ""))
-            if not link:
-                continue
-            current = all_jobs.get(link)
-            if current is None or len(job.get("description") or "") > len(current.get("description") or ""):
-                all_jobs[link] = job
+        current = all_jobs.get(link)
+        if current is None or len(job.get("description") or "") > len(current.get("description") or ""):
+            all_jobs[link] = job
 
     keep, provenance, stats = _plan(all_jobs, decided)
     logger.info(
@@ -367,8 +356,7 @@ def run():
             f"(duplicates, but merging would orphan the rating)"
         )
 
-    for path, is_analyzed in files:
-        _apply(path, is_analyzed, keep, provenance, decided, data=loaded.get(path))
+    _apply(path, keep, provenance, decided, data=data)
 
     logger.info("Protocol v3 Complete. Your data is safe.")
 

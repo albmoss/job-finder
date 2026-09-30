@@ -14,8 +14,16 @@ from typing import List
 from datetime import datetime
 
 from scrapers.base_scraper import BaseScraper
+from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
-
+from utils.offer_fields import (
+    norm_seniority,
+    norm_work_modes,
+    norm_contracts,
+    norm_skills,
+    make_salary,
+    make_language,
+)
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://nofluffjobs.com/api/search/posting?salaryCurrency=PLN&salaryPeriod=month&region=pl"
@@ -29,9 +37,28 @@ HEADERS = {
     "Origin": "https://nofluffjobs.com",
 }
 
+# NoFluffJobs akceptuje w criteriaSearch: trainee, junior, mid, senior, expert, lead
+NFJ_LEVEL_MAP = {
+    "intern": "trainee",
+    "junior": "junior",
+    "mid": "mid",
+    "senior": "senior",
+    "lead": "lead",
+    "manager": "lead",
+}
+
 
 class NoFluffScraper(BaseScraper):
     """Scraper NoFluffJobs na wewnętrznym API - bez przeglądarki."""
+    DEFAULT_MAX_DETAILS = 500
+
+    def __init__(self, config: dict):
+        super().__init__(config)
+        portal_cfg = config.get("nofluffjobs", {}) or {}
+        self.skip_known_details = portal_cfg.get("skip_known_details", True)
+        self.max_details = portal_cfg.get("max_details", self.DEFAULT_MAX_DETAILS)
+        self.seen_again_links = []
+
 
     def get_source_name(self) -> str:
         return "NoFluffJobs"
@@ -84,31 +111,34 @@ class NoFluffScraper(BaseScraper):
 
         target = target_city.lower()
         location = posting.get("location") or {}
-        for place in (location.get("places") or []):
-            if isinstance(place, dict):
-                city = str(place.get("city", "")).lower()
-                if target in city or "remote" in city or place.get("remote"):
-                    return True
+        if isinstance(location, dict):
+            if location.get("fullyRemote"):
+                return True
+            for place in (location.get("places") or []):
+                if isinstance(place, dict):
+                    city = str(place.get("city", "")).lower()
+                    if target in city or "remote" in city or place.get("remote"):
+                        return True
+            city = str(location.get("city", "")).lower()
+            if target in city or "remote" in city:
+                return True
         return False
 
     def _fetch_listings(self, session: requests.Session) -> list:
         """
-        Pobierz wszystkie oferty junior/trainee w Polsce i przefiltruj lokalnie.
-
-        Serwerowy filtr zdalnych jest niewiarygodny: `fullyRemote: true` zwraca
-        dokładnie tyle samo wyników co brak filtra (335), czyli jest ignorowany.
-        Filtr `city` z kolei ograniczał wynik do ~38 ofert i wycinał oferty zdalne,
-        które są niezależne od lokalizacji i mieszczą się w preferencjach kandydata.
-
-        Dlatego bierzemy pełną listę dla kraju i decydujemy po stronie klienta.
+        Pobierz oferty w Polsce wg poziomów z CV i przefiltruj lokalnie.
         """
-        target_city = self.config.get("location", "Warszawa")
-        seniority = ["trainee", "junior"]
+        cfg = getattr(self, "config", {})
+        portal_cfg = cfg.get("nofluffjobs", {}) or {}
+        target_city = scope_city(portal_cfg.get("location") or cfg.get("location", "Warszawa"))
+
+        raw_levels = scope_levels()
+        seniority = list(dict.fromkeys(NFJ_LEVEL_MAP[lv] for lv in raw_levels if lv in NFJ_LEVEL_MAP)) or ["trainee", "junior"]
 
         postings = self._search(
             session,
             {"seniority": seniority, "country": ["poland"]},
-            "PL junior/trainee",
+            f"PL {','.join(seniority)}",
         )
 
         unique = {}
@@ -136,11 +166,7 @@ class NoFluffScraper(BaseScraper):
         return {}
 
     def _parse_posting(self, posting: dict, detail: dict) -> Job:
-        """Convert API posting + detail to Job dataclass."""
-        # W API NoFluffJobs `title` to stanowisko, a `name` to NAZWA FIRMY.
-        # Poprzednia wersja szukała firmy w posting["company"]["name"], którego
-        # nie ma - stąd wszystkie oferty miały company="Unknown".
-        # API oddaje tytuł i firmę z encjami HTML ("Systems &amp; Infrastructure").
+        """Convert API posting + detail to Job dataclass with structured fields."""
         title = html.unescape(posting.get("title") or "Unknown")
         company = html.unescape(
             posting.get("name")
@@ -151,16 +177,9 @@ class NoFluffScraper(BaseScraper):
         slug = posting.get("url", posting.get("slug", posting.get("id", "")))
         link = f"https://nofluffjobs.com/pl/job/{slug}"
 
-        # Opis budujemy ze szczegółów oferty, jeśli są
+        # Czysty opis: właściwy opis + zadania + wymagania tekstowe (bez metadanych)
         desc_parts = []
-
         if detail:
-            # Właściwa treść ogłoszenia. UWAGA: nie ma jej pod detail["body"] ani
-            # detail["description"] (tak szukała poprzednia wersja i dlatego opisy
-            # ograniczały się do listy technologii). Realne pola to:
-            #   details.description       - opis stanowiska
-            #   requirements.description  - wymagania opisowe
-            #   specs.dailyTasks          - lista codziennych zadań
             main_desc = (detail.get("details") or {}).get("description")
             if isinstance(main_desc, str) and main_desc.strip():
                 desc_parts.append(main_desc.strip())
@@ -170,63 +189,91 @@ class NoFluffScraper(BaseScraper):
             if tasks:
                 desc_parts.append("Zadania:\n" + "\n".join(f"- {t}" for t in tasks))
 
-            requirements = detail.get("requirements") or {}
-
-            req_desc = requirements.get("description")
+            req_desc = (detail.get("requirements") or {}).get("description")
             if isinstance(req_desc, str) and req_desc.strip():
                 desc_parts.append("Wymagania:\n" + req_desc.strip())
 
-            musts = requirements.get("musts", [])
-            if musts:
-                must_names = [m.get("value", m.get("name", "")) for m in musts if isinstance(m, dict)]
-                if must_names:
-                    desc_parts.append("Wymagane: " + ", ".join(must_names))
-
-            nices = requirements.get("nices", [])
-            if nices:
-                nice_names = [n.get("value", n.get("name", "")) for n in nices if isinstance(n, dict)]
-                if nice_names:
-                    desc_parts.append("Mile widziane: " + ", ".join(nice_names))
-
-            # Świadomie POMIJAMY detail["consents"] - to klauzule RODO
-            # (potrafią mieć 7000 znaków) i sam koszt tokenów bez wartości.
-
-        # Zapas: tagi technologii z listy wyników
         if not desc_parts:
-            tiles = posting.get("tiles", {})
-            technologies = tiles.get("technologies", [])
-            if technologies:
-                tech_names = [t.get("value", str(t)) if isinstance(t, dict) else str(t) for t in technologies]
-                desc_parts.append("Technologie: " + ", ".join(tech_names))
             desc_parts.append(f"Oferta z NoFluffJobs: {title}")
 
-        salary = posting.get("salary", {})
-        if salary:
-            sal_from = salary.get("from", salary.get("min", ""))
-            sal_to = salary.get("to", salary.get("max", ""))
-            currency = salary.get("currency", "PLN")
-            sal_type = salary.get("type", "")
-            if sal_from or sal_to:
-                sal_str = f"Wynagrodzenie: {sal_from}-{sal_to} {currency}"
-                if sal_type:
-                    sal_str += f" ({sal_type})"
-                desc_parts.append(sal_str)
+        description = "\n\n".join(desc_parts)
 
-        description = "\n".join(desc_parts)
+        # Poziom doświadczenia
+        seniority = norm_seniority(posting.get("seniority") or (detail.get("basics") or {}).get("seniority"))
 
+        # Tryb pracy
+        modes = []
+        if posting.get("fullyRemote") or (detail.get("location") or {}).get("fullyRemote"):
+            modes.append("remote")
+        loc_data = detail.get("location") or posting.get("location") or {}
+        if isinstance(loc_data, dict):
+            if loc_data.get("hybridDesc"):
+                modes.append("hybrid")
+            elif not modes and loc_data.get("places"):
+                modes.append("onsite")
+        work_modes = norm_work_modes(modes)
+
+        # Umiejętności: wymagane i mile widziane
+        musts = (detail.get("requirements") or {}).get("musts") or []
+        nices = (detail.get("requirements") or {}).get("nices") or []
+        skills_required = norm_skills(musts)
+        if not skills_required:
+            tiles = posting.get("tiles") or {}
+            req_tiles = [v for v in tiles.get("values", []) if isinstance(v, dict) and v.get("type") == "requirement"]
+            skills_required = norm_skills(req_tiles) or norm_skills(tiles.get("technologies"))
+        skills_nice = norm_skills(nices)
+
+        # Wynagrodzenie i typ umowy
+        sal = posting.get("salary") or {}
+        salary = None
+        contract_types = None
+        if sal:
+            low = sal.get("from") or sal.get("min")
+            high = sal.get("to") or sal.get("max")
+            currency = sal.get("currency", "PLN")
+            period = sal.get("period")
+            sal_type = sal.get("type")
+            contract = norm_contracts(sal_type)
+            contract_code = contract[0] if contract else None
+            gross = False if contract_code == "b2b" else (True if contract_code == "uop" else None)
+            salary = make_salary(low, high, currency=currency, period=period, gross=gross, contract=contract_code)
+            contract_types = contract
+
+        # Języki
+        langs = []
+        for l in (detail.get("requirements") or {}).get("languages") or []:
+            if isinstance(l, dict):
+                code = l.get("code")
+                req = str(l.get("type", "MUST")).upper() == "MUST"
+                parsed = make_language(code, required=req)
+                if parsed:
+                    langs.append(parsed)
+        languages = langs or None
+
+        # Kategoria
+        category = posting.get("category") or (detail.get("basics") or {}).get("category")
+
+        # Daty
+        posted_raw = posting.get("posted") or detail.get("posted")
+        posted_date = None
+        if isinstance(posted_raw, (int, float)):
+            posted_date = datetime.fromtimestamp(posted_raw / 1000.0).isoformat()
+        elif isinstance(posted_raw, str):
+            posted_date = posted_raw
+        valid_through = detail.get("expiresAt") or None
+
+        # Lokalizacja
         location_data = posting.get("location", {})
+        location = None
         if isinstance(location_data, dict):
             places = location_data.get("places", [])
-            if places:
-                location = places[0].get("city", "Warszawa")
-            else:
-                location = location_data.get("city", "Warszawa")
-        else:
-            location = "Warszawa"
-
-        seniority = posting.get("seniority", [])
-        if seniority and isinstance(seniority, list):
-            description += f"\nPoziom: {', '.join(seniority)}"
+            if places and isinstance(places[0], dict):
+                location = places[0].get("city")
+            if not location:
+                location = location_data.get("city")
+        cfg = getattr(self, "config", {})
+        default_city = (cfg.get("nofluffjobs", {}) or {}).get("location") or cfg.get("location", "Warszawa")
+        location = location or scope_city(default_city)
 
         return Job(
             title=title,
@@ -235,7 +282,17 @@ class NoFluffScraper(BaseScraper):
             description=description,
             source=self.get_source_name(),
             location=location,
-            scraped_at=datetime.now().isoformat()
+            posted_date=posted_date,
+            valid_through=valid_through,
+            scraped_at=datetime.now().isoformat(),
+            seniority=seniority,
+            work_modes=work_modes,
+            contract_types=contract_types,
+            salary=salary,
+            skills_required=skills_required,
+            skills_nice=skills_nice,
+            languages=languages,
+            category=category,
         )
 
     def run(self) -> List[Job]:
@@ -249,16 +306,33 @@ class NoFluffScraper(BaseScraper):
             postings = self._fetch_listings(session)
             logger.info(f"NFJ API: Fetched {len(postings)} listing summaries")
 
+            if getattr(self, "skip_known_details", True):
+                from utils.known_links import known_links
+                known = known_links()
+                fresh = []
+                for posting in postings:
+                    slug = posting.get("url", posting.get("slug", posting.get("id", "")))
+                    link = f"https://nofluffjobs.com/pl/job/{slug}"
+                    if link in known:
+                        self.seen_again_links.append(link)
+                    else:
+                        fresh.append(posting)
+                logger.info(
+                    f"NFJ API: {len(fresh)} new offers, "
+                    f"{len(self.seen_again_links)} already in the database (skipped)"
+                )
+                postings = fresh
+
+            max_details = getattr(self, "max_details", self.DEFAULT_MAX_DETAILS)
             for i, posting in enumerate(postings):
                 slug = posting.get("url", posting.get("slug", posting.get("id", "")))
                 if not slug:
                     continue
 
-                # Dociągamy szczegóły dla pełniejszych opisów - z ograniczeniem tempa
                 detail = {}
-                if i < 200:  # Limit detail fetches to avoid excessive requests
+                if i < max_details:
                     detail = self._fetch_detail(session, slug)
-                    time.sleep(0.8)  # Limit: ok. 1 zapytanie na sekundę
+                    time.sleep(0.5)
 
                 try:
                     job = self._parse_posting(posting, detail)

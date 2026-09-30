@@ -62,30 +62,6 @@ def test_text_cleaning():
     check("handles None/empty", strip_html("") == "" and clean_job_description("") == "")
 
 
-def test_stale_detection():
-    print("\n[3] Stale analysis detection")
-    import waterfall_analysis as wa
-
-    job = {"title": "Junior Dev", "description": "Opis oferty " * 20}
-    fingerprint = wa.description_fingerprint(job)
-
-    fresh = {"_description_hash": fingerprint, "_profile_version": "v3@2026"}
-    check("fresh result is not rescored",
-          not wa.is_stale(fresh, job, "v3@2026"))
-
-    job_changed = dict(job, description="Zupełnie nowy, wzbogacony opis oferty")
-    check("description change is NOT rescored in normal mode (strictly unscored)",
-          not wa.is_stale(fresh, job_changed, "v3@2026", rescore_changed=False))
-    check("description change is rescored with explicit rescore_changed=True",
-          wa.is_stale(fresh, job_changed, "v3@2026", rescore_changed=True))
-
-    check("newer profile does not invalidate existing results by default",
-          not wa.is_stale(fresh, job, "v4@2026"))
-
-    check("explicit rescore_all invalidates result on demand",
-          wa.is_stale(fresh, job, "v4@2026", rescore_all=True))
-    check("legacy entry without stamps counts as fresh",
-          not wa.is_stale({}, job, "v3@2026"))
 
 
 def test_safe_io():
@@ -108,34 +84,6 @@ def test_safe_io():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_model_rotation():
-    print("\n[5] Model and key rotation")
-    import waterfall_analysis as wa
-
-    models, keys = wa.MODELS, wa.API_KEYS
-    try:
-        wa.MODELS = ["m0", "m1", "m2"]
-        wa.API_KEYS = ["k0", "k1"]
-
-        pairs = list(wa._rotation(0, 0))
-        check("rotation visits every model x key pair once",
-              len(pairs) == 6 and len(set(pairs)) == 6, str(pairs))
-        check("keys are exhausted before the model is downgraded",
-              [m for m, _ in pairs] == [0, 0, 1, 1, 2, 2], str(pairs))
-
-        resumed = list(wa._rotation(1, 1))
-        check("rotation resumes from the pair that last worked",
-              resumed[0] == (1, 1), str(resumed[:2]))
-        check("after a downgrade the key pool restarts at 0",
-              resumed[1] == (1, 0), str(resumed[:3]))
-        check("rotation terminates instead of looping",
-              len(resumed) == 6 and len(set(resumed)) == 6, str(resumed))
-
-        wa.MODELS, wa.API_KEYS = ["only"], ["single"]
-        check("a single model and key still terminate",
-              list(wa._rotation(0, 0)) == [(0, 0)])
-    finally:
-        wa.MODELS, wa.API_KEYS = models, keys
 
 
 def test_llm_providers():
@@ -164,7 +112,7 @@ def test_llm_providers():
     s = llm.settings_from_env({"LLM_PROVIDER": "openai", "OPENAI_API_KEY": "k",
                                "OPENAI_MODELS": "qwen3, qwen3,llama4"})
     check("custom models replace the defaults for scoring and the profile",
-          s.models == ["qwen3", "llama4"] and s.profile_models == s.models, str(s.models))
+          s.models == ["qwen3", "llama4"], str(s.models))
 
     check("Gemini 429 is a rate limit", llm._classify_gemini("429 RESOURCE_EXHAUSTED") == "rate_limit")
     check("Gemini rejected key moves on to the next key",
@@ -414,7 +362,7 @@ def test_idempotent_writes():
               f"kopii przybylo: {kopie() - przed}")
 
         keep = {canonical_link(j["link"]) for j in czyste}
-        deduplicate_db._apply(path, False, keep, {}, set())
+        deduplicate_db._apply(path, keep, {}, set())
         check("deduplicate nie przepisuje pliku bez duplikatow", kopie() == przed,
               f"kopii przybylo: {kopie() - przed}")
 
@@ -424,7 +372,7 @@ def test_idempotent_writes():
                                   "description": "Duplikat tej samej oferty."}]
         save_json_atomic(path, brudne)
         przed = kopie()
-        deduplicate_db._apply(path, False, keep, {}, set())
+        deduplicate_db._apply(path, keep, {}, set())
         check("deduplicate zapisuje, gdy duplikat faktycznie jest", kopie() > przed)
         check("duplikat zniknal z pliku", len(load_json_safe(path, default=[])) == 2)
     finally:
@@ -710,8 +658,10 @@ def test_olx_opis_z_listingu():
     check("firma z ogloszenia, nie zaslepka OLX", job.company == "Market Test", job.company)
     check("data wystawienia przepisana", (job.posted_date or "").startswith("2026-09-07"),
           str(job.posted_date))
-    check("parametry doklejone do opisu", "Pelny etat" in job.description,
-          (job.description or "")[-60:])
+    check("parametry trafiaja do pol strukturalnych", job.schedules == ["full_time"],
+          str(job.schedules))
+    check("opis nie zawiera doklejonych parametrow", "Pelny etat" not in job.description,
+          job.description)
 
     check("ogloszenie zdjete nie nadpisuje opisu",
           scraper._z_ogloszenia(job, dict(ad, status="removed_by_user")) is False)
@@ -795,239 +745,7 @@ def test_pipeline_final_status():
               {"zdrowy": {"success": True, "status": "scraped"}}, warnings
           ) == [])
 
-def test_incremental_pipeline_selection():
-    print("\n[15] Isolated waterfall main regression & concurrent state writes")
-    import waterfall_analysis as wa
-    import tempfile, shutil, threading, time
-    from unittest.mock import patch
 
-    old_cwd = os.getcwd()
-    temp_dir = tempfile.mkdtemp(prefix="test_wa_suite_")
-    orig_keys = wa.API_KEYS
-    orig_batch = wa.BATCH_SIZE
-
-    try:
-        os.chdir(temp_dir)
-
-        # 1. Setup isolated inputs
-        with open("final_cv_text.txt", "w", encoding="utf-8") as f:
-            f.write("Doświadczony Python Developer...")
-
-        job1 = {"title": "Python Dev", "company": "PyCorp", "link": "https://test.pl/1", "description": "Opis oferty Python SQL " * 10}
-        job2_new = {"title": "React Dev", "company": "ReactCorp", "link": "https://test.pl/2", "description": "Opis oferty React TS " * 10}
-        job3_decided = {"title": "Sales Rep", "company": "SalesCorp", "link": "https://test.pl/3", "description": "Opis oferty Sprzedaz " * 10}
-        job4_invalid = {"title": "Short", "company": "NoCorp", "link": "https://test.pl/4", "description": "Zbyt krotki"}
-
-        with open("jobs_database.json", "w", encoding="utf-8") as f:
-            json.dump([job1, job2_new, job3_decided, job4_invalid], f)
-
-        with open("user_decisions.json", "w", encoding="utf-8") as f:
-            json.dump({"https://test.pl/3": "reject"}, f)
-
-        with open("preference_profile.json", "w", encoding="utf-8") as f:
-            json.dump({
-                "_metadata": {"generator_version": "v3_contrastive", "generated_at": "2026-09-17T06:40:44"},
-                "summary": "Nowy wygenerowany profil preferencji"
-            }, f)
-
-        # Initial state on disk: job1 already analyzed under earlier profile
-        fp1 = wa.description_fingerprint(job1)
-        initial_results = [{
-            "job": job1,
-            "match_percentage": 85,
-            "_description_hash": fp1,
-            "_profile_version": "v3@2026-08-01",
-            "_model": "gemini-earlier",
-            "_analyzed_at": "2026-08-01T10:00:00"
-        }]
-        with open("analyzed_jobs_waterfall.json", "w", encoding="utf-8") as f:
-            json.dump(initial_results, f)
-
-        wa.API_KEYS = ["mock-key"]
-        wa.BATCH_SIZE = 1
-
-        called_batches = []
-        def fake_score_batch(batch, prompt, model_idx, key_idx, profile_ver):
-            called_batches.append([j["link"] for j in batch])
-            entries = []
-            for j in batch:
-                entries.append({
-                    "job": j,
-                    "match_percentage": 90,
-                    "_description_hash": wa.description_fingerprint(j),
-                    "_profile_version": profile_ver,
-                    "_model": "mock-model",
-                    "_analyzed_at": "2026-09-18T18:00:00"
-                })
-            return entries, [], model_idx, key_idx
-
-        # --- SCENARIO A: Normal run with profile changed ---
-        # Calls actual wa.main(rescore_all=False)
-        with patch.object(wa, "score_batch", side_effect=fake_score_batch):
-            res_a = wa.main(rescore_all=False)
-
-        check("wa.main returns True in normal mode", res_a is True)
-        check("normal mode only calls fake API for newly eligible unanalyzed job",
-              called_batches == [["https://test.pl/2"]], str(called_batches))
-
-        with open("analyzed_jobs_waterfall.json", "r", encoding="utf-8") as f:
-            saved_a = json.load(f)
-
-        saved_by_link = {wa.canonical_link(r["job"]["link"]): r for r in saved_a}
-        check("output retains old score with original profile stamp",
-              saved_by_link.get("https://test.pl/1", {}).get("match_percentage") == 85 and
-              saved_by_link.get("https://test.pl/1", {}).get("_profile_version") == "v3@2026-08-01")
-        check("output includes newly evaluated job",
-              saved_by_link.get("https://test.pl/2", {}).get("match_percentage") == 90)
-        check("decided and invalid jobs were not evaluated",
-              "https://test.pl/3" not in saved_by_link and "https://test.pl/4" not in saved_by_link)
-
-        # --- SCENARIO B: Explicit full rerating (--rescore-all) with interruption ---
-        called_batches.clear()
-        def fake_score_batch_interrupt(batch, prompt, model_idx, key_idx, profile_ver):
-            link = batch[0]["link"]
-            called_batches.append(link)
-            if len(called_batches) == 1:
-                # Batch 1 succeeds
-                return [{
-                    "job": batch[0],
-                    "match_percentage": 99,
-                    "_description_hash": wa.description_fingerprint(batch[0]),
-                    "_profile_version": profile_ver,
-                    "_model": "mock-model",
-                    "_analyzed_at": "2026-09-18T18:05:00"
-                }], [], model_idx, key_idx
-            else:
-                # Batch 2 interrupts
-                raise KeyboardInterrupt("Simulated user process termination on batch 2")
-
-        with patch.object(wa, "score_batch", side_effect=fake_score_batch_interrupt):
-            interrupted = False
-            try:
-                wa.main(rescore_all=True)
-            except KeyboardInterrupt:
-                interrupted = True
-
-        check("interrupted rescore raised KeyboardInterrupt as expected", interrupted)
-
-        with open("analyzed_jobs_waterfall.json", "r", encoding="utf-8") as f:
-            saved_b = json.load(f)
-
-        saved_b_by_link = {wa.canonical_link(r["job"]["link"]): r for r in saved_b}
-        check("interrupted rescore saved batch 1 with updated score",
-              saved_b_by_link.get("https://test.pl/1", {}).get("match_percentage") == 99)
-        check("interrupted rescore PRESERVED batch 2 with previous score",
-              saved_b_by_link.get("https://test.pl/2", {}).get("match_percentage") == 90)
-        check("interrupted output contains zero duplicate links",
-              len(saved_b) == len(saved_b_by_link) == 2)
-
-        # --- SCENARIO C: Resume ordinary run after interruption ---
-        called_batches.clear()
-        with patch.object(wa, "score_batch", side_effect=fake_score_batch):
-            res_c = wa.main(rescore_all=False)
-
-        check("resumed normal run completes without error", res_c is True)
-        check("resumed normal run does not re-queue already completed jobs",
-              len(called_batches) == 0, str(called_batches))
-
-        # --- SCENARIO D: State IO under concurrent reading ---
-        test_state_file = Path("test_state_concurrency.json")
-        save_json_atomic(test_state_file, {"round": 0})
-        stop_event = threading.Event()
-        observed_snapshots = []
-        read_parse_errors = []
-
-        def raw_reader():
-            while not stop_event.is_set():
-                try:
-                    with open(test_state_file, "r", encoding="utf-8") as rf:
-                        parsed = json.load(rf)
-                        if "round" in parsed:
-                            observed_snapshots.append(parsed["round"])
-                except (PermissionError, OSError):
-                    pass
-                except Exception as ex:
-                    read_parse_errors.append(str(ex))
-                time.sleep(0.001)
-
-        readers = [threading.Thread(target=raw_reader) for _ in range(2)]
-        for r in readers: r.start()
-
-        write_success = 0
-        for i in range(1, 26):
-            if save_json_atomic(test_state_file, {"round": i}):
-                write_success += 1
-            time.sleep(0.002)
-
-        stop_event.set()
-        for r in readers: r.join()
-
-        with open(test_state_file, "r", encoding="utf-8") as rf:
-            final_snapshot = json.load(rf)
-
-        check("atomic writes succeed under concurrent readers", write_success == 25, f"{write_success}/25")
-        check("readers observed valid snapshots", len(observed_snapshots) > 0)
-        check("readers never read corrupt or partial JSON", len(read_parse_errors) == 0, str(read_parse_errors))
-        check("final state on disk has expected content", final_snapshot.get("round") == 25)
-
-    finally:
-        os.chdir(old_cwd)
-        wa.API_KEYS = orig_keys
-        wa.BATCH_SIZE = orig_batch
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-def test_scoring_queue_semantics():
-    print("\n[16] Shared scoring queue eligibility semantics")
-    from utils.scoring_queue import (
-        get_pending_scoring_jobs,
-        get_pending_scoring_count,
-        is_valid_job,
-        is_expired_job,
-    )
-    from datetime import date, timedelta
-
-    today = date.today()
-    past_date = (today - timedelta(days=5)).isoformat()
-    future_date = (today + timedelta(days=30)).isoformat()
-
-    check("valid job description passes", is_valid_job({"description": "Dobra oferta pracy Python " * 5}))
-    check("too short description fails", not is_valid_job({"description": "Krótki opis"}))
-    check("placeholder Brak opisu fails", not is_valid_job({"description": "Brak opisu"}))
-    check("empty description fails", not is_valid_job({"description": ""}))
-    check("None description fails", not is_valid_job({"description": None}))
-
-    check("past valid_through is expired", is_expired_job({"valid_through": past_date}))
-    check("future valid_through is not expired", not is_expired_job({"valid_through": future_date}))
-    check("none valid_through is not expired", not is_expired_job({"valid_through": None}))
-
-    sample_jobs = [
-        {"link": "https://test.pl/valid1", "description": "Oferta 1 Python backend " * 5, "source": "src1", "last_seen": "2026-09-18T10:00:00"},
-        {"link": "https://test.pl/valid2", "description": "Oferta 2 Frontend React " * 5, "source": "src1", "last_seen": "2026-09-18T10:00:00"},
-        {"link": "https://test.pl/decided", "description": "Oferta 3 Decided job " * 5, "source": "src1", "last_seen": "2026-09-18T10:00:00"},
-        {"link": "https://test.pl/analyzed", "description": "Oferta 4 Analyzed job " * 5, "source": "src1", "last_seen": "2026-09-18T10:00:00"},
-        {"link": "https://test.pl/expired", "description": "Oferta 5 Expired job " * 5, "source": "src1", "last_seen": "2026-09-18T10:00:00", "valid_through": past_date},
-        {"link": "https://test.pl/zdjete", "description": "Oferta 6 Removed from portal " * 5, "source": "src1", "last_seen": "2026-09-10T10:00:00"},
-        {"link": "https://test.pl/invalid", "description": "Brak opisu", "source": "src1", "last_seen": "2026-09-18T10:00:00"},
-    ]
-    sample_analyzed = [
-        {"job": {"link": "https://test.pl/analyzed"}, "match_percentage": 80}
-    ]
-    sample_decisions = {
-        "https://test.pl/decided": "apply"
-    }
-
-    pending_jobs = get_pending_scoring_jobs(
-        jobs=sample_jobs,
-        analyzed=sample_analyzed,
-        decisions=sample_decisions,
-    )
-    pending_links = {j["link"] for j in pending_jobs}
-
-    check("only valid unanalyzed undecided fresh live jobs are queued",
-          pending_links == {"https://test.pl/valid1", "https://test.pl/valid2"},
-          str(pending_links))
-    check("pending scoring count equals len of pending jobs",
-          get_pending_scoring_count(jobs=sample_jobs, analyzed=sample_analyzed, decisions=sample_decisions) == 2)
 
 
 def test_windows_process_safety():
@@ -1047,7 +765,7 @@ def test_windows_process_safety():
 def test_pipeline_stop_and_resume_lifecycle():
     print("\n[18] Comprehensive stop-resume lifecycle and edge case regressions")
     import run_final_pipeline as pipeline
-    import waterfall_analysis as wa
+    import matching.run as matching_run
     import pipeline_manager as sapp
     from pipeline_manager import PipelineProcessManager, load_json_safe
     import tempfile, shutil, time, sys, io
@@ -1062,7 +780,6 @@ def test_pipeline_stop_and_resume_lifecycle():
     t_state_lock = temp_path / "pipeline_run_state.json"
     t_stop_flag = temp_path / "pipeline_stop_requested.flag"
     t_checkpoint = temp_path / "pipeline_checkpoint.json"
-    t_waterfall_state = temp_path / "waterfall_state.json"
 
     patches = [
         patch.object(sapp, "STATE_LOCK_FILE", t_state_lock),
@@ -1070,8 +787,8 @@ def test_pipeline_stop_and_resume_lifecycle():
         patch.object(sapp, "CHECKPOINT_FILE", t_checkpoint),
         patch.object(pipeline, "STOP_FLAG_FILE", t_stop_flag),
         patch.object(pipeline, "CHECKPOINT_FILE", t_checkpoint),
-        patch.object(wa, "STOP_FLAG_FILE", t_stop_flag),
-        patch.object(wa, "STATE_FILE", str(t_waterfall_state)),
+        patch.object(matching_run, "STOP_FLAG_FILE", t_stop_flag),
+        patch("utils.cv_profile.ensure_profile", return_value={"seniority": "mid", "city": "Warszawa", "skills": ["python"]}),
     ]
 
     for p in patches:
@@ -1092,10 +809,10 @@ def test_pipeline_stop_and_resume_lifecycle():
                 if cp.get("options", {}).get("skip_scraping") is True and cp.get("current_stage") == "phase0":
                     phase0_saw_checkpoint["has_options"] = True
             return True
-        def fake_waterfall_stopping(**kwargs):
-            # Simulate stop requested at waterfall batch boundary
+        def fake_matching_stopping(*args, **kwargs):
+            # Simulate stop requested at matching boundary
             t_stop_flag.touch()
-            return False
+            return 1
 
         def fake_eval():
             phase4_called["called"] = True
@@ -1106,7 +823,7 @@ def test_pipeline_stop_and_resume_lifecycle():
              patch.object(pipeline, "deduplicate_db") as mock_p2, \
              patch.object(pipeline, "clean_db") as mock_p2_5, \
              patch.object(pipeline, "JobDatabase") as mock_db_cls, \
-             patch("waterfall_analysis.main", side_effect=fake_waterfall_stopping), \
+             patch("matching.run.main", side_effect=fake_matching_stopping), \
              patch("eval_ranking.main", side_effect=fake_eval):
 
             mock_p0.main = fake_purge
@@ -1125,7 +842,7 @@ def test_pipeline_stop_and_resume_lifecycle():
         check("initial checkpoint preserves options inside phase0", phase0_saw_checkpoint["has_options"] is True)
         check("run_pipeline returned False on user stop", res is False)
         check("run_pipeline printed PIPELINE STOPPED", "PIPELINE STOPPED" in run_output)
-        check("phase4 was NOT called after waterfall stop", phase4_called["called"] is False)
+        check("phase4 was NOT called after matching stop", phase4_called["called"] is False)
 
         cp_after_stop = load_json_safe(t_checkpoint, default={})
         check("checkpoint marks stopped is True", cp_after_stop.get("stopped") is True)
@@ -1139,8 +856,8 @@ def test_pipeline_stop_and_resume_lifecycle():
             phase0_rerun["called"] = True
             return True
 
-        def fake_waterfall_success(**kwargs):
-            return True
+        def fake_matching_success(*args, **kwargs):
+            return 0
 
         def fake_eval_resume(args):
             phase4_resumed["called"] = True
@@ -1151,7 +868,7 @@ def test_pipeline_stop_and_resume_lifecycle():
              patch.object(pipeline, "deduplicate_db") as mock_p2, \
              patch.object(pipeline, "clean_db") as mock_p2_5, \
              patch.object(pipeline, "JobDatabase") as mock_db_cls, \
-             patch("waterfall_analysis.main", side_effect=fake_waterfall_success), \
+             patch("matching.run.main", side_effect=fake_matching_success), \
              patch("eval_ranking.main", side_effect=fake_eval_resume):
 
             mock_p0.main = fake_purge_rerun
@@ -1225,23 +942,6 @@ def test_pipeline_stop_and_resume_lifecycle():
         fa_state = mgr_fa.get_state()
         check("standalone exit code 1 marked as failed", fa_state.get("status") == "failed")
 
-        # 5. Resumed vs Fresh --rescore-all semantics
-        from utils.scoring_queue import is_stale_result
-        cutoff_t1 = "2026-09-18T10:00:00"
-        cutoff_t2 = "2026-09-18T12:00:00"
-        job_stub = {"title": "Python Dev", "description": "Experienced Python developer required for backend microservices"}
-        entry_old = {"job": job_stub, "_analyzed_at": "2026-09-18T09:00:00"}
-        entry_mid = {"job": job_stub, "_analyzed_at": "2026-09-18T11:00:00"}
-
-        check("fresh rescore-all marks older entry as stale",
-              is_stale_result(entry_old, job_stub, rescore_all=True, rescore_cutoff=cutoff_t2) is True)
-        check("fresh rescore-all marks previous session entry as stale",
-              is_stale_result(entry_mid, job_stub, rescore_all=True, rescore_cutoff=cutoff_t2) is True)
-        check("resumed rescore-all skips entries evaluated in current session",
-              is_stale_result(entry_mid, job_stub, rescore_all=True, rescore_cutoff=cutoff_t1) is False)
-        check("resumed rescore-all still evaluates entries from before session cutoff",
-              is_stale_result(entry_old, job_stub, rescore_all=True, rescore_cutoff=cutoff_t1) is True)
-
     finally:
         for p in patches:
             p.stop()
@@ -1299,25 +999,24 @@ def test_external_data_change_automatic_invalidation():
     temp_path = Path(temp_dir)
 
     t_jobs = temp_path / "jobs_database.json"
-    t_analyzed = temp_path / "analyzed_jobs_waterfall.json"
+    t_matches = temp_path / "match_results.json"
     t_decisions = temp_path / "user_decisions.json"
 
     orig_jobs = app_services.JOBS_DATABASE_PATH
-    orig_ana = app_services.ANALYZED_JOBS_PATH
+    orig_matches = app_services.MATCH_RESULTS_PATH
     orig_dec = app_services.USER_DECISIONS_PATH
 
     app_services.JOBS_DATABASE_PATH = t_jobs
-    app_services.ANALYZED_JOBS_PATH = t_analyzed
+    app_services.MATCH_RESULTS_PATH = t_matches
     app_services.USER_DECISIONS_PATH = t_decisions
-
     try:
         # Initial disk state: 1 job, 1 match, 0 decisions
         job1 = {"title": "Initial Dev", "company": "Corp A", "link": "https://corp-a.com/job1",
                 "description": "Python backend microservices experience required over 20 chars", "source": "Test"}
-        match1 = {"job": job1, "match_percentage": 88, "reason": "Good Python fit"}
+        match1 = {"percent": 88, "reason": "Good Python fit"}
 
         t_jobs.write_text(json.dumps([job1], ensure_ascii=False), encoding="utf-8")
-        t_analyzed.write_text(json.dumps([match1], ensure_ascii=False), encoding="utf-8")
+        t_matches.write_text(json.dumps({job1["link"]: match1}, ensure_ascii=False), encoding="utf-8")
         t_decisions.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
 
         client = TestClient(server.app, base_url="http://127.0.0.1:8501")
@@ -1333,10 +1032,10 @@ def test_external_data_change_automatic_invalidation():
         time.sleep(0.05)
         job2 = {"title": "Background Pipeline Dev", "company": "Corp B", "link": "https://corp-b.com/job2",
                 "description": "React TypeScript full stack role over 20 chars", "source": "Test"}
-        match2 = {"job": job2, "match_percentage": 94, "reason": "High React fit"}
+        match2 = {"percent": 94, "reason": "High React fit"}
 
         t_jobs.write_text(json.dumps([job1, job2], ensure_ascii=False), encoding="utf-8")
-        t_analyzed.write_text(json.dumps([match1, match2], ensure_ascii=False), encoding="utf-8")
+        t_matches.write_text(json.dumps({job1["link"]: match1, job2["link"]: match2}, ensure_ascii=False), encoding="utf-8")
 
         # 3. Next consumer poll without manual reload: observes updated 2 offers automatically
         res2 = client.get("/api/offers?tab=Dopasowane", headers={"host": "127.0.0.1:8501"})
@@ -1368,7 +1067,7 @@ def test_external_data_change_automatic_invalidation():
 
     finally:
         app_services.JOBS_DATABASE_PATH = orig_jobs
-        app_services.ANALYZED_JOBS_PATH = orig_ana
+        app_services.MATCH_RESULTS_PATH = orig_matches
         app_services.USER_DECISIONS_PATH = orig_dec
         app_services.job_data_service.reload()
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1497,10 +1196,7 @@ def test_pipeline_stage_stats_and_eta():
     mgr = PipelineProcessManager()
     lines = [
         "   REMOVED (stale):  37",
-        "Cleaned analyzed_jobs_waterfall.json: 900 → 880 (removed 20)",
         "  jobs_database.json: 1250 -> 1240 (scalono 10)",
-        "  analyzed_jobs_waterfall.json: 880 -> 870 (scalono 10)",
-        "2026-09-23 10:02:11,123 - deduplicate_db - INFO - analyzed_jobs_waterfall.json: 870 -> 860 (removed 10)",
         "2026-09-23 10:02:12,123 - deduplicate_db - INFO - jobs_database.json: 1240 -> 1192 (removed 48)",
         "2026-09-23 10:02:13,000 - clean_db - INFO -    Before: 1,000,000 chars",
         "2026-09-23 10:02:13,000 - clean_db - INFO -    After:  1,000,000 chars",
@@ -1511,28 +1207,34 @@ def test_pipeline_stage_stats_and_eta():
         mgr._parse_telemetry(line)
     stages = mgr._telemetry_snapshot()["stages"]
     check("purge: stale offers removed from the jobs database", stages.get("phase0") == {"removed": 37})
-    check("normalisation: jobs database only, analyzed file ignored",
+    check("normalisation: links and merged count",
           stages.get("phase1_5") == {"links": 1240, "merged": 10}, stages.get("phase1_5"))
-    check("dedup: jobs database count, analyzed and purge lines ignored",
+    check("dedup: jobs database count, purge line ignored",
           stages.get("phase2") == {"removed": 48}, stages.get("phase2"))
-    check("token diet: characters summed over both files",
+    check("token diet: characters summed over every Before/After pair",
           stages.get("phase2_5") == {"chars_before": 3_000_000, "chars_after": 2_070_000}, stages.get("phase2_5"))
 
     mgr._parse_telemetry("2026-09-23 10:02:15,000 - deduplicate_db - INFO - jobs_database.json: 1192 ofert, brak duplikatow - plik bez zmian")
     check("dedup without duplicates reports zero", mgr._telemetry_snapshot()["stages"]["phase2"] == {"removed": 0})
 
-    mgr._parse_telemetry("Processing 50 jobs (Target Batch Size: 25).")
-    mgr._parse_telemetry("Batch 1 (Processing 25 jobs, 25 remaining in queue)...")
-    first = mgr._telemetry["scoring"]["first_batch_at"]
-    check("scoring: pace has no end before the first batch finishes",
-          first is not None and mgr._telemetry["scoring"]["last_done_at"] is None)
-    mgr._parse_telemetry("      Success! Processed 25 out of 25 requested jobs.")
-    mgr._parse_telemetry("Batch 2 (Processing 25 jobs, 0 remaining in queue)...")
-    sc = mgr._telemetry_snapshot()["scoring"]
-    check("scoring: first batch start is kept across later batches", sc["first_batch_at"] == first)
-    check("scoring: finished batch stamps its end", sc["last_done_at"] is not None and sc["processed"] == 25)
-    check("scoring: pack size comes from the run, not a UI constant", sc["batch_size"] == 25, sc)
+    mgr._parse_telemetry("Prefilter: 12 rejected {'tech': 10, 'level': 2} | to score: 38")
+    check("scoring: prefilter rejected and to_score parsed",
+          mgr._telemetry_snapshot()["stages"]["phase3"] == {"prefilter_rejected": 12, "to_score": 38})
+    check("scoring: prefilter records to_score and total",
+          mgr._telemetry["scoring"]["to_score"] == 38 and mgr._telemetry["scoring"]["prefilter_rejected"] == 12)
 
+    mgr._parse_telemetry("   Scored 10/38 (5.0/s)")
+    first = mgr._telemetry["scoring"]["first_batch_at"]
+    check("scoring: first progress line sets rate and first_batch_at",
+          first is not None and mgr._telemetry["scoring"]["rate"] == 5.0 and mgr._telemetry["scoring"]["scored"] == 10)
+
+    mgr._parse_telemetry("   Scored 25/38 (5.2/s)")
+    sc = mgr._telemetry_snapshot()["scoring"]
+    check("scoring: first start is kept across progress updates", sc["first_batch_at"] == first)
+    check("scoring: progress update updates scored, processed, and rate",
+          sc["scored"] == 25 and sc["processed"] == 25 and sc["rate"] == 5.2)
+    check("scoring: phase3 stage telemetry tracks scored, total, rate",
+          mgr._telemetry_snapshot()["stages"]["phase3"] == {"prefilter_rejected": 12, "to_score": 38, "scored": 25, "total": 38, "rate": 5.2})
     for line in [
         "2026-09-25 18:14:00,000 - main_scraper - INFO - Running aplikuj.pl scraper...",
         "2026-09-25 18:14:01,000 - main_scraper - INFO - Running OLX Praca scraper...",
@@ -1554,7 +1256,7 @@ def test_pipeline_stage_stats_and_eta():
           src["details_done"] == src["details_total"] == 3482, src)
 
 def test_offer_api_contract():
-    print("\n[24] Fresh offers, gap filter, next step and AI highlights over HTTP")
+    print("\n[24] Fresh offers, next step and decisions over HTTP")
     import tempfile, shutil, json
     from pathlib import Path
     from starlette.testclient import TestClient
@@ -1564,7 +1266,7 @@ def test_offer_api_contract():
     temp_path = Path(tempfile.mkdtemp(prefix="test_offer_api_"))
     paths = {
         "JOBS_DATABASE_PATH": temp_path / "jobs_database.json",
-        "ANALYZED_JOBS_PATH": temp_path / "analyzed_jobs_waterfall.json",
+        "MATCH_RESULTS_PATH": temp_path / "match_results.json",
         "USER_DECISIONS_PATH": temp_path / "user_decisions.json",
         "LAST_SCRAPE_RUN_PATH": temp_path / "last_scrape_run.json",
     }
@@ -1578,16 +1280,14 @@ def test_offer_api_contract():
                 "scraped_at": scraped_at}
 
     jobs = [job(1, "2026-09-20T18:00:00"), job(2, "2026-09-20T19:30:00"), job(3, "2026-09-20T19:40:00")]
-    analyzed = [
-        # Ten sam brak dwa razy w jednej ofercie liczy się jako jedna oferta.
-        {"job": jobs[0], "match_percentage": 80, "reason": "r", "missing_skills": ["SQL", "sql."],
-         "highlights": ["Analityk danych", "SQL"]},
-        {"job": jobs[1], "match_percentage": 70, "reason": "r", "missing_skills": ["SQL"]},
-        {"job": jobs[2], "match_percentage": 75, "reason": "r", "missing_skills": ["SQL"]},
-    ]
+    matches = {
+        jobs[0]["link"]: {"percent": 80},
+        jobs[1]["link"]: {"percent": 70},
+        jobs[2]["link"]: {"percent": 75},
+    }
     decisions = {jobs[0]["link"]: "save", jobs[2]["link"]: "reject"}
     paths["JOBS_DATABASE_PATH"].write_text(json.dumps(jobs), encoding="utf-8")
-    paths["ANALYZED_JOBS_PATH"].write_text(json.dumps(analyzed), encoding="utf-8")
+    paths["MATCH_RESULTS_PATH"].write_text(json.dumps(matches), encoding="utf-8")
     paths["USER_DECISIONS_PATH"].write_text(json.dumps(decisions), encoding="utf-8")
     paths["LAST_SCRAPE_RUN_PATH"].write_text(json.dumps({"started_at": "2026-09-20T19:00:00"}), encoding="utf-8")
 
@@ -1601,18 +1301,10 @@ def test_offer_api_contract():
               new_links == [jobs[1]["link"], jobs[2]["link"]])
         check("fresh_count counts the whole list", all_offers.get("fresh_count") == 2)
 
-        gaps = client.get("/api/gaps?threshold=50").json()
-        sql = next((r for r in gaps["rows"] if r["skill"] == "SQL"), None)
-        check("gap ranks distinct offers without rejected ones", sql is not None and sql["offers"] == 2)
-        gap_list = client.get("/api/offers?tab=Wszystkie&gap=SQL&gap_threshold=50").json()
-        check("gap list total equals the ranked offer count", sql is not None and gap_list["total"] == sql["offers"])
-        check("gap list is ordered by match",
-              [row["link"] for row in gap_list["items"]] == [jobs[0]["link"], jobs[1]["link"]])
-
-        detail = client.get("/api/offers/detail", params={"link": jobs[0]["link"]}).json()
-        check("detail exposes highlights", detail["highlights"] == ["Analityk danych", "SQL"])
-        plain = client.get("/api/offers/detail", params={"link": jobs[1]["link"]}).json()
-        check("older scores have no highlights", plain["highlights"] == [])
+        detail0 = client.get("/api/offers/detail", params={"link": jobs[0]["link"]}).json()
+        check("detail exposes match percentage", detail0["match_percentage"] == 80)
+        detail1 = client.get("/api/offers/detail", params={"link": jobs[1]["link"]}).json()
+        check("detail exposes second match percentage", detail1["match_percentage"] == 70)
 
         bad_due = client.post("/api/offers/next-step", json={"link": jobs[0]["link"], "label": "Rozmowa", "due": "2026-13-01"})
         check("next step rejects an invalid date", bad_due.status_code == 400)
@@ -1658,8 +1350,9 @@ def test_foreign_run_visible_to_server():
         "import sys, time\n"
         "from pathlib import Path\n"
         "flag = Path(sys.argv[1])\n"
-        "print('── PHASE 3: AI analysis (waterfall)', flush=True)\n"
-        "print('Batch 1 (Processing 75 jobs, 150 remaining in queue)...', flush=True)\n"
+        "print('── PHASE 3: Matching (prefilter + Jev)', flush=True)\n"
+        "print('Prefilter: 10 rejected {\"tech\": 10} | to score: 150', flush=True)\n"
+        "print('   Scored 1/150 (2.5/s)', flush=True)\n"
         "deadline = time.time() + 15\n"
         "while not flag.exists() and time.time() < deadline:\n"
         "    time.sleep(0.05)\n"
@@ -1687,15 +1380,15 @@ def test_foreign_run_visible_to_server():
             state = server.get_state()
             while time.time() < deadline and not (
                     state.get("running") and state["stages"][5]["status"] == "running"
-                    and (state["telemetry"].get("scoring") or {}).get("batch") == 1):
+                    and (state["telemetry"].get("scoring") or {}).get("scored") == 1):
                 time.sleep(0.1)
                 state = server.get_state()
             check("server sees the terminal run as running", state.get("running") is True and state["status"] == "running")
             check("server shows the terminal run's stage", state["stages"][5]["status"] == "running")
-            check("server shows the terminal run's batches",
-                  state["telemetry"]["scoring"]["batch"] == 1 and state["telemetry"]["scoring"]["remaining"] == 150)
+            check("server shows the terminal run's scoring progress",
+                  (state["telemetry"].get("scoring") or {}).get("scored") == 1
+                  and (state["telemetry"].get("scoring") or {}).get("to_score") == 150)
             check("server shows the terminal run's log", any("PHASE 3" in line for line in state["logs"]))
-
             refused, _ = server.start_pipeline(mode="full", cmd=[sys.executable, "-c", "pass"])
             check("server refuses a second run while the terminal run lives", refused is False)
 
@@ -1722,14 +1415,12 @@ def main():
     print("  INTEGRATION TESTS (no API calls)")
     print("=" * 62)
 
-    for test in (test_canonical_link, test_text_cleaning, test_stale_detection,
-                 test_safe_io, test_model_rotation, test_llm_providers,
+    for test in (test_canonical_link, test_text_cleaning,
+                 test_safe_io, test_llm_providers,
                  test_record_scrape, test_scraper_health,
                  test_idempotent_writes, test_olx_tempo_przy_blokadzie,
                  test_zdjete_z_portalu, test_olx_fetch_rownolegly,
                  test_olx_opis_z_listingu, test_pipeline_final_status,
-                 test_incremental_pipeline_selection,
-                 test_scoring_queue_semantics,
                  test_windows_process_safety,
                  test_pipeline_stop_and_resume_lifecycle,
                  test_http_security_and_dns_rebinding_protection,

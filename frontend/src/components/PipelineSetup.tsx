@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { FileText, Eye, EyeOff } from 'lucide-react';
 import type { CVInfo, EnvKeysResponse } from '../types';
 import { api } from '../api';
@@ -132,6 +132,24 @@ interface KeysEditorProps {
 export const KeysEditor: React.FC<KeysEditorProps> = ({ envKeys, full, disabled, onSaved, showToast }) => {
   const info = envKeys?.api_info;
   const envFields = envKeys?.fields ?? [];
+  const allFields = useMemo(() => {
+    const list = [...envFields];
+    const tsIdx = list.findIndex((f) => f.key === 'TYPESAFE_API_KEY');
+    if (tsIdx >= 0) {
+      list[tsIdx] = {
+        ...list[tsIdx],
+        label: 'TypeSafe (Jev) API Key',
+      };
+    } else {
+      list.unshift({
+        key: 'TYPESAFE_API_KEY',
+        label: 'TypeSafe (Jev) API Key',
+        secret: true,
+        configured: false,
+      });
+    }
+    return list;
+  }, [envFields]);
   const [picked, setPicked] = useState<string | null>(null);
   const [key, setKey] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -299,7 +317,7 @@ export const KeysEditor: React.FC<KeysEditorProps> = ({ envKeys, full, disabled,
       )}
 
       {/* Wszystkie pola .env */}
-      {full && envFields.length > 0 && (
+      {full && allFields.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ height: 1, background: 'var(--line)', margin: '4px 0' }} />
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)' }}>
@@ -307,7 +325,7 @@ export const KeysEditor: React.FC<KeysEditorProps> = ({ envKeys, full, disabled,
           </div>
 
           <div className="pp-env-grid">
-            {envFields.map((f) => (
+            {allFields.map((f) => (
               <div className="field" key={f.key}>
                 <label
                   className="field-label"

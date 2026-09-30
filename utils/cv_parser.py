@@ -3,6 +3,7 @@ Wyciąganie tekstu z CV w formacie PDF i DOCX.
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -31,8 +32,11 @@ class CVParser:
             reader = PdfReader(filepath)
             text_parts = []
             
+            # Tryb "layout": zwykły extract_text w części PDF-ów rozbija polskie litery
+            # na osobne znaki otoczone spacjami („do ś wiadczenie”).
+            # Układ zostawia długie ciągi spacji między kolumnami - zbija je clean_text.
             for page in reader.pages:
-                text = page.extract_text()
+                text = page.extract_text(extraction_mode="layout")
                 if text:
                     text_parts.append(text)
             
@@ -104,9 +108,10 @@ class CVParser:
         if not text:
             return ""
         
-        # Zbijamy nadmiarowe białe znaki
-        lines = [line.strip() for line in text.split('\n')]
-        lines = [line for line in lines if line]
-        
+        # Zbijamy nadmiarowe białe znaki; ciąg 3+ spacji to granica kolumn z trybu
+        # "layout", więc zamieniamy go na separator, żeby kolumny się nie zlewały.
+        lines = [re.sub(r" {3,}", " | ", line.strip()) for line in text.split('\n')]
+        lines = [re.sub(r"[ \t]{2}", " ", line) for line in lines if line]
+
         cleaned = "\n".join(lines)
         return cleaned

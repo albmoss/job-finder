@@ -16,8 +16,8 @@ Co zostało sprawdzone empirycznie (sierpień 2026):
    (#jobDescriptionText, ~1300 znaków) bez nowej nawigacji - i to przechodzi.
    Stąd zbieranie opisów klikaniem, a nie wchodzeniem na podstrony.
 5. Sam snippet z listingu ma 133-171 znaków, czyli ociera się o próg 150,
-   poniżej którego `waterfall_analysis` oznacza ofertę jako [BRAK PEŁNEGO OPISU]
-   i ścina jej ocenę do 55%. Bez opisu z panelu te oferty byłyby bezużyteczne.
+   poniżej którego matching/run.py pomija ofertę jako `brak_opisu`.
+   Bez opisu z panelu te oferty byłyby bezużyteczne.
 
 Wniosek: to źródło jest z założenia niskonakładowe i wolne - kilkadziesiąt ofert
 z pełnym opisem na przebieg. Podnoszenie `keywords` albo skracanie przerw
@@ -31,10 +31,16 @@ import re
 import time
 from datetime import datetime
 from typing import List, Optional
-
+from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
 from utils.links import canonical_link
-
+from utils.offer_fields import (
+    norm_contracts,
+    norm_schedules,
+    norm_seniority,
+    norm_work_modes,
+    salary_from_text,
+)
 logger = logging.getLogger(__name__)
 
 _MOSAIC_RE = re.compile(
@@ -69,8 +75,9 @@ class IndeedScraper:
         self.config = config
         cfg = config.get("indeed", {}) or {}
         self.cfg = cfg
-        self.location = cfg.get("location") or config.get("location", "Warszawa")
-        self.keywords = cfg.get("keywords", self.DEFAULT_KEYWORDS)
+        self.location = scope_city(default=cfg.get("location") or config.get("location", "Warszawa"))
+        levels = scope_levels()
+        self.keywords = cfg.get("keywords") or self._keywords_from_levels(levels)
         self.headless = config.get("headless", True)
         # Przerwa między słowami kluczowymi. Przy 12-18 s cała seria kończyła się
         # 403 - stąd domyślnie znacznie więcej.
@@ -87,6 +94,20 @@ class IndeedScraper:
     def get_source_name(self) -> str:
         return "Indeed"
 
+    @staticmethod
+    def _keywords_from_levels(levels: list[str]) -> list[str]:
+        mapping = {
+            "intern": ["praktykant", "stażysta", "intern"],
+            "junior": ["junior", "asystent"],
+            "mid": ["specjalista", "mid"],
+            "senior": ["senior", "starszy specjalista"],
+            "lead": ["lead", "lider"],
+            "manager": ["kierownik", "manager"],
+        }
+        kw = []
+        for lvl in levels:
+            kw.extend(mapping.get(lvl, []))
+        return list(dict.fromkeys(kw)) if kw else ["junior", "praktykant", "asystent"]
     # --- pomocnicze ----------------------------------------------------------
 
     @staticmethod
@@ -120,18 +141,36 @@ class IndeedScraper:
         if not title:
             return None
 
-        desc_parts = [description] if description else []
-        if not description:
-            # Snippet jako ostatnia deska ratunku - krótki, ale lepszy niż pustka
+        desc = description.strip() if description else ""
+        if not desc:
             snippet = card.get("snippet") or ""
             if snippet:
-                desc_parts.append(re.sub(r"<[^>]+>", " ", snippet))
+                desc = re.sub(r"<[^>]+>", " ", snippet).strip()
 
-        salary = card.get("salarySnippet") or {}
-        if isinstance(salary, dict) and salary.get("text"):
-            desc_parts.append(f"Wynagrodzenie: {salary['text']}")
-        if card.get("formattedRelativeTime"):
-            desc_parts.append(f"Opublikowano: {card['formattedRelativeTime']}")
+        salary_obj = None
+        salary_info = card.get("salarySnippet") or {}
+        if isinstance(salary_info, dict) and salary_info.get("text"):
+            salary_obj = salary_from_text(salary_info["text"])
+
+        location_str = card.get("formattedLocation") or None
+        work_modes = norm_work_modes(location_str) or norm_work_modes(title)
+        seniority = norm_seniority(title)
+
+        contract_types = None
+        schedules = None
+        tax = card.get("taxonomyAttributes") or []
+        for t in tax:
+            label = t.get("label") or ""
+            c = norm_contracts(label)
+            if c:
+                contract_types = (contract_types or []) + c
+            s = norm_schedules(label)
+            if s:
+                schedules = (schedules or []) + s
+        if contract_types:
+            contract_types = list(dict.fromkeys(contract_types))
+        if schedules:
+            schedules = list(dict.fromkeys(schedules))
 
         posted = None
         for key in ("pubDate", "createDate"):
@@ -142,15 +181,19 @@ class IndeedScraper:
                     break
                 except (ValueError, OSError):
                     pass
-
         return Job(
             title=title,
             company=str(card.get("company") or "Nieznana firma").strip(),
             link=canonical_link(f"{self.BASE_URL}/viewjob?jk={jobkey}"),
-            description="\n".join(p for p in desc_parts if p),
+            description=desc,
             source=self.get_source_name(),
-            location=card.get("formattedLocation") or None,
+            location=location_str,
             posted_date=posted,
+            salary=salary_obj,
+            work_modes=work_modes,
+            seniority=seniority,
+            contract_types=contract_types,
+            schedules=schedules,
             scraped_at=datetime.now().isoformat(),
         )
 

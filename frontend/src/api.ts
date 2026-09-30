@@ -5,12 +5,10 @@ import type {
   CVInfo,
   EnvField,
   EnvKeysResponse,
-  GapFilter,
   OfferDetail,
   OffersResponse,
   PipelinePrerequisites,
   PipelineState,
-  SkillGapsResponse,
   Stats,
 } from './types';
 
@@ -57,7 +55,6 @@ export const api = {
     search: string = '',
     page: number = 1,
     pageSize: number = 25,
-    gap?: GapFilter | null,
   ) => {
     const params = new URLSearchParams({
       tab: String(tab || 'Dopasowane'),
@@ -65,10 +62,6 @@ export const api = {
       page: String(page || 1),
       page_size: String(pageSize || 25),
     });
-    if (gap) {
-      params.set('gap', gap.skill);
-      params.set('gap_threshold', String(gap.threshold));
-    }
     return request<OffersResponse>(`/offers?${params.toString()}`);
   },
 
@@ -105,9 +98,6 @@ export const api = {
   getActivity: () => request<ActivityResponse>('/activity'),
 
   getApplications: () => request<ApplicationsResponse>('/applications'),
-
-  getSkillGaps: (threshold: number = 50) =>
-    request<SkillGapsResponse>(`/gaps?threshold=${threshold}`),
 
   fetchLinkData: (url: string) =>
     request<{ ok: boolean; data: Record<string, string> }>('/tools/fetch-link', {
@@ -158,7 +148,7 @@ export const api = {
       method: 'POST',
     }),
 
-  runStandaloneStep: (step: 'scrapers' | 'profile' | 'analysis' | 'rescore_all') =>
+  runStandaloneStep: (step: 'scrapers' | 'matching' | 'rescore_all') =>
     request<{ ok: boolean; message: string; state: PipelineState }>('/pipeline/run-step', {
       method: 'POST',
       body: JSON.stringify({ step }),

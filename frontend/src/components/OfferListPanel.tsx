@@ -1,8 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { GapFilter, OfferListItem } from '../types';
+import type { OfferListItem } from '../types';
 import { VIEW_ICON, isOfferTab } from '../views';
 import { SWAP_CLASS, type SwapPhase } from '../swap';
-import { Search, ChevronLeft, ChevronRight, ChevronUp, Sparkles, Layers, Star, Bookmark, MountainSnow, CircleX, Rocket, X } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, ChevronUp, Sparkles, Layers, Star, Bookmark, MountainSnow, CircleX, Rocket } from 'lucide-react';
 import { shouldIgnoreShortcut } from '../keys';
 import { formatStamp } from '../pipeline';
 import { NEW_ONES, OFFERS, RESULTS, plural } from '../plural';
@@ -90,9 +90,6 @@ interface OfferListPanelProps {
   /** Nowe od startu ostatniego pobierania na całej liście i sam start (`OffersResponse`). */
   freshCount: number;
   freshSince: string | null;
-  /** Lista zawężona do ofert z brakiem z panelu braków; `onClearGap` wraca do całej zakładki. */
-  gapFilter: GapFilter | null;
-  onClearGap: () => void;
   /** Faza podmiany wierszy przy zmianie strony (useBlurSwap w App). */
   listSwap: SwapPhase;
   selectedLink: string | null;
@@ -134,8 +131,6 @@ export const OfferListPanel: React.FC<OfferListPanelProps> = ({
   pageMarks,
   freshCount,
   freshSince,
-  gapFilter,
-  onClearGap,
   listSwap,
   selectedLink,
   onSelectOffer,
@@ -526,22 +521,7 @@ export const OfferListPanel: React.FC<OfferListPanelProps> = ({
         </div>
       </div>
 
-      {gapFilter ? (
-        <div className="ol-filter">
-          <span className="ol-filter-label">
-            Brakuje: <b>{gapFilter.skill}</b>
-          </span>
-          <button
-            type="button"
-            className="ol-filter-clear press"
-            onClick={onClearGap}
-            data-tip="Pokaż całą zakładkę"
-            aria-label={`Usuń filtr braku: ${gapFilter.skill}`}
-          >
-            <X size={14} aria-hidden="true" />
-          </button>
-        </div>
-      ) : freshCount > 0 && freshSince ? (
+      {freshCount > 0 && freshSince ? (
         <div className="ol-fresh">
           <span className="ol-fresh-dot" aria-hidden="true" />
           <span className="ol-fresh-label">

@@ -76,44 +76,87 @@ def _extract_state(html: str) -> dict:
 
 
 def build_description(job: dict, category: str = "") -> str:
-    """Złóż czytelny opis z pól oferty OLX."""
-    parts = []
+    """Opis oferty OLX - czysty tekst ogłoszenia, bez doklejania parametrów."""
+    return (job.get("description") or "").strip()
 
-    desc = (job.get("description") or "").strip()
-    if desc:
-        parts.append(desc)  # HTML - czyszczony dalej przez clean_job_description
 
-    salary = job.get("salary") or {}
-    if isinstance(salary, dict) and (salary.get("from") or salary.get("to")):
-        cur = salary.get("currencySymbol") or salary.get("currencyCode") or "zł"
-        period = {"monthly": "mies.", "hourly": "godz.", "weekly": "tyg."}.get(salary.get("period"), salary.get("period", ""))
-        parts.append(f"Wynagrodzenie: {salary.get('from')}-{salary.get('to')} {cur}/{period}".strip("/"))
+def parse_olx_fields(ad: dict) -> dict:
+    """
+    Wyciągnij strukturalne pola oferty z obiektu ogłoszenia OLX (stan lub podstrona).
+    """
+    from utils.offer_fields import (
+        norm_contracts, norm_schedules, norm_work_modes, norm_seniority, make_salary, _fold
+    )
 
-    # params: wymiar pracy, typ umowy, wymagane doświadczenie itd.
-    labels = []
-    for p in (job.get("params") or []):
+    fields = {
+        "contract_types": None,
+        "schedules": None,
+        "work_modes": None,
+        "seniority": None,
+        "salary": None,
+        "valid_through": None,
+        "location": None,
+    }
+
+    # 1. valid_through
+    vt = ad.get("validToTime") or ad.get("validTo")
+    if vt and isinstance(vt, str):
+        fields["valid_through"] = vt.strip()
+
+    # 2. location (exact city)
+    loc = ad.get("location")
+    if isinstance(loc, dict):
+        city_name = loc.get("cityName")
+        if city_name and isinstance(city_name, str) and city_name.strip():
+            fields["location"] = city_name.strip()
+
+    # 3. salary
+    sal = ad.get("salary")
+    if isinstance(sal, dict) and (sal.get("from") or sal.get("to")):
+        cur = sal.get("currencyCode") or sal.get("currencySymbol") or "PLN"
+        fields["salary"] = make_salary(
+            min_value=sal.get("from"),
+            max_value=sal.get("to"),
+            currency=cur,
+            period=sal.get("period"),
+        )
+
+    # 4. params
+    params = ad.get("params") or ad.get("parameters") or []
+    for p in params:
         if not isinstance(p, dict):
             continue
-        name = p.get("name")
+        key = (p.get("key") or "").lower()
         val = p.get("value")
-        if isinstance(val, dict):
-            val = val.get("label")
-        if name and val:
-            labels.append(f"{name}: {val}")
-    for p in (job.get("parameters") or []):
-        if not isinstance(p, dict):
-            continue
-        name = p.get("label")
-        vals = [v.get("label") for v in (p.get("values") or []) if isinstance(v, dict) and v.get("label")]
-        if name and vals:
-            labels.append(f"{name}: {', '.join(vals)}")
-    if labels:
-        parts.append(" | ".join(dict.fromkeys(labels)))
+        norm_val = p.get("normalizedValue")
+        name = (p.get("name") or p.get("label") or "").lower()
 
-    if category:
-        parts.append(f"Kategoria OLX: {category}")
+        # Agreement -> contract_types
+        if key == "agreement" or "umow" in name:
+            c = norm_contracts(norm_val) or norm_contracts(val)
+            if c:
+                fields["contract_types"] = c
 
-    return "\n\n".join(parts)
+        # Type -> schedules
+        if key == "type" or "wymiar" in name:
+            s = norm_schedules(val) or norm_schedules(norm_val)
+            if s:
+                fields["schedules"] = s
+
+        # Workplace -> work_modes
+        if key == "workplace" or "miejsce pracy" in name:
+            w = norm_work_modes(val) or norm_work_modes(norm_val)
+            if w:
+                fields["work_modes"] = w
+
+        # Experience -> seniority (exp_no = no experience -> junior)
+        if key == "experience" or "doswiadczenie" in name:
+            if norm_val == "exp_no" or (isinstance(val, str) and "bez doswiadczenia" in _fold(val)):
+                fields["seniority"] = ["junior"]
+            else:
+                fields["seniority"] = norm_seniority(val) or norm_seniority(norm_val)
+
+    return fields
 
 
 def extract_company(job: dict, fallback: str = "OLX") -> str:
@@ -181,4 +224,5 @@ def parse_offer_html(html: str) -> dict:
         "company": extract_company(job),
         "posted_date": job.get("addedAt") or job.get("createdAt") or "",
         "valid_to": job.get("validTo") or "",
+        "parsed_fields": parse_olx_fields(job),
     }

@@ -21,24 +21,21 @@ from utils.cv_parser import CVParser
 from utils.data_models import JobDatabase, Job, JobMatch
 from utils.text_cleaner import detect_work_mode, strip_html
 from utils.safe_io import save_json_atomic, load_json_safe
-from utils.decisions import decisions_since_profile
 from utils.links import canonical_link
 from utils.liveness import zdjete_z_portalu
-from utils.scoring_queue import get_pending_scoring_count
-import skill_gaps
+from utils.offer_fields import STRUCTURED_FIELDS
 import ui_theme
 
 logger = logging.getLogger(__name__)
 
 USER_DECISIONS_PATH = Path("user_decisions.json")
-ANALYZED_JOBS_PATH = Path("analyzed_jobs_waterfall.json")
-PREFERENCE_PROFILE_PATH = Path("preference_profile.json")
+MATCH_RESULTS_PATH = Path("match_results.json")
 SCRAPER_STATUS_PATH = Path("scraper_status.json")
 
 DECIDED_STATUSES = frozenset({"reject", "save", "apply", "rated", "aspirational"})
 
 WS_TABS = ["Dopasowane", "Wszystkie", "Ocenione", "Zapisane", "Aspiracyjne", "Odrzucone"]
-WS_TOOLS = ["Uruchom pipeline", "Czego brakuje", "Dodaj z linku"]
+WS_TOOLS = ["Uruchom pipeline", "Dodaj z linku"]
 WS_ALL = WS_TABS + WS_TOOLS
 
 WS_TAB_HINT = {
@@ -49,7 +46,6 @@ WS_TAB_HINT = {
     "Aspiracyjne": "za wysoko na teraz, ale w tę stronę celujesz",
     "Odrzucone": "odrzucone - profil uczy się, czego nie chcesz",
     "Uruchom pipeline": "konfiguracja CV i kluczy, uruchomienie pełnego pipeline'u oraz postęp na żywo",
-    "Czego brakuje": "umiejętności, przez które odpadają oferty skądinąd dopasowane",
     "Dodaj z linku": "wklej adres oferty; po lewej podgląd tego, co wpadnie do bazy",
     "Panel sterowania": "konfiguracja CV i kluczy, uruchomienie pełnego pipeline'u oraz postęp na żywo",
 }
@@ -151,6 +147,7 @@ class JobDataService:
         self._lock = threading.RLock()
         self.raw_jobs: List[Job] = []
         self.analyzed_matches: List[JobMatch] = []
+        self.match_results: Dict[str, dict] = {}
         self.job_lookup: Dict[str, Job] = {}
         self.match_lookup: Dict[str, JobMatch] = {}
         self.zdjete: Set[str] = set()
@@ -159,38 +156,15 @@ class JobDataService:
         self._rev = 0
         self._signatures: Dict[str, Optional[Tuple[int, int]]] = {
             "decisions": None,
-            "analyzed": None,
+            "matches": None,
             "jobs": None,
         }
-        # (rev, próg, wynik skill_gaps.collect) — lista „Pokaż N ofert” i panel braków
-        # czytają ten sam indeks, więc liczba na przycisku zgadza się z listą.
-        self._gap_cache: Optional[Tuple[int, int, Tuple[dict, int, int]]] = None
 
     def fresh_since(self) -> Optional[str]:
         """Start ostatniego pobierania (ISO, czas lokalny) albo None, gdy nigdy nie zapisany."""
         data = load_json_safe(LAST_SCRAPE_RUN_PATH, default=None)
         started = data.get("started_at") if isinstance(data, dict) else None
         return started if isinstance(started, str) and started else None
-
-    def _skill_gap_index(self, threshold: int) -> Tuple[dict, int, int]:
-        with self._lock:
-            self.ensure_loaded()
-            cached = self._gap_cache
-            if cached and cached[0] == self._rev and cached[1] == threshold:
-                return cached[2]
-            entries = [
-                {
-                    "job": {"link": m.job.link},
-                    "match_percentage": m.match_percentage,
-                    "missing_skills": m.missing_skills,
-                    "learnable_in_month": m.learnable_in_month,
-                    "match": m,
-                }
-                for m in self.analyzed_matches
-            ]
-            result = skill_gaps.collect(entries, threshold, skill_gaps.dismissed_links(self.user_decisions))
-            self._gap_cache = (self._rev, threshold, result)
-            return result
 
     def touch(self):
         with self._lock:
@@ -204,43 +178,38 @@ class JobDataService:
     def ensure_loaded(self, force=False):
         with self._lock:
             sig_dec = _file_signature(USER_DECISIONS_PATH)
-            sig_ana = _file_signature(ANALYZED_JOBS_PATH)
+            sig_mat = _file_signature(MATCH_RESULTS_PATH)
             sig_jobs = _file_signature(JOBS_DATABASE_PATH)
 
             if (
                 self.data_loaded
                 and not force
                 and sig_dec == self._signatures["decisions"]
-                and sig_ana == self._signatures["analyzed"]
+                and sig_mat == self._signatures["matches"]
                 and sig_jobs == self._signatures["jobs"]
             ):
                 return
 
             needs_dec = force or not self.data_loaded or sig_dec != self._signatures["decisions"]
-            needs_ana = force or not self.data_loaded or sig_ana != self._signatures["analyzed"]
+            needs_mat = force or not self.data_loaded or sig_mat != self._signatures["matches"]
             needs_jobs = force or not self.data_loaded or sig_jobs != self._signatures["jobs"]
 
             # 1. User decisions
             if needs_dec:
                 self.user_decisions = load_json_safe(USER_DECISIONS_PATH, default={}) or {}
                 self._signatures["decisions"] = sig_dec
-            # 2. Analyzed jobs
-            if needs_ana:
-                analyzed_matches = []
-                if ANALYZED_JOBS_PATH.exists():
+            # 2. Match results
+            if needs_mat:
+                match_results = {}
+                if MATCH_RESULTS_PATH.exists():
                     try:
-                        data = load_json_safe(ANALYZED_JOBS_PATH, default=[]) or []
-                        seen = set()
-                        for d in data:
-                            if isinstance(d, dict) and "job" in d and "link" in d["job"]:
-                                link = d["job"]["link"]
-                                if link not in seen:
-                                    analyzed_matches.append(JobMatch.from_dict(d))
-                                    seen.add(link)
+                        data = load_json_safe(MATCH_RESULTS_PATH, default={})
+                        if isinstance(data, dict):
+                            match_results = data
                     except Exception as e:
-                        logger.error(f"Błąd ładowania wyników analizy AI: {e}")
-                self.analyzed_matches = analyzed_matches
-                self._signatures["analyzed"] = sig_ana
+                        logger.error(f"Błąd ładowania match_results.json: {e}")
+                self.match_results = match_results
+                self._signatures["matches"] = sig_mat
             # 3. Raw jobs from JobDatabase
             if needs_jobs:
                 raw_jobs = []
@@ -257,17 +226,40 @@ class JobDataService:
                         logger.error(f"Błąd ładowania bazy surowej: {e}")
                 self.raw_jobs = raw_jobs
                 self._signatures["jobs"] = sig_jobs
-            if needs_ana or needs_jobs:
+            if needs_mat or needs_jobs:
                 lookup: Dict[str, Job] = {}
                 matches: Dict[str, JobMatch] = {}
-                for m in self.analyzed_matches:
-                    lookup[m.job.link] = m.job
-                    matches[m.job.link] = m
+                scored_matches: List[JobMatch] = []
+                seen_links = set()
                 for j in self.raw_jobs:
-                    if j.link not in lookup:
-                        lookup[j.link] = j
+                    c_link = canonical_link(j.link)
+                    lookup[j.link] = j
+                    lookup[c_link] = j
+                    if j.link not in seen_links and c_link not in seen_links:
+                        seen_links.add(j.link)
+                        seen_links.add(c_link)
+                        res = self.match_results.get(c_link) or self.match_results.get(j.link)
+                        pct = None
+                        if isinstance(res, dict):
+                            raw_pct = res.get("percent")
+                            if raw_pct is not None:
+                                try:
+                                    pct = int(raw_pct)
+                                except (ValueError, TypeError):
+                                    pct = None
+                        m = JobMatch(job=j, match_percentage=pct)
+                        matches[j.link] = m
+                        matches[c_link] = m
+                        if pct is not None:
+                            scored_matches.append(m)
+                    else:
+                        m = matches.get(c_link) or matches.get(j.link)
+                        if m:
+                            matches[j.link] = m
+                            matches[c_link] = m
                 self.job_lookup = lookup
                 self.match_lookup = matches
+                self.analyzed_matches = scored_matches
 
                 try:
                     self.zdjete = zdjete_z_portalu(self.raw_jobs)
@@ -276,7 +268,6 @@ class JobDataService:
                     self.zdjete = set()
             self.data_loaded = True
             self._rev += 1
-
     def get_decision(self, link: str) -> Tuple[Optional[str], Optional[int], Optional[str], Optional[str], Optional[str]]:
         """Zwraca (status, rating, stage, decided_at, applied_at)."""
         with self._lock:
@@ -391,15 +382,17 @@ class JobDataService:
             except Exception as e:
                 logger.error(f"Błąd usuwania z JobDatabase: {e}")
 
-            # 2. Analyzed jobs
+            # 2. Match results
             try:
-                if ANALYZED_JOBS_PATH.exists():
-                    data = load_json_safe(ANALYZED_JOBS_PATH, default=[]) or []
-                    new_data = [d for d in data if d.get("job", {}).get("link") != link]
-                    if len(new_data) != len(data):
-                        save_json_atomic(ANALYZED_JOBS_PATH, new_data, backup=True, keep=5)
+                if MATCH_RESULTS_PATH.exists():
+                    data = load_json_safe(MATCH_RESULTS_PATH, default={}) or {}
+                    c_link = canonical_link(link)
+                    if link in data or c_link in data:
+                        data.pop(link, None)
+                        data.pop(c_link, None)
+                        save_json_atomic(MATCH_RESULTS_PATH, data, backup=True, keep=5)
             except Exception as e:
-                logger.error(f"Błąd usuwania z analyzed_jobs_waterfall: {e}")
+                logger.error(f"Błąd usuwania z match_results.json: {e}")
 
             # 3. Decision
             self.restore_decision(link)
@@ -410,6 +403,8 @@ class JobDataService:
             self.job_lookup.pop(c_link, None)
             self.match_lookup.pop(link, None)
             self.match_lookup.pop(c_link, None)
+            self.match_results.pop(link, None)
+            self.match_results.pop(c_link, None)
             self.raw_jobs = [j for j in self.raw_jobs if j.link != link and canonical_link(j.link) != c_link]
             self.analyzed_matches = [
                 m for m in self.analyzed_matches if m.job.link != link and canonical_link(m.job.link) != c_link
@@ -439,25 +434,19 @@ class JobDataService:
     def get_stats(self) -> Dict[str, Any]:
         with self._lock:
             self.ensure_loaded()
-            try:
-                pending = get_pending_scoring_count(
-                    jobs=self.raw_jobs,
-                    analyzed=self.analyzed_matches,
-                    decisions=self.user_decisions,
-                    base_dir=Path(__file__).parent,
-                )
-            except Exception:
-                valid_db_links = {
-                    canonical_link(j.link)
-                    for j in self.raw_jobs
-                    if (getattr(j, "description", None) or "").strip()
-                    and (getattr(j, "description", None) or "").strip() != "Brak opisu"
-                    and len((getattr(j, "description", None) or "").strip()) > 20
-                }
-                analyzed_links = {canonical_link(m.job.link) for m in self.analyzed_matches}
-                decided_links = {canonical_link(l) for l in self.user_decisions}
-                pending = len((valid_db_links - analyzed_links) - decided_links)
-
+            valid_db_links = {
+                canonical_link(j.link)
+                for j in self.raw_jobs
+                if (getattr(j, "description", None) or "").strip()
+                and (getattr(j, "description", None) or "").strip() != "Brak opisu"
+                and len((getattr(j, "description", None) or "").strip()) > 20
+            }
+            scored_links = {
+                c_link for c_link, entry in self.match_results.items()
+                if isinstance(entry, dict)
+            }
+            decided_links = {canonical_link(l) for l in self.user_decisions}
+            pending = len((valid_db_links - scored_links) - decided_links)
             today = datetime.now().date()
             stale_count = 0
             for link, ddata in self.user_decisions.items():
@@ -477,8 +466,6 @@ class JobDataService:
                     if dt and (today - dt.date()).days >= 14:
                         stale_count += 1
 
-            profile_meta = (load_json_safe(PREFERENCE_PROFILE_PATH, default={}) or {}).get("_metadata") or {}
-
             return {
                 "raw_count": len(self.raw_jobs),
                 "analyzed_count": len(self.analyzed_matches),
@@ -486,8 +473,6 @@ class JobDataService:
                 "decisions_count": len(self.user_decisions),
                 "funnel": self.get_funnel_stages(),
                 "applications_stale": stale_count,
-                "profile_generated_at": profile_meta.get("generated_at"),
-                "profile_new_decisions": decisions_since_profile(self.user_decisions, profile_meta),
             }
 
     def get_applications(self) -> Dict[str, Any]:
@@ -558,22 +543,12 @@ class JobDataService:
     def ws_collect(
         self, tab: str, search: str = "", gap: Optional[str] = None, gap_threshold: int = 50
     ) -> List[Tuple[Job, Optional[JobMatch], Optional[str], Optional[int]]]:
-        """`gap`: oferty z tym brakiem (ta sama normalizacja i próg co panel braków), zamiast zakładki."""
         with self._lock:
             self.ensure_loaded()
             matches_by_link = self.match_lookup
             out = []
 
-            if gap:
-                gaps, _, _ = self._skill_gap_index(gap_threshold)
-                entry = gaps.get(skill_gaps.normalize(gap))
-                for e in (entry["links"].values() if entry else ()):
-                    m = e["match"]
-                    status, rating, _, _, _ = self.get_decision(m.job.link)
-                    out.append((m.job, m, status, rating))
-                out.sort(key=lambda t: t[1].match_percentage, reverse=True)
-
-            elif tab == "Dopasowane":
+            if tab == "Dopasowane":
                 for m in self.analyzed_matches:
                     status, rating, _, _, _ = self.get_decision(m.job.link)
                     if status in DECIDED_STATUSES:
@@ -583,7 +558,7 @@ class JobDataService:
                 out.sort(
                     key=lambda t: (
                         t[0].link not in zdjete,
-                        t[1].match_percentage if t[1] else -1,
+                        t[1].match_percentage if t[1] and t[1].match_percentage is not None else -1,
                     ),
                     reverse=True,
                 )
@@ -591,12 +566,12 @@ class JobDataService:
             elif tab == "Wszystkie":
                 for j in self.raw_jobs:
                     status, rating, _, _, _ = self.get_decision(j.link)
-                    out.append((j, matches_by_link.get(j.link), status, rating))
+                    out.append((j, matches_by_link.get(canonical_link(j.link)) or matches_by_link.get(j.link), status, rating))
                 zdjete = self.zdjete
                 out.sort(
                     key=lambda t: (
                         t[0].link not in zdjete,
-                        t[1].match_percentage if t[1] else -1,
+                        t[1].match_percentage if t[1] and t[1].match_percentage is not None else -1,
                         getattr(t[0], "scraped_at", "") or "",
                     ),
                     reverse=True,
@@ -617,9 +592,8 @@ class JobDataService:
                     job = self.job_lookup.get(link) or self.job_lookup.get(canonical_link(link))
                     if job is None:
                         continue
-                    out.append((job, matches_by_link.get(link) or matches_by_link.get(job.link), status, rating))
-                # Ocenione: od najwyższej oceny użytkownika; sort jest stabilny, więc remisy
-                # zostają w kolejności od najnowszej decyzji.
+                    out.append((job, matches_by_link.get(link) or matches_by_link.get(job.link) or matches_by_link.get(canonical_link(job.link)), status, rating))
+
                 if tab == "Ocenione":
                     out.sort(key=lambda t: t[3] if isinstance(t[3], (int, float)) else -1, reverse=True)
 
@@ -632,7 +606,6 @@ class JobDataService:
                 ]
 
             return out
-
     def get_offer_detail(self, link: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             self.ensure_loaded()
@@ -640,10 +613,10 @@ class JobDataService:
             if not job:
                 return None
 
-            match = self.match_lookup.get(job.link) or self.match_lookup.get(link)
+            match = self.match_lookup.get(job.link) or self.match_lookup.get(link) or self.match_lookup.get(canonical_link(job.link))
             status, rating, stage, decided_at, applied_at = self.get_decision(job.link)
 
-            pct = int(match.match_percentage) if match else None
+            pct = int(match.match_percentage) if match and match.match_percentage is not None else None
 
             stage_norm = WS_STAGE_LEGACY.get(stage, stage)
             if stage_norm not in WS_STAGE_NAMES:
@@ -657,10 +630,6 @@ class JobDataService:
             if status == "rated" and rating:
                 dot_label = f"ocena {rating}/10"
 
-            industry = getattr(match, "industry", None) if match else None
-            is_entry_level = bool(getattr(match, "is_entry_level", False)) if match else False
-            learnable_in_month = bool(getattr(match, "learnable_in_month", False)) if match else False
-            missing_skills = list(getattr(match, "missing_skills", None) or []) if match else []
             return {
                 "link": job.link,
                 "title": job.title or "Bez tytułu",
@@ -671,11 +640,18 @@ class JobDataService:
                 "is_gone": job.link in self.zdjete,
                 "work_mode": work_mode["label"],
                 "match_percentage": pct,
-                "reason": getattr(match, "reason", None) if match else None,
-                "industry": industry,
-                "is_entry_level": is_entry_level,
-                "learnable_in_month": learnable_in_month,
-                "missing_skills": missing_skills,
+                "fields": {
+                    "seniority": getattr(job, "seniority", None),
+                    "work_modes": getattr(job, "work_modes", None),
+                    "contract_types": getattr(job, "contract_types", None),
+                    "schedules": getattr(job, "schedules", None),
+                    "salary": getattr(job, "salary", None),
+                    "languages": getattr(job, "languages", None),
+                    "years_required": getattr(job, "years_required", None),
+                    "skills_required": getattr(job, "skills_required", None),
+                    "skills_nice": getattr(job, "skills_nice", None),
+                    "category": getattr(job, "category", None),
+                },
                 "description_blocks": blocks,
                 "raw_description": job.description or "",
                 "status": status,
@@ -686,7 +662,6 @@ class JobDataService:
                 "dot_color": dot_color,
                 "dot_label": dot_label,
                 "next_step": self.get_next_step(job.link) or self.get_next_step(link),
-                "highlights": list(getattr(match, "highlights", None) or []) if match else [],
             }
 
     def get_activity_rows(self, limit: int = 6) -> List[Dict[str, Any]]:
@@ -716,36 +691,19 @@ class JobDataService:
                     "bad": not ok,
                 })
 
-        # 2. AI evaluation
-        if ANALYZED_JOBS_PATH.exists():
-            mtime = datetime.fromtimestamp(ANALYZED_JOBS_PATH.stat().st_mtime)
+        # 2. Matching evaluation
+        if MATCH_RESULTS_PATH.exists():
+            mtime = datetime.fromtimestamp(MATCH_RESULTS_PATH.stat().st_mtime)
             rows.append({
                 "timestamp": mtime.isoformat(),
                 "time_str": mtime.strftime("%Y-%m-%d %H:%M:%S"),
                 "dt": mtime,
-                "op": "ocena AI",
-                "what": "waterfall_analysis.py",
+                "op": "dopasowanie",
+                "what": "matching/run.py",
                 "source_color": None,
                 "detail": f"{len(self.analyzed_matches)} ocen",
                 "bad": False,
             })
-
-        # 3. Profile rebuild
-        if PREFERENCE_PROFILE_PATH.exists():
-            mtime = datetime.fromtimestamp(PREFERENCE_PROFILE_PATH.stat().st_mtime)
-            profile = load_json_safe(PREFERENCE_PROFILE_PATH, default={}) or {}
-            built = profile.get("_metadata", {}).get("total_decisions_analyzed", 0) or 0
-            rows.append({
-                "timestamp": mtime.isoformat(),
-                "time_str": mtime.strftime("%Y-%m-%d %H:%M:%S"),
-                "dt": mtime,
-                "op": "profil",
-                "what": "generate_preference_profile.py",
-                "source_color": None,
-                "detail": f"z {built} decyzji",
-                "bad": False,
-            })
-
         rows.sort(key=lambda r: r["dt"], reverse=True)
         for r in rows:
             r.pop("dt", None)
@@ -779,22 +737,6 @@ class JobDataService:
                     "stamp": decided_at or applied_at,
                 })
             return out
-
-    def get_skill_gaps(self, threshold: int = 50) -> Dict[str, Any]:
-        with self._lock:
-            gaps, considered, skipped = self._skill_gap_index(threshold)
-            rows = skill_gaps.rank(gaps, 14)
-            top = rows[0]["offers"] if rows else 1
-            for r in rows:
-                r["width_pct"] = max(4, round(100 * r["offers"] / top))
-
-            return {
-                "threshold": threshold,
-                "rows": rows,
-                "considered": considered,
-                "skipped": skipped,
-                "total_gaps": len(gaps),
-            }
 
 
 # Singleton instancja
@@ -996,6 +938,7 @@ def save_llm_settings(provider: str, key: str = "", models: Optional[str] = None
 
 
 _PORTAL_FIELDS = [
+    ("TYPESAFE_API_KEY", "TypeSafe API Key (Jev)", True),
     ("ADZUNA_APP_ID", "Adzuna App ID", False),
     ("ADZUNA_APP_KEY", "Adzuna App Key", True),
     ("JOOBLE_API_KEY", "Jooble API Key", True),

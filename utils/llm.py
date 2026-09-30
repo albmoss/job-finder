@@ -1,10 +1,10 @@
 """
-Dostawcy modeli oceniających oferty: Google Gemini, API zgodne z OpenAI, Anthropic.
+Dostawcy modelu, który czyta CV (utils/cv_profile.py): Google Gemini, API zgodne
+z OpenAI, Anthropic. Oferty ocenia Jev (matching/jev.py), nie ten moduł.
 
 Każdy dostawca dostaje ten sam prompt i ten sam schemat odpowiedzi - różni ich
 tylko transport. Błędy tłumaczymy na `LLMError` z rodzajem, bo od rodzaju zależy
-reakcja kaskady: limit albo zły klucz -> następny klucz, urwany JSON -> podział
-paczki (patrz waterfall_analysis.score_batch).
+reakcja wołającego: limit albo zły klucz -> następny klucz albo model.
 
 Wybór dostawcy i modeli siedzi w .env (LLM_PROVIDER, <DOSTAWCA>_MODELS) - patrz
 .env.example. Ten moduł nie importuje config.py, żeby config mógł importować jego.
@@ -23,9 +23,7 @@ from pydantic import BaseModel
 # żadnych realnych kluczy - nawet wygasłych, nawet jako czarna lista.)
 PLACEHOLDERS = {"YOUR_KEY_HERE", "CHANGEME", "TODO"}
 
-# Odpowiedź modelu dla paczki 75 ofert potrafi mieć kilkanaście tysięcy tokenów;
-# lokalny model na CPU generuje ją minutami.
-_TIMEOUT = (30, 900)
+_TIMEOUT = (30, 300)
 
 
 @dataclass(frozen=True)
@@ -34,10 +32,9 @@ class Provider:
     label: str
     key_envs: tuple[str, ...]      # pierwszy to klucz główny; reszta to zapas do rotacji
     models_env: str
+    # Kolejność prób przy czytaniu CV: jedno wywołanie na zmianę CV, więc
+    # na czele stoi mocniejszy model, a lżejsze są zapasem na limit.
     default_models: tuple[str, ...]
-    # Profil preferencji to jedno wywołanie robiące otwartą syntezę - tu mocniejszy
-    # model się opłaca (patrz generate_preference_profile.py).
-    default_profile_models: tuple[str, ...]
     base_url_env: str = ""
     default_base_url: str = ""
     key_hint: str = ""
@@ -53,21 +50,8 @@ PROVIDERS: dict[str, Provider] = {
         label="Google Gemini",
         key_envs=_key_envs("GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY"),
         models_env="GEMINI_MODELS",
-        # Kolejność ustalona empirycznie (benchmark_models.py na 68 ofertach ocenionych
-        # ręcznie, 2026-09-29). Korelacja Spearmana z ocenami użytkownika / MAE / czas:
-        #   gemini-3.1-flash-lite   +0.814 / +0.809   MAE 1.20 / 1.08   20-22s  <- 2 przebiegi
-        #   gemini-3.5-flash-lite   +0.798 / +0.806   MAE 1.32 / 1.26   26-28s  <- 2 przebiegi
-        #   gemini-3.7-flash        +0.863            MAE 1.28          86s     <- 1 przebieg
-        # Flash (3.5-3.8) odpowiadał wtedy prawie wyłącznie 503 „high demand” - 1 udana
-        # próba na 24 - więc na czele kaskady tylko by opóźniał. Wcześniejszy pomiar
-        # (53 oferty): 3.6-flash +0.802 przy 40s, 2.5-flash +0.664 przy 100s.
-        # To zadanie to klasyfikacja wg jawnej rubryki (profil preferencji), a nie
-        # otwarte rozumowanie - większy model niewiele tu dokłada, a na darmowym planie
-        # kosztuje czas i limity. Zanim zmienisz tę listę, uruchom benchmark_models.py.
-        default_models=("gemini-3.1-flash-lite", "gemini-3.5-flash-lite",
-                        "gemini-3.7-flash", "gemini-2.5-flash"),
-        default_profile_models=("gemini-3.6-flash", "gemini-3.5-flash",
-                                "gemini-3.5-flash-lite", "gemini-2.5-flash"),
+        default_models=("gemini-3.6-flash", "gemini-3.5-flash",
+                        "gemini-3.5-flash-lite", "gemini-2.5-flash"),
         key_hint="AIza…",
     ),
     # Każdy serwer z endpointem /chat/completions: OpenAI, OpenRouter, Groq,
@@ -77,8 +61,7 @@ PROVIDERS: dict[str, Provider] = {
         label="OpenAI / zgodne API",
         key_envs=_key_envs("OPENAI_API_KEY", "OPENAI_API_KEY"),
         models_env="OPENAI_MODELS",
-        default_models=("gpt-6-luna",),
-        default_profile_models=("gpt-5.6-terra", "gpt-6-luna"),
+        default_models=("gpt-5.6-terra", "gpt-6-luna"),
         base_url_env="OPENAI_BASE_URL",
         default_base_url="https://api.openai.com/v1",
         key_hint="sk-…",
@@ -88,8 +71,7 @@ PROVIDERS: dict[str, Provider] = {
         label="Anthropic Claude",
         key_envs=_key_envs("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
         models_env="ANTHROPIC_MODELS",
-        default_models=("claude-haiku-4-5", "claude-sonnet-5"),
-        default_profile_models=("claude-sonnet-5", "claude-haiku-4-5"),
+        default_models=("claude-sonnet-5", "claude-haiku-4-5"),
         base_url_env="ANTHROPIC_BASE_URL",
         default_base_url="https://api.anthropic.com",
         key_hint="sk-ant-…",
@@ -102,7 +84,6 @@ DEFAULT_PROVIDER = "gemini"
 class LLMSettings:
     provider: Provider
     models: list[str]
-    profile_models: list[str]
     api_keys: list[str]
     base_url: str
     models_overridden: bool
@@ -124,15 +105,15 @@ def _clean(value: Any) -> str:
 
 
 def settings_from_env(env: Mapping[str, str]) -> LLMSettings:
-    """Rozstrzyga dostawcę, kaskadę modeli i pulę kluczy z mapy zmiennych środowiskowych."""
+    """Rozstrzyga dostawcę, kolejność modeli i pulę kluczy z mapy zmiennych środowiskowych."""
     requested = (env.get("LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
     known = requested in PROVIDERS
     provider = PROVIDERS[requested if known else DEFAULT_PROVIDER]
 
     # Pula do rotacji: klucz główny JEST jej częścią. Gdy była budowana bez niego,
-    # świeży klon z samym kluczem głównym startował z pustą pulą i analiza kręciła
-    # się w kółko, zamiast cokolwiek ocenić. Nieznany dostawca = pusta pula, żeby
-    # literówka w LLM_PROVIDER nie puściła płatnych zapytań do innego dostawcy.
+    # świeży klon z samym kluczem głównym startował z pustą pulą. Nieznany dostawca
+    # = pusta pula, żeby literówka w LLM_PROVIDER nie puściła płatnych zapytań
+    # do innego dostawcy.
     keys: list[str] = []
     for name in provider.key_envs if known else ():
         key = _clean(env.get(name))
@@ -141,8 +122,6 @@ def settings_from_env(env: Mapping[str, str]) -> LLMSettings:
 
     custom = _split_models(env.get(provider.models_env, ""))
     models = custom or list(provider.default_models)
-    # Własne modele (np. lokalny serwer) zwykle nie znają domyślnych nazw profilu.
-    profile_models = custom or list(provider.default_profile_models)
 
     base_url = ""
     if provider.base_url_env:
@@ -154,7 +133,7 @@ def settings_from_env(env: Mapping[str, str]) -> LLMSettings:
     elif not keys:
         error = (f"Brak klucza API dla {provider.label} - ustaw {provider.key_envs[0]} "
                  f"w .env (patrz .env.example).")
-    return LLMSettings(provider, models, profile_models, keys, base_url, bool(custom), error)
+    return LLMSettings(provider, models, keys, base_url, bool(custom), error)
 
 
 def mask_key(key: str) -> str:
@@ -234,7 +213,7 @@ def _parse(text: str) -> Any:
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
-        # Urwany albo zepsuty JSON: kaskada dzieli wtedy paczkę na mniejsze.
+        # Urwany albo zepsuty JSON - wołający próbuje wtedy kolejnego modelu.
         raise LLMError("truncated", f"JSON Validate Err: {e}") from e
 
 
@@ -271,7 +250,7 @@ _http: requests.Session | None = None
 
 
 def _session() -> requests.Session:
-    # Jedna sesja = jedno połączenie HTTP wielokrotnego użytku między paczkami.
+    # Jedna sesja = jedno połączenie HTTP wielokrotnego użytku między zapytaniami.
     global _http
     if _http is None:
         _http = requests.Session()
@@ -323,7 +302,7 @@ def _ask_gemini(model, api_key, prompt, item_model, max_tokens, temperature) -> 
 # --- OpenAI i zgodne ---------------------------------------------------------
 
 # Serwery, które nie znają `json_schema` (np. DeepSeek), dostają tryb json_object.
-# Zapamiętujemy to, żeby każda paczka nie płaciła za odrzucone zapytanie.
+# Zapamiętujemy to, żeby kolejne zapytania nie płaciły za odrzucone zapytanie.
 _json_object_only: set[tuple[str, str]] = set()
 
 
@@ -375,7 +354,7 @@ def _ask_anthropic(base_url, model, api_key, prompt, schema, max_tokens) -> LLMR
     headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
     body: dict[str, Any] = {
         "model": model,
-        # Haiku 4.5 ma 64k tokenów wyjścia; więcej niż 32k paczka nie potrzebuje.
+        # Haiku 4.5 ma 64k tokenów wyjścia; więcej niż 32k odpowiedź nie potrzebuje.
         "max_tokens": min(max_tokens, 32000),
         "messages": [{"role": "user", "content": prompt}],
     }

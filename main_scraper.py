@@ -27,6 +27,7 @@ from scrapers import (
     PracaPlScraper,       # HTTP + ld+json (bez przeglądarki)
     AplikujScraper,       # HTTP + ld+json (bez przeglądarki)
     GoWorkScraper,        # HTTP + ld+json (bez przeglądarki)
+    ATSFeedsScraper,      # publiczne feedy ATS firm (Greenhouse, Lever, Ashby, SR, etc.)
     IndeedScraper,        # Playwright - Cloudflare
 )
 
@@ -58,6 +59,7 @@ SOURCE_CONFIG_KEYS = {
     "praca.pl": "praca_pl",
     "aplikuj.pl": "aplikuj",
     "GoWork.pl": "gowork",
+    "ATS Feeds": "ats_feeds",
 }
 
 
@@ -69,9 +71,8 @@ def refresh_sources(source_names):
     istniejącego rekordu. Po poprawce scrapera (np. lepsze wydobywanie opisu) samo
     ponowne uruchomienie nic by nie dało - stare, ubogie rekordy zostałyby na stałe.
 
-    Czyści OBA pliki: jobs_database.json i analyzed_jobs_waterfall.json. Pominięcie
-    tego drugiego zostawiało "oferty widmo" - usunięte z bazy, ale wciąż widoczne
-    w aplikacji, bo UI czyta wyniki analizy, nie bazę surową.
+    Wyniki dopasowania (match_results.json) nie wymagają czyszczenia: interfejs
+    łączy je z bazą ofert, a matching/run.py usuwa wyniki ofert spoza bazy.
 
     Oferty z decyzją użytkownika są zachowywane - nie kasujemy tego, co oceniłeś.
     """
@@ -102,24 +103,8 @@ def refresh_sources(source_names):
     if removed:
         save_json_atomic(str(JOBS_DATABASE_PATH), kept_jobs, backup=True)
 
-    # 2. Wyniki analizy - inaczej UI dalej pokazuje usunięte oferty
-    analyzed = load_json_safe("analyzed_jobs_waterfall.json", default=[])
-    kept_analyzed, removed_analyzed = [], 0
-    for entry in analyzed:
-        job = entry.get("job") or {}
-        if matches(job.get("source")) and canonical_link(job.get("link", "")) not in decided:
-            removed_analyzed += 1
-            continue
-        kept_analyzed.append(entry)
-
-    if removed_analyzed:
-        save_json_atomic("analyzed_jobs_waterfall.json", kept_analyzed, backup=True)
-
-    if removed or removed_analyzed:
-        logger.info(
-            f"Refresh: removed {removed} offers and {removed_analyzed} "
-            f"analysis results ({protected} carrying a decision were kept)"
-        )
+    if removed:
+        logger.info(f"Refresh: removed {removed} offers ({protected} carrying a decision were kept)")
     return removed
 
 
@@ -151,6 +136,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
         PracaPlScraper(scraper_config),           # 📄 ld+json - portal ogólny
         AplikujScraper(scraper_config),           # 📄 ld+json - dużo entry-level
         GoWorkScraper(scraper_config),            # 📄 ld+json - dużo entry-level
+        ATSFeedsScraper(scraper_config),          # 🏢 publiczne feedy ATS firm
     ]
 
     # Scrapery wymagające kluczy API - dołączane tylko gdy klucz jest ustawiony,

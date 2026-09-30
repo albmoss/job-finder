@@ -1,16 +1,16 @@
 """
 Purge Stale Offers
 ==================
-Usuwa stare, nieocenione oferty z jobs_database.json i analyzed_jobs_waterfall.json.
+Usuwa stare, nieocenione oferty z jobs_database.json.
 
 Zachowuje:
   - WSZYSTKIE oferty z decyzją użytkownika (rated/saved/rejected/aspirational)
   - oferty pobrane w ciągu ostatnich 14 dni
 
-Dodatkowo: oferty z RĘCZNĄ OCENĄ trafiają do rated_archive.json razem z wynikiem
-analizy AI. Powód: ocena przeżywa w user_decisions.json, ale sama oferta znikała
-z bazy - a bez tytułu, opisu i wyniku AI ta ocena jest bezużyteczna do ewaluacji
-rankingu i do budowy profilu preferencji. To jedyny zbiór treningowy, jaki mamy.
+Dodatkowo: oferty z RĘCZNĄ OCENĄ trafiają do rated_archive.json razem z procentem
+dopasowania. Powód: ocena przeżywa w user_decisions.json, ale sama oferta znikała
+z bazy - a bez tytułu, opisu i wyniku ta ocena jest bezużyteczna do ewaluacji
+rankingu. To jedyny zbiór walidacyjny, jaki mamy.
 """
 
 import os
@@ -25,7 +25,7 @@ from utils.safe_io import load_json_safe, save_json_atomic
 from utils.console import force_utf8
 
 JOBS_DB = "jobs_database.json"
-ANALYZED_DB = "analyzed_jobs_waterfall.json"
+MATCH_RESULTS = "match_results.json"
 DECISIONS_FILE = "user_decisions.json"
 RATED_ARCHIVE = "rated_archive.json"
 
@@ -39,10 +39,11 @@ def save_json(filepath, data):
     save_json_atomic(filepath, data, backup=True)
 
 
-def archive_rated(jobs, analyzed, decisions):
+def archive_rated(jobs, results, decisions):
     """
-    Dopisz do rated_archive.json każdą ofertę z ręczną oceną, wraz z jej analizą AI.
-    Archiwum rośnie i nigdy nie jest czyszczone - to nasz zbiór walidacyjny.
+    Dopisz do rated_archive.json każdą ofertę z ręczną oceną, wraz z procentem
+    dopasowania z match_results.json. Archiwum rośnie i nigdy nie jest
+    czyszczone - to nasz zbiór walidacyjny.
     """
     # Mapuj link kanoniczny -> dane decyzji (obsługa formatu słownikowego oraz niekanonicznych kluczy)
     rated_by_canon = {}
@@ -54,22 +55,16 @@ def archive_rated(jobs, analyzed, decisions):
 
     archive = load_json_safe(RATED_ARCHIVE, default=[])
     existing = {canonical_link((a.get("job") or {}).get("link", "")) for a in archive}
-
-    analysis_by_link = {
-        canonical_link((a.get("job") or {}).get("link", "")): a for a in analyzed
-    }
     jobs_by_link = {canonical_link(j.get("link", "")): j for j in jobs}
 
     added = 0
     for link, decision_val in rated_by_canon.items():
         if link in existing:
             continue
-        entry = analysis_by_link.get(link)
-        if entry is None:
-            job = jobs_by_link.get(link)
-            if job is None:
-                continue  # ani analizy, ani oferty - nie ma czego archiwizować
-            entry = {"job": job, "match_percentage": None, "reason": "brak analizy AI"}
+        job = jobs_by_link.get(link)
+        if job is None:
+            continue  # oferty już nie ma w bazie - nie ma czego archiwizować
+        entry = {"job": job, "match_percentage": (results.get(link) or {}).get("percent")}
         record = dict(entry)
         record["user_rating"] = decision_val.get("rating") if isinstance(decision_val, dict) else None
         record["archived_at"] = datetime.now().isoformat()
@@ -101,8 +96,8 @@ def main():
     print(f"{len(decided_links)} jobs have user decisions (protected)")
 
     # Zarchiwizuj oceniane oferty ZANIM cokolwiek usuniemy
-    analyzed = load_json(ANALYZED_DB) if os.path.exists(ANALYZED_DB) else []
-    archived = archive_rated(jobs, analyzed, decisions)
+    results = load_json_safe(MATCH_RESULTS, default={}) if os.path.exists(MATCH_RESULTS) else {}
+    archived = archive_rated(jobs, results if isinstance(results, dict) else {}, decisions)
     if archived:
         print(f"Archived {archived} rated offers -> {RATED_ARCHIVE}")
 
@@ -145,21 +140,8 @@ def main():
     save_json(JOBS_DB, kept_jobs)
     print(f"Saved cleaned {JOBS_DB}")
 
-    # To samo dla analyzed_jobs_waterfall.json - wczytanego już wyżej, na potrzeby
-    # archiwizacji (plik ma ~35 MB, drugi odczyt niczego by nie wniósł)
-    if analyzed:
-        kept_links = {canonical_link(j.get("link", "")) for j in kept_jobs}
-        original_analyzed = len(analyzed)
-
-        kept_analyzed = [
-            item for item in analyzed
-            if canonical_link(item.get("job", {}).get("link", "")) in kept_links
-            or canonical_link(item.get("job", {}).get("link", "")) in decided_links
-        ]
-        removed_analyzed = original_analyzed - len(kept_analyzed)
-
-        save_json(ANALYZED_DB, kept_analyzed)
-        print(f"Cleaned {ANALYZED_DB}: {original_analyzed} → {len(kept_analyzed)} (removed {removed_analyzed})")
+    # match_results.json nie trzeba tu czyścić: matching/run.py usuwa wyniki ofert,
+    # których nie ma już w bazie.
 
     print("\nPurge complete!")
 

@@ -32,8 +32,8 @@ export const STAGE_INFO: Record<string, { short: string; about: string }> = {
     about: 'Przycina opisy przed płatnym ocenianiem: mniej tokenów, ten sam sens.',
   },
   phase3: {
-    short: 'Ocena AI',
-    about: 'Kaskada modeli ocenia dopasowanie ofert do CV paczkami. Przy limitach rotuje klucze i schodzi na kolejny model.',
+    short: 'Dopasowanie',
+    about: 'Prefiltr regułowy odrzuca oferty niespełniające kryteriów, a Jev punktuje dopasowanie do CV.',
   },
   phase4: {
     short: 'Ewaluacja',
@@ -46,7 +46,7 @@ export const STAGE_SHORT_NAMES = [
   'Normalizacja',
   'Deduplikacja',
   'Czyszczenie',
-  'Ocena AI',
+  'Dopasowanie',
   'Ewaluacja',
 ];
 
@@ -119,43 +119,19 @@ export function stageDuration(stage: PipelineStage, nowSec: number): number | nu
 }
 
 /**
- * Sekundy do końca oceny z realnego tempa bieżącego przebiegu: oceny / (koniec ostatniej
- * paczki − start pierwszej), odliczane od końca ostatniej paczki. Bez skończonej paczki
- * albo gdy paczka trwa dłużej niż średnia — null (pasek pokazuje wtedy same liczby).
+ * Sekundy do końca oceny z realnego tempa bieżącego przebiegu: ocenione / (ostatni
+ * meldunek postępu − pierwszy), odliczane od ostatniego meldunku. Bez meldunku — null
+ * (pasek pokazuje wtedy same liczby).
  */
 export function scoringEtaSeconds(scoring: ScoringTelemetry | null | undefined, nowSec: number): number | null {
-  if (!scoring?.total || !scoring.first_batch_at || !scoring.last_done_at || scoring.processed <= 0) return null;
+  const total = scoring?.to_score ?? scoring?.total;
+  const processed = scoring?.scored ?? scoring?.processed;
+  if (!total || !scoring?.first_batch_at || !scoring.last_done_at || !processed || processed <= 0) return null;
   const elapsed = scoring.last_done_at - scoring.first_batch_at;
-  const left = scoring.total - scoring.processed;
+  const left = total - processed;
   if (elapsed <= 0 || left <= 0) return null;
-  const eta = (left * elapsed) / scoring.processed - (nowSec - scoring.last_done_at);
+  const eta = (left * elapsed) / processed - (nowSec - scoring.last_done_at);
   return eta > 0 ? eta : null;
-}
-
-export interface ScoringPacks {
-  /** Ofert w paczce (BATCH_SIZE oceny). */
-  size: number;
-  total: number;
-  done: number;
-}
-
-/**
- * Paczki oceny AI: ile jest w przebiegu i ile gotowych. Rozmiar
- * paczki podaje telemetria (`batch_size` z „Target Batch Size”); przebieg uruchomiony przez
- * serwer sprzed tego pola go nie ma — wtedy rozmiar wynika z kolejki: „Batch k (…, R remaining)”
- * liczy R przed zdjęciem paczki, więc k − 1 paczek zabrało total − R ofert.
- */
-export function scoringPacks(scoring: ScoringTelemetry | null | undefined): ScoringPacks | null {
-  if (!scoring?.total) return null;
-  let size = scoring.batch_size ?? 0;
-  if (!size && scoring.batch > 1 && scoring.remaining != null) {
-    size = Math.round((scoring.total - scoring.remaining) / (scoring.batch - 1));
-  }
-  if (size <= 0) return null;
-  const total = Math.ceil(scoring.total / size);
-  // Ostatnia paczka bywa niepełna (5574 = 74 × 75 + 24) — po ocenie wszystkiego liczy się jako gotowa.
-  const done = scoring.processed >= scoring.total ? total : Math.floor(scoring.processed / size);
-  return { size, total, done };
 }
 
 export interface GridFit {
@@ -248,11 +224,11 @@ export function calculateOverallPipelineProgress(p: PipelineState | null): { pro
     const done = p.telemetry.sources.filter((s) => s.state === 'done' || s.state === 'skipped').length;
     withinStage = total > 0 ? done / total : 0.5;
   }
-  // Etap oceny AI (phase3 / indeks 5)
-  else if (activeIdx === 5 && p.telemetry?.scoring?.total) {
-    const total = p.telemetry.scoring.total;
-    const proc = p.telemetry.scoring.processed;
-    withinStage = total > 0 ? Math.min(1, proc / total) : 0.5;
+  // Etap dopasowania (phase3 / indeks 5)
+  else if (activeIdx === 5) {
+    const total = p.telemetry?.scoring?.to_score ?? p.telemetry?.scoring?.total;
+    const proc = p.telemetry?.scoring?.scored ?? p.telemetry?.scoring?.processed ?? 0;
+    withinStage = total && total > 0 ? Math.min(1, proc / total) : 0.5;
   } else {
     const resolved = stages.filter((s) => s.status === 'done' || s.status === 'skipped').length;
     withinStage = resolved > activeIdx ? 1 : 0.3;

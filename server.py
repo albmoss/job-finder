@@ -136,15 +136,8 @@ async def api_offers(request: Request) -> JSONResponse:
         page_size = max(1, min(100, int(request.query_params.get("page_size", PAGE_SIZE))))
     except ValueError:
         page_size = PAGE_SIZE
-    # Oferty z danym brakiem („Pokaż N ofert” w panelu braków): zastępuje zakładkę.
-    gap = request.query_params.get("gap", "").strip() or None
-    try:
-        gap_threshold = max(30, min(80, int(request.query_params.get("gap_threshold", 50))))
-    except ValueError:
-        gap_threshold = 50
-
     job_data_service.ensure_loaded()
-    items = job_data_service.ws_collect(tab, search, gap=gap, gap_threshold=gap_threshold)
+    items = job_data_service.ws_collect(tab, search)
     total = len(items)
     total_pages = max(1, math.ceil(total / page_size)) if total else 1
     page = min(page, total_pages)
@@ -154,9 +147,9 @@ async def api_offers(request: Request) -> JSONResponse:
 
     # Wartość sortowania na początku każdej strony — UI podpisuje nią skok o wiele stron.
     # Tylko tam, gdzie lista jest ułożona po tej wartości; reszta zakładek idzie od najnowszych.
-    if gap or tab in ("Dopasowane", "Wszystkie"):
+    if tab in ("Dopasowane", "Wszystkie"):
         page_marks = [
-            int(m.match_percentage) if m else None
+            int(m.match_percentage) if m and m.match_percentage is not None else None
             for _, m, _, _ in items[::page_size]
         ]
     elif tab == "Ocenione":
@@ -173,7 +166,7 @@ async def api_offers(request: Request) -> JSONResponse:
 
     rows = []
     for idx, (job, match, status, rating) in enumerate(slice_items, start=start):
-        pct = int(match.match_percentage) if match else None
+        pct = int(match.match_percentage) if match and match.match_percentage is not None else None
         dot_color, dot_label = ui_theme.STATES.get(status, (None, None)) if status in ui_theme.STATES else (None, None)
         if status in ("apply", "save", "aspirational", "reject", "rated"):
             from app_services import DECISION_STYLE
@@ -209,8 +202,8 @@ async def api_offers(request: Request) -> JSONResponse:
         "page_marks": page_marks,
         "fresh_count": fresh_count,
         "fresh_since": fresh_since,
-        "gap": gap,
-        "gap_threshold": gap_threshold if gap else None,
+        "gap": None,
+        "gap_threshold": None,
     })
 
 
@@ -339,17 +332,6 @@ async def api_applications(request: Request) -> JSONResponse:
     return JSONResponse(job_data_service.get_applications())
 
 
-async def api_gaps(request: Request) -> JSONResponse:
-    """Zwraca analizę brakujących umiejętności dla danego progu dopasowania."""
-    try:
-        threshold = int(request.query_params.get("threshold", 50))
-    except ValueError:
-        threshold = 50
-    threshold = max(30, min(80, threshold))
-    gaps_data = job_data_service.get_skill_gaps(threshold)
-    return JSONResponse(gaps_data)
-
-
 async def api_tool_fetch_link(request: Request) -> JSONResponse:
     """Pobiera dane oferty ze wskazanego adresu URL za pomocą modułu link_fetcher."""
     try:
@@ -471,9 +453,8 @@ async def api_pipeline_run_step(request: Request) -> JSONResponse:
 
     cmd_map = {
         "scrapers": [sys.executable, "-u", "main_scraper.py"],
-        "profile": [sys.executable, "-u", "generate_preference_profile.py"],
-        "analysis": [sys.executable, "-u", "waterfall_analysis.py"],
-        "rescore_all": [sys.executable, "-u", "waterfall_analysis.py", "--rescore-all"],
+        "matching": [sys.executable, "-u", "-m", "matching.run"],
+        "rescore_all": [sys.executable, "-u", "-m", "matching.run", "--rescore-all"],
     }
     if step not in cmd_map:
         return JSONResponse({"error": f"Nieznany krok: {step}"}, status_code=400)
@@ -605,6 +586,8 @@ async def api_env_keys_llm(request: Request) -> JSONResponse:
 # --- Routing i obsługa statycznego frontendu ---
 
 async def spa_index_fallback(request: Request) -> Response:
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"error": "Endpoint nie istnieje"}, status_code=404)
     index_file = FRONTEND_DIST_DIR / "index.html"
     if index_file.exists():
         return FileResponse(index_file)
@@ -629,7 +612,6 @@ routes = [
     # Activity & Gaps
     Route("/api/activity", api_activity, methods=["GET"]),
     Route("/api/applications", api_applications, methods=["GET"]),
-    Route("/api/gaps", api_gaps, methods=["GET"]),
     # Tools
     Route("/api/tools/fetch-link", api_tool_fetch_link, methods=["POST"]),
     Route("/api/tools/save-manual-job", api_tool_save_manual_job, methods=["POST"]),

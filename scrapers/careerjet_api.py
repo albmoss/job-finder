@@ -15,21 +15,25 @@ from base64 import b64encode
 
 import requests
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
+from utils.offer_fields import (
+    make_salary,
+    norm_seniority,
+    norm_work_modes,
+    salary_from_text,
+)
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://search.api.careerjet.net/v4/query"
-
-
 class CareerjetAPIScraper:
     """Scraper na API wydawcy Careerjet."""
 
     def __init__(self, config: dict):
         self.config = config
         self.api_key = config.get("careerjet_api_key", "") or os.getenv("CAREERJET_API_KEY", "")
-        self.location = config.get("location", "Warszawa")
+        self.location = scope_city(default=config.get("location", "Warszawa"))
         self.session = requests.Session()
         
         # Basic Auth: klucz jako login, puste hasło
@@ -43,6 +47,21 @@ class CareerjetAPIScraper:
             "Accept": "application/json",
             "User-Agent": "JobScratcher/1.0"
         })
+
+    @staticmethod
+    def _keyword_sets_from_levels(levels: list[str]) -> list[str]:
+        mapping = {
+            "intern": ["praktykant stażysta", "intern trainee"],
+            "junior": ["junior", "asystent bez doświadczenia"],
+            "mid": ["specjalista", "mid developer"],
+            "senior": ["senior", "starszy specjalista"],
+            "lead": ["lead", "lider"],
+            "manager": ["kierownik", "manager"],
+        }
+        kws = []
+        for lvl in levels:
+            kws.extend(mapping.get(lvl, []))
+        return list(dict.fromkeys(kws)) if kws else ["junior", "praktykant stażysta", "asystent bez doświadczenia"]
 
     def get_source_name(self) -> str:
         return "Careerjet"
@@ -80,13 +99,24 @@ class CareerjetAPIScraper:
         title = item.get("title", "Unknown")
         company = item.get("company", "Unknown")
         link = item.get("url", "")
-        description = item.get("description", item.get("snippet", ""))
-        location = item.get("locations", item.get("location", ""))
+        description = (item.get("description") or item.get("snippet") or "").strip()
+        location = item.get("locations") or item.get("location") or None
         posted_date = item.get("date", "")
-        
-        salary = item.get("salary", "")
-        if salary:
-            description += f"\nWynagrodzenie: {salary}"
+
+        salary_obj = None
+        min_sal = item.get("salary_min")
+        max_sal = item.get("salary_max")
+        cur = item.get("salary_currency_code") or "PLN"
+        stype = item.get("salary_type")
+        period = {"Y": "year", "M": "month", "W": "week", "D": "day", "H": "hour"}.get(stype)
+
+        if min_sal or max_sal:
+            salary_obj = make_salary(min_value=min_sal, max_value=max_sal, currency=cur, period=period)
+        elif item.get("salary"):
+            salary_obj = salary_from_text(item["salary"])
+
+        work_modes = norm_work_modes(location) or norm_work_modes(title)
+        seniority = norm_seniority(title)
 
         return Job(
             title=title,
@@ -94,8 +124,11 @@ class CareerjetAPIScraper:
             link=link,
             description=description,
             source=self.get_source_name(),
-            location=location if location else None,
+            location=location,
             posted_date=posted_date,
+            salary=salary_obj,
+            work_modes=work_modes,
+            seniority=seniority,
             scraped_at=datetime.now().isoformat()
         )
 
@@ -109,11 +142,7 @@ class CareerjetAPIScraper:
         all_jobs = []
         seen_links = set()
         
-        keyword_sets = [
-            "junior",
-            "praktykant stażysta",
-            "asystent bez doświadczenia",
-        ]
+        keyword_sets = self._keyword_sets_from_levels(scope_levels())
         
         for keywords in keyword_sets:
             page = 1

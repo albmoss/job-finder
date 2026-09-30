@@ -173,8 +173,8 @@ class OLXScraper(BaseScraper):
         return mapa
 
     def _z_ogloszenia(self, job, ad) -> bool:
-        """Przepisz opis, firme i date z ogloszenia w listingu. False = nie da sie."""
-        from utils.olx_details import build_description, extract_company
+        """Przepisz opis, firme, date i cechy strukturalne z ogloszenia w listingu. False = nie da sie."""
+        from utils.olx_details import build_description, extract_company, parse_olx_fields
         from utils.text_cleaner import clean_job_description
 
         if not ad or ad.get("status") not in (None, "active"):
@@ -191,26 +191,31 @@ class OLXScraper(BaseScraper):
         data = ad.get("createdTime") or ad.get("lastRefreshTime")
         if data:
             job.posted_date = data
-        return True
 
+        parsed = parse_olx_fields(ad)
+        for k, v in parsed.items():
+            if v is not None:
+                setattr(job, k, v)
+        return True
     def get_source_name(self) -> str:
         return "OLX Praca"
     
     def build_search_url(self) -> str:
-        """Build search URL with 'bez doświadczenia' filter using configured location and radius"""
+        """Zbuduj URL wyszukiwania z miastem i filtrem doswiadczenia ze scope_levels/scope_city."""
         from config import SCRAPER_CONFIG
-        
-        # OLX filter: bez-doswiadczenia (without experience) - gets ALL entry-level jobs
-        experience = SCRAPER_CONFIG["olx_praca"]["experience_filter"]
-        location = SCRAPER_CONFIG.get("location", "Warszawa").lower()
+        from utils.candidate_scope import scope_city, city_slug, scope_levels
+
+        city = city_slug(scope_city(default=SCRAPER_CONFIG.get("location", "Warszawa")))
         radius = SCRAPER_CONFIG.get("radius_km", 15)
-        
-        # OLX URL structure: /praca/bez-doswiadczenia/warszawa/?search[dist]=15
-        url = f"{self.BASE_URL}/praca/{experience}/{location}/?search[dist]={radius}"
-        
-        logger.info(f"OLX Praca: no experience required, {location.capitalize()} +{radius}km")
+        levels = scope_levels()
+        exp_filter = set(levels).issubset({"intern", "junior"})
+
+        url = f"{self.BASE_URL}/praca/{city}/?search[dist]={radius}"
+        if exp_filter:
+            url += "&search[filter_enum_experience][0]=exp_no"
+
+        logger.info(f"OLX Praca: {city} +{radius}km (levels: {levels}, exp_filter: {exp_filter})")
         return url
-    
     def scrape_jobs(self) -> List[Job]:
         """Scrape jobs using optimized OLX filter URL splitting by categories to bypass 25-page limit"""
         jobs = []
@@ -261,13 +266,16 @@ class OLXScraper(BaseScraper):
                 logger.info(f"Skipping already scraped category: {category}")
                 continue
 
-            # Lokalizacja i promień z configu
+            # Lokalizacja, promien i filtr poziomu z CV (candidate_scope)
             from config import SCRAPER_CONFIG
-            location = SCRAPER_CONFIG.get("location", "Warszawa").lower()
+            from utils.candidate_scope import scope_city, city_slug, scope_levels
+            city = city_slug(scope_city(default=SCRAPER_CONFIG.get("location", "Warszawa")))
             radius = SCRAPER_CONFIG.get("radius_km", 15)
-            search_url = f"https://www.olx.pl/praca/{category}/{location}/?search%5Border%5D=created_at%3Adesc&search%5Bdist%5D={radius}"
+            levels = scope_levels()
+            exp_filter = set(levels).issubset({"intern", "junior"})
+            exp_query = "&search%5Bfilter_enum_experience%5D%5B0%5D=exp_no" if exp_filter else ""
+            search_url = f"https://www.olx.pl/praca/{category}/{city}/?search%5Border%5D=created_at%3Adesc&search%5Bdist%5D={radius}{exp_query}"
             logger.info(f"Navigating to OLX Category URL (Sorted by Newest): {search_url}")
-            
             html_strony = self._wejdz_i_wez_html(search_url)
             if html_strony is None:
                 logger.error(f"{self.get_source_name()}: Failed to navigate to {category}")
@@ -340,7 +348,8 @@ class OLXScraper(BaseScraper):
                             link=href,
                             description=f"Oferta z OLX (kategoria: {category})",
                             source=self.get_source_name(),
-                            location="Warszawa"
+                            location=scope_city(default="Warszawa"),
+                            category=category,
                         )
                         # Opis prosto z listingu; jesli go tam nie ma, oferta
                         # zostaje z zaslepka i dobiera ja enrich_descriptions.
@@ -523,6 +532,10 @@ class OLXScraper(BaseScraper):
                 job.company = wynik["company"]
             if wynik.get("posted_date"):
                 job.posted_date = wynik["posted_date"]
+            parsed = wynik.get("parsed_fields") or {}
+            for k, v in parsed.items():
+                if v is not None:
+                    setattr(job, k, v)
             stats["ok"] += 1
             enriched.append(job)
             return True
@@ -532,7 +545,6 @@ class OLXScraper(BaseScraper):
         stats["error"] += 1
         enriched.append(job)
         return False
-
     def _opisy_przez_fetch(self, page, jobs, stats):
         """
         Opisy przez `fetch` wolany w otwartej stronie OLX - patrz JS_OPISY.

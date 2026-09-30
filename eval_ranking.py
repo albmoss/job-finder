@@ -1,9 +1,9 @@
 """
 Ewaluacja jakości rankingu AI na ręcznych ocenach użytkownika.
 
-Pytanie, na które ten skrypt odpowiada: czy match_percentage z modelu faktycznie
+Pytanie, na które ten skrypt odpowiada: czy procent dopasowania faktycznie
 przewiduje, które oferty ocenisz wysoko? Bez tego nie da się stwierdzić, czy zmiana
-promptu / profilu / modelu cokolwiek poprawiła - a dotąd nic tego nie mierzyło.
+pytań, wag albo przesiewu w matching/ cokolwiek poprawiła.
 
 WAŻNE: masowe odrzucenia po słowie kluczowym (legacy: wartość "reject" jako goły
 string) są wykluczane. To nie są oceny jakości, tylko czyszczenie bazy - włączenie
@@ -21,17 +21,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.decisions import effective_rating
+from utils.links import canonical_link
 from utils.safe_io import load_json_safe
 from utils.console import force_utf8
 
-ANALYZED_FILE = "analyzed_jobs_waterfall.json"
+RESULTS_FILE = "match_results.json"
 DECISIONS_FILE = "user_decisions.json"
 
 
 def load_manual_ratings() -> dict:
     """
     Zwróć {link: rating} dla ręcznych decyzji. „Zapisz” i „Wysłane” bez suwaka liczą się
-    jak 9/10, „Odrzuć” jak 1/10 - ta sama reguła co w profilu preferencji.
+    jak 9/10, „Odrzuć” jak 1/10 (utils/decisions.effective_rating).
     """
     raw = load_json_safe(DECISIONS_FILE, default={})
     ratings = {}
@@ -49,14 +50,12 @@ def load_manual_ratings() -> dict:
 
 
 def load_scores() -> dict:
-    """Zwróć {link: match_percentage}."""
-    data = load_json_safe(ANALYZED_FILE, default=[])
-    scores = {}
-    for item in data:
-        link = (item.get("job") or {}).get("link")
-        if link and item.get("match_percentage") is not None:
-            scores[link] = item["match_percentage"]
-    return scores
+    """Zwróć {kanoniczny link: procent dopasowania} z match_results.json."""
+    data = load_json_safe(RESULTS_FILE, default={})
+    if not isinstance(data, dict):
+        return {}
+    return {link: entry["percent"] for link, entry in data.items()
+            if isinstance(entry, dict) and entry.get("percent") is not None}
 
 
 def precision_at_k(ranked, k, threshold):
@@ -142,7 +141,8 @@ def main(argv=None):
         return 1
 
     # Wspólny zbiór: oferty ocenione ręcznie ORAZ mające wynik z AI
-    common = [(scores[link], ratings[link]) for link in ratings if link in scores]
+    common = [(scores[canonical_link(link)], rating) for link, rating in ratings.items()
+              if canonical_link(link) in scores]
 
     print("=" * 64)
     print("  EWALUACJA RANKINGU AI")

@@ -15,14 +15,19 @@ from typing import List
 
 import requests
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
+from utils.offer_fields import (
+    make_salary,
+    norm_contracts,
+    norm_schedules,
+    norm_seniority,
+    norm_work_modes,
+)
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.adzuna.com/v1/api/jobs/pl/search"
-SEARCH_KEYWORDS = "junior OR praktykant OR stażysta OR asystent OR trainee"
-
 
 class AdzunaAPIScraper:
     """Scraper na oficjalnym REST API Adzuny (darmowy próg)."""
@@ -31,13 +36,28 @@ class AdzunaAPIScraper:
         self.config = config
         self.app_id = config.get("adzuna_app_id", "") or os.getenv("ADZUNA_APP_ID", "")
         self.app_key = config.get("adzuna_app_key", "") or os.getenv("ADZUNA_APP_KEY", "")
-        self.location = config.get("location", "Warszawa")
+        self.location = scope_city(default=config.get("location", "Warszawa"))
+        self.keywords = self._keywords_from_levels(scope_levels())
         self.session = requests.Session()
         self.session.headers.update({
             "Accept": "application/json",
             "User-Agent": "JobScratcher/1.0"
         })
 
+    @staticmethod
+    def _keywords_from_levels(levels: list[str]) -> str:
+        level_words = {
+            "intern": ["praktykant", "stażysta", "trainee", "intern"],
+            "junior": ["junior", "asystent", "młodszy"],
+            "mid": ["specjalista", "mid", "regular"],
+            "senior": ["senior", "starszy"],
+            "lead": ["lead", "lider"],
+            "manager": ["manager", "kierownik"],
+        }
+        words = []
+        for lvl in levels:
+            words.extend(level_words.get(lvl, []))
+        return " OR ".join(dict.fromkeys(words)) if words else "junior OR praktykant OR stażysta OR asystent OR trainee"
     def get_source_name(self) -> str:
         return "Adzuna"
 
@@ -45,7 +65,7 @@ class AdzunaAPIScraper:
         params = {
             "app_id": self.app_id,
             "app_key": self.app_key,
-            "what": SEARCH_KEYWORDS,
+            "what": self.keywords,
             "where": self.location,
             "results_per_page": 50,
             "content-type": "application/json",
@@ -74,24 +94,28 @@ class AdzunaAPIScraper:
         company = result.get("company", {}).get("display_name", "Unknown")
         link = result.get("redirect_url", result.get("adref", ""))
         
-        description = result.get("description", "")
-        
-        salary_parts = []
-        if result.get("salary_min"):
-            salary_parts.append(f"od {result['salary_min']:.0f}")
-        if result.get("salary_max"):
-            salary_parts.append(f"do {result['salary_max']:.0f}")
-        if salary_parts:
-            description += f"\nWynagrodzenie: {' '.join(salary_parts)} PLN"
-        
-        category = result.get("category", {}).get("label", "")
-        if category:
-            description += f"\nKategoria: {category}"
-        
+        description = (result.get("description") or "").strip()
+
+        salary_obj = None
+        min_sal = result.get("salary_min")
+        max_sal = result.get("salary_max")
+        if min_sal or max_sal:
+            salary_obj = make_salary(
+                min_value=min_sal,
+                max_value=max_sal,
+                currency="PLN",
+                period="year",
+            )
+
+        category = result.get("category", {}).get("label") or None
         location_data = result.get("location", {})
-        location = location_data.get("display_name", "")
-        
+        location = location_data.get("display_name") or None
         posted_date = result.get("created", "")
+
+        contract_types = norm_contracts(result.get("contract_type"))
+        schedules = norm_schedules(result.get("contract_time"))
+        work_modes = norm_work_modes(title) or norm_work_modes(location)
+        seniority = norm_seniority(title)
 
         return Job(
             title=title,
@@ -99,9 +123,15 @@ class AdzunaAPIScraper:
             link=link,
             description=description,
             source=self.get_source_name(),
-            location=location if location else None,
+            location=location,
             posted_date=posted_date,
-            scraped_at=datetime.now().isoformat()
+            salary=salary_obj,
+            category=category,
+            contract_types=contract_types,
+            schedules=schedules,
+            work_modes=work_modes,
+            seniority=seniority,
+            scraped_at=datetime.now().isoformat(),
         )
 
     def run(self) -> List[Job]:

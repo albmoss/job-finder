@@ -45,9 +45,8 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
   const nowSec = useNowSeconds(isRunning || isStopping);
   const { progress, totalPct } = calculateOverallPipelineProgress(pipeline);
 
-  // Pulse przy każdej kolejnej paczce punktacji AI
-  const batchPulse = pipeline?.telemetry?.scoring?.processed ?? pipeline?.telemetry?.scoring?.batch ?? 0;
-
+  // Pulse przy każdej nowej ocenie dopasowania
+  const batchPulse = pipeline?.telemetry?.scoring?.scored ?? pipeline?.telemetry?.scoring?.processed ?? 0;
   // Obliczenia napisów dla pigułki
   let stageTitle = 'Gotowy';
   let stageMeta = '';
@@ -65,9 +64,8 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
       stageMeta = 'brak przebiegów';
     }
   } else if (isStopping) {
-    const b = pipeline?.telemetry?.scoring?.batch;
-    stageTitle = b ? `Kończę paczkę ${b}…` : 'Zatrzymywanie…';
-    stageMeta = 'nic nie przepadnie';
+    stageTitle = 'Zatrzymywanie…';
+    stageMeta = 'kończę rozpoczęte zapytania';
   } else if (isFailed || isStopped) {
     const curStage = pipeline?.current_stage_title;
     if (isStopped) {
@@ -86,10 +84,15 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
     stageTitle = pipeline?.current_stage_title || 'W toku';
     const scoring = pipeline?.telemetry?.scoring;
     const sources = pipeline?.telemetry?.sources;
+    const toScore = scoring?.to_score ?? scoring?.total;
+    const scored = scoring?.scored ?? scoring?.processed ?? 0;
 
-    if (scoring && scoring.total && scoring.total > 0) {
+    if (scoring && ((toScore && toScore > 0) || scored > 0)) {
       const eta = scoringEtaSeconds(scoring, nowSec);
-      stageMeta = `${scoring.processed} / ${scoring.total}${eta !== null ? ` · ~${formatDuration(eta)}` : ''}`;
+      const rateStr = scoring.rate ? ` (${scoring.rate.toFixed(1)}/s)` : '';
+      stageMeta = toScore
+        ? `${scored} / ${toScore}${rateStr}${eta !== null ? ` · ~${formatDuration(eta)}` : ''}`
+        : `${scored} dopasowanych${rateStr}`;
     } else if (sources && sources.length > 0) {
       const doneSources = sources.filter((s) => s.state === 'done' || s.state === 'skipped').length;
       stageMeta = `${doneSources} / ${sources.length} źródeł`;

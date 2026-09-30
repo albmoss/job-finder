@@ -29,7 +29,7 @@ class PracaPlScraper(LdJsonPortalScraper):
     def __init__(self, config: dict):
         super().__init__(config)
         # Miasto w URL-u jest w mianowniku i bez znaków diakrytycznych
-        self.city_slug = self.cfg.get("city_slug", self.location_filter)
+        self.city_slug = self.cfg.get("city_slug") or self.city_slug
 
     def build_listing_url(self, page: int) -> str:
         if page <= 1:

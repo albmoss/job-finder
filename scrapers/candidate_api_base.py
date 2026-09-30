@@ -21,9 +21,18 @@ from typing import List
 import requests
 
 from scrapers.base_scraper import BaseScraper
+from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
 from utils.links import canonical_link
-
+from utils.offer_fields import (
+    norm_seniority,
+    norm_work_modes,
+    norm_contracts,
+    norm_schedules,
+    norm_skills,
+    make_salary,
+    make_language,
+)
 logger = logging.getLogger(__name__)
 
 DEFAULT_HEADERS = {
@@ -32,6 +41,16 @@ DEFAULT_HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
     ),
+}
+
+# Candidate-api (JustJoin.it i RocketJobs.pl) akceptuje wyłącznie: intern, junior, mid, senior.
+CANDIDATE_API_LEVEL_MAP = {
+    "intern": "intern",
+    "junior": "junior",
+    "mid": "mid",
+    "senior": "senior",
+    "lead": "senior",
+    "manager": "senior",
 }
 
 
@@ -81,50 +100,57 @@ class CandidateAPIScraper(BaseScraper):
         return h
 
     def _fetch_listing(self, session: requests.Session) -> List[dict]:
-        """Pobierz wszystkie oferty z listy (paginacja kursorowa)."""
+        """Pobierz wszystkie oferty z listy (paginacja kursorowa, miasto + zdalne)."""
         portal_cfg = self.config.get(self.CONFIG_KEY, {}) or {}
-        city = (portal_cfg.get("location") or self.config.get("location", "Warszawa")).capitalize()
+        default_city = portal_cfg.get("location") or self.config.get("location", "Warszawa")
+        city = scope_city(default_city).capitalize()
 
-        # API akceptuje TYLKO powtórzone parametry (?experienceLevels=junior&experienceLevels=intern).
-        # Wersja z przecinkiem ("junior,intern") zwraca 0 wyników - cicha pułapka.
-        levels = portal_cfg.get("experience_levels") or [portal_cfg.get("experience_level", "junior")]
-        if isinstance(levels, str):
-            levels = [levels]
+        raw_levels = scope_levels()
+        levels = list(dict.fromkeys(CANDIDATE_API_LEVEL_MAP[lv] for lv in raw_levels if lv in CANDIDATE_API_LEVEL_MAP)) or ["junior", "intern"]
 
-        offers = []
-        cursor = 0
-        seen_cursors = set()
+        queries = [
+            ("city", [("city", city)] + [("experienceLevels", lv) for lv in levels]),
+            ("remote", [("isRemote", "true")] + [("experienceLevels", lv) for lv in levels]),
+        ]
 
-        while True:
-            params = [("city", city)] + [("experienceLevels", lv) for lv in levels] + [("from", cursor)]
-            try:
-                resp = session.get(self.api_url, params=params, headers=self._headers(), timeout=30)
-                resp.raise_for_status()
-                data = resp.json()
-            except Exception as e:
-                logger.error(f"{self.SOURCE_NAME}: listing failed at cursor {cursor}: {e}")
-                break
+        offers_by_slug = {}
+        for q_label, base_params in queries:
+            cursor = 0
+            seen_cursors = set()
+            query_fetched = 0
+            while True:
+                params = base_params + [("from", cursor)]
+                try:
+                    resp = session.get(self.api_url, params=params, headers=self._headers(), timeout=30)
+                    resp.raise_for_status()
+                    data = resp.json()
+                except Exception as e:
+                    logger.error(f"{self.SOURCE_NAME}: listing failed ({q_label}) at cursor {cursor}: {e}")
+                    break
 
-            page = data.get("data", [])
-            if not page:
-                break
-            offers.extend(page)
+                page = data.get("data", [])
+                if not page:
+                    break
+                for off in page:
+                    slug = off.get("slug")
+                    if slug:
+                        offers_by_slug[slug] = off
 
-            meta = data.get("meta", {})
-            total = meta.get("totalItems", 0)
-            next_cursor = (meta.get("next") or {}).get("cursor")
+                query_fetched += len(page)
+                meta = data.get("meta", {})
+                total = meta.get("totalItems", 0)
+                next_cursor = (meta.get("next") or {}).get("cursor")
 
-            logger.info(f"{self.SOURCE_NAME}: cursor {cursor} -> +{len(page)} offers ({len(offers)}/{total})")
+                logger.info(f"{self.SOURCE_NAME} [{q_label}]: cursor {cursor} -> +{len(page)} offers ({query_fetched}/{total})")
 
-            # Zabezpieczenie przed pętlą nieskończoną gdy API zwróci ten sam kursor
-            if next_cursor is None or next_cursor in seen_cursors or len(offers) >= total:
-                break
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
-            time.sleep(0.3 + random.random() * 0.3)
+                if next_cursor is None or next_cursor in seen_cursors or query_fetched >= total:
+                    break
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+                time.sleep(0.3 + random.random() * 0.3)
 
-        logger.info(f"{self.SOURCE_NAME}: fetched {len(offers)} offers from the listing")
-        return offers
+        logger.info(f"{self.SOURCE_NAME}: fetched {len(offers_by_slug)} unique offers from the listing")
+        return list(offers_by_slug.values())
 
     def _matches_location(self, offer: dict, target_city: str) -> bool:
         """
@@ -204,64 +230,117 @@ class CandidateAPIScraper(BaseScraper):
         return f"{self.PORTAL_URL}/offers/{slug}"
 
     def _parse(self, offer: dict, detail: dict) -> Job:
-        """Zbuduj Job z listy + szczegółów. `body` (pełny opis) ma priorytet."""
+        """Zbuduj Job z listy + szczegółów. Pełny opis w body, reszta jako pola strukturalne."""
         title = offer.get("title", "Unknown")
         company = offer.get("companyName") or detail.get("companyName") or "Unknown"
         slug = offer.get("slug", "")
 
-        parts = []
+        # Pełny opis oferty - czysty tekst/HTML bez doklejanych metadanych
+        body = (detail.get("body") or "").strip()
+        description = body if body else f"Oferta z {self.SOURCE_NAME}: {title}"
 
-        # Pełny opis oferty - najcenniejsze dane dla analizy AI.
-        # Jest w HTML; Job.__post_init__ -> clean_job_description -> strip_html to czyści.
-        body = detail.get("body", "")
-        if body:
-            parts.append(body)
+        # Poziom doświadczenia
+        seniority = norm_seniority(offer.get("experienceLevel") or detail.get("experienceLevel"))
 
-        def skill_names(raw):
-            out = []
-            for s in raw or []:
-                if isinstance(s, dict) and s.get("name"):
-                    lvl = s.get("level")
-                    out.append(f"{s['name']} (poziom {lvl})" if lvl else s["name"])
-                elif isinstance(s, str):
-                    out.append(s)
-            return out
+        # Tryb pracy
+        work_modes = norm_work_modes(offer.get("workplaceType") or detail.get("workplaceType"))
 
-        req = skill_names(detail.get("requiredSkills") or offer.get("requiredSkills"))
-        nice = skill_names(detail.get("niceToHaveSkills") or offer.get("niceToHaveSkills"))
-        if req:
-            parts.append("Technologie wymagane: " + ", ".join(req))
-        if nice:
-            parts.append("Technologie mile widziane: " + ", ".join(nice))
+        # Wymiar czasu pracy
+        schedules = norm_schedules(offer.get("workingTime") or detail.get("workingTime"))
 
-        for emp in (detail.get("employmentTypes") or offer.get("employmentTypes") or []):
-            if isinstance(emp, dict) and (emp.get("from") or emp.get("to")):
-                parts.append(
-                    f"Wynagrodzenie ({emp.get('type', '')}): "
-                    f"{emp.get('from')}-{emp.get('to')} {emp.get('currency', 'PLN')}"
+        # Umiejętności
+        req_raw = detail.get("requiredSkills") or offer.get("requiredSkills") or []
+        nice_raw = detail.get("niceToHaveSkills") or offer.get("niceToHaveSkills") or []
+        skills_required = norm_skills(req_raw)
+        skills_nice = norm_skills(nice_raw)
+
+        # Typy umów i wynagrodzenie
+        emp_types = detail.get("employmentTypes") or offer.get("employmentTypes") or []
+        raw_contracts = [e.get("type") for e in emp_types if isinstance(e, dict) and e.get("type")]
+        contract_types = norm_contracts(raw_contracts)
+
+        salary = None
+        for emp in emp_types:
+            if not isinstance(emp, dict):
+                continue
+            unit = (emp.get("unit") or "month").lower()
+            if unit == "hour" and (emp.get("fromPerUnit") or emp.get("toPerUnit")):
+                low = emp.get("fromPerUnit")
+                high = emp.get("toPerUnit")
+            else:
+                low = emp.get("from")
+                high = emp.get("to")
+
+            if low or high:
+                currency = emp.get("currency", "PLN")
+                gross = emp.get("gross")
+                emp_type = emp.get("type")
+                c_norm = norm_contracts(emp_type)
+                contract_code = c_norm[0] if c_norm else None
+                s = make_salary(
+                    min_value=low,
+                    max_value=high,
+                    currency=currency,
+                    period=unit,
+                    gross=gross,
+                    contract=contract_code,
                 )
+                if s:
+                    if emp.get("currencySource") == "original" or currency == "PLN":
+                        salary = s
+                        break
+                    if salary is None:
+                        salary = s
 
-        if offer.get("experienceLevel"):
-            parts.append(f"Poziom: {offer['experienceLevel']}")
-        if offer.get("workplaceType"):
-            parts.append(f"Tryb pracy: {offer['workplaceType']}")
-        if offer.get("workingTime"):
-            parts.append(f"Wymiar: {offer['workingTime']}")
+        # Języki z poziomami
+        raw_langs = detail.get("languages") or offer.get("languages") or []
+        languages = []
+        for l in raw_langs:
+            if isinstance(l, dict):
+                name = l.get("code") or l.get("name")
+                lvl = l.get("level")
+                parsed = make_language(name, level=lvl, required=True)
+                if parsed:
+                    languages.append(parsed)
+        languages = languages or None
 
-        if not parts:
-            parts.append(f"Oferta z {self.SOURCE_NAME}: {title}")
+        # Kategoria
+        cat_obj = detail.get("category") or offer.get("category")
+        category = None
+        if isinstance(cat_obj, dict):
+            category = cat_obj.get("key") or cat_obj.get("name")
+        elif isinstance(cat_obj, str):
+            category = cat_obj
+
+        # Daty publikacji i wygaśnięcia
+        posted_date = offer.get("publishedAt") or detail.get("publishedAt") or None
+        valid_through = offer.get("expiredAt") or detail.get("expiredAt") or None
+
+        # Lokalizacja
+        portal_cfg = self.config.get(self.CONFIG_KEY, {}) or {}
+        default_city = portal_cfg.get("location") or self.config.get("location", "Warszawa")
+        location = offer.get("city") or detail.get("city") or scope_city(default_city)
 
         return Job(
             title=title,
             company=company,
             link=canonical_link(self.build_link(slug)),
-            description="\n\n".join(parts),
+            description=description,
             source=self.SOURCE_NAME,
-            location=offer.get("city", self.config.get("location", "Warszawa")),
-            posted_date=offer.get("publishedAt", ""),
+            location=location,
+            posted_date=posted_date,
+            valid_through=valid_through,
             scraped_at=datetime.now().isoformat(),
+            seniority=seniority,
+            work_modes=work_modes,
+            contract_types=contract_types,
+            schedules=schedules,
+            salary=salary,
+            skills_required=skills_required,
+            skills_nice=skills_nice,
+            languages=languages,
+            category=category,
         )
-
     def run(self) -> List[Job]:
         """Wejście - HTTP zamiast przeglądarki."""
         logger.info(f"{self.SOURCE_NAME}: start (candidate-api, no browser)")
@@ -273,10 +352,8 @@ class CandidateAPIScraper(BaseScraper):
             if not offers:
                 return []
 
-            target_city = (
-                (self.config.get(self.CONFIG_KEY, {}) or {}).get("location")
-                or self.config.get("location", "Warszawa")
-            )
+            portal_cfg = self.config.get(self.CONFIG_KEY, {}) or {}
+            target_city = scope_city(portal_cfg.get("location") or self.config.get("location", "Warszawa"))
             before = len(offers)
             offers = [o for o in offers if self._matches_location(o, target_city)]
             if before != len(offers):

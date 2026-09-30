@@ -4,7 +4,6 @@ import {
   Play,
   ChevronUp,
   Globe,
-  Brain,
   Sparkles,
   RotateCcw,
   Database,
@@ -15,7 +14,7 @@ import {
 } from 'lucide-react';
 import type { ActivityRow, PipelineState, Stats } from '../types';
 import { Stream } from './ui/Stream';
-import { DECISIONS, KEYS, NEW_ONES, OFFERS, plural } from '../plural';
+import { OFFERS, plural } from '../plural';
 import {
   SHEET_STREAM_LOOP,
   STAGE_SHORT_NAMES,
@@ -23,10 +22,8 @@ import {
   fitGrid,
   formatClock,
   formatDuration,
-  formatStamp,
   parseLogLine,
   pipelineStatus,
-  scoringPacks,
   stageDuration,
   useNowSeconds,
 } from '../pipeline';
@@ -41,7 +38,7 @@ export interface PipelineSheetProps {
   onStop(): void;
   onForceStop(): void;
   onResume(): void;
-  onRunStep(step: 'scrapers' | 'profile' | 'analysis' | 'rescore_all'): void;
+  onRunStep(step: 'scrapers' | 'matching' | 'rescore_all'): void;
   onReloadDatabase(): void;
   onOpenLaunchModal(): void;
 }
@@ -51,7 +48,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
   onClose,
   pipeline,
   activityRows: _activityRows,
-  stats,
+  stats: _stats,
   onStop,
   onForceStop,
   onResume,
@@ -229,11 +226,21 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
         const pct = Math.round(((diet.chars_before - diet.chars_after) / diet.chars_before) * 100);
         topVal = pct > 0 ? `−${pct}%` : '0%';
         subVal = 'znaków opisu';
-      } else if (idx === 5 && scoring && (scoring.processed > 0 || scoring.total)) {
-        topVal = scoring.processed.toLocaleString('pl-PL');
-        subVal = scoring.total ? `z ${scoring.total.toLocaleString('pl-PL')} nowych` : 'ocenionych';
-      } else {
-        hasMetric = false;
+      } else if (idx === 5) {
+        const scored = scoring?.scored ?? scoring?.processed ?? stageStats?.phase3?.scored ?? 0;
+        const total = scoring?.to_score ?? scoring?.total ?? stageStats?.phase3?.total;
+        const rate = scoring?.rate ?? stageStats?.phase3?.rate;
+        const prefilterRejected = scoring?.prefilter_rejected ?? stageStats?.phase3?.prefilter_rejected ?? null;
+        if (total || scored > 0) {
+          topVal = scored.toLocaleString('pl-PL');
+          const rateStr = rate ? ` · ${rate.toFixed(1)}/s` : '';
+          subVal = total ? `z ${total.toLocaleString('pl-PL')}${rateStr}` : 'dopasowanych';
+        } else if (prefilterRejected !== null && prefilterRejected > 0) {
+          topVal = `−${prefilterRejected.toLocaleString('pl-PL')}`;
+          subVal = 'z prefiltru';
+        } else {
+          hasMetric = false;
+        }
       }
 
       return {
@@ -257,9 +264,6 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
   });
   const doneLineStyle = { left: `${stationPct(0)}%`, width: `${Math.max(0, stationPct(lineEndIdx) - stationPct(0))}%` };
 
-  // Paczki (Karta 1): tyle kafelków, ile paczek ma przebieg; siatka dopasowuje rozmiar
-  // kafelka do wolnego pola karty (fitGrid), więc 3 paczki i 300 paczek wypełniają ją tak samo.
-  const packs = scoringPacks(scoring);
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null);
   const [gridBox, setGridBox] = useState({ w: 0, h: 0 });
   useEffect(() => {
@@ -272,15 +276,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
     return () => ro.disconnect();
   }, [gridEl]);
 
-  // Kolor gotowego kafelka idzie po siatce jak strumień: kobalt → fiolet. Kafelek w pracy
-  // (bieżąca paczka, biegnące źródło) ładuje się w pętli tym samym kolorem.
   const tileTone = (i: number, n: number) => ({ '--t': n > 1 ? i / (n - 1) : 0 }) as React.CSSProperties;
-  const packCells = Array.from({ length: packs?.total ?? 0 }, (_, i) => {
-    let stateClass = '';
-    if (isCompleted || (packs && i < packs.done)) stateClass = 'done';
-    else if (packs && i === packs.done && isRunning) stateClass = 'cur';
-    return { packIdx: i + 1, stateClass, styleObj: tileTone(i, packs?.total ?? 0) };
-  });
 
   // Przed oceną AI karta paczek pokazuje źródła: kafelek = źródło. Scrapery pracują
   // równolegle, więc w pętli ładuje się każde biegnące źródło — wszystkie w jednym rytmie.
@@ -306,8 +302,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
       if (a instanceof CSSAnimation && a.animationName === 'pp-pack-load' && a.startTime !== 0) a.startTime = 0;
     });
   });
-  const showSources = !scoring && sources.length > 0;
-  const grid = fitGrid(showSources ? sources.length : packCells.length, gridBox.w, gridBox.h);
+  const grid = fitGrid(sources.length, gridBox.w, gridBox.h);
   const gridStyle = grid
     ? ({ gridTemplateColumns: `repeat(${grid.cols}, ${grid.cell}px)`, gap: grid.gap, '--cell': `${grid.cell}px` } as React.CSSProperties)
     : undefined;
@@ -326,39 +321,16 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
       : 'zbieranie list ofert';
   }
 
-  // Klucze API (Karta 2)
-  // Liczba kluczy jest w telemetrii od startu przebiegu; aktywny klucz i model — dopiero z oceny.
-  const keyCount = scoring?.key_count ?? pipeline?.telemetry?.key_count ?? 0;
-  const activeKeyIdx = scoring?.key ?? 0;
-  const cooldowns = scoring?.cooldowns ?? {};
-  const activeModelName = scoring?.model ?? '';
-  const keysWorking = isRunning && !!scoring;
-
-  const keyItems = Array.from({ length: keyCount }, (_, i) => {
-    const coolUntil = cooldowns[String(i)];
-    const isCool = coolUntil !== undefined && coolUntil > nowSec;
-    const remainingSecs = isCool ? Math.ceil(coolUntil - nowSec) : 0;
-    const isOn = !isCool && activeKeyIdx === i && keysWorking;
-    const state = isCool ? `limit, wraca za ${remainingSecs} s` : isOn ? 'pracuje' : 'gotowy';
-    return { idx: i, isCool, remainingSecs, isOn, state };
-  });
-
-  const activeCooldownKey = keyItems.find((k) => k.isCool);
-
-  // Profil preferencji nie przelicza się sam: decyzje (też „Wysłane”) trafiają do oceny AI
-  // dopiero przez niego, więc przycisk pokazuje, ile ich jeszcze czeka.
-  const profileNew = stats?.profile_new_decisions ?? 0;
-  let profileTip = 'Przelicz profil preferencji z decyzji';
-  if (stats && !stats.profile_generated_at) profileTip = 'Zbuduj profil preferencji z decyzji — ocena AI jeszcze go nie ma';
-  else if (stats?.profile_generated_at) {
-    const since = formatStamp(stats.profile_generated_at);
-    profileTip = profileNew > 0
-      ? `Przelicz profil preferencji (z ${since}) — ocena AI nie zna jeszcze ${profileNew} decyzji`
-      : `Przelicz profil preferencji — aktualny, z ${since}`;
-  }
-
+  // Telemetria dopasowania (prefiltr + Jev)
+  const prefilterRejected =
+    scoring?.prefilter_rejected ??
+    stageStats?.phase3?.prefilter_rejected ??
+    null;
+  const scoredCount = scoring?.scored ?? scoring?.processed ?? stageStats?.phase3?.scored ?? 0;
+  const toScore = scoring?.to_score ?? scoring?.total ?? stageStats?.phase3?.total ?? null;
+  const rateVal = scoring?.rate ?? stageStats?.phase3?.rate ?? null;
   // Pulse dla Stream
-  const batchPulse = scoring?.processed ?? scoring?.batch ?? 0;
+  const batchPulse = scoring?.scored ?? scoring?.processed ?? 0;
 
   return (
     <>
@@ -493,88 +465,78 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
 
         {/* Trzy karty telemetryczne */}
         <div className="pp-now">
-          {/* Karta 1: Źródła (do oceny AI), potem paczki. Siatka wypełnia wolne pole karty. */}
-          {showSources ? (
-            <div className="pp-card">
-              <div className="h">
-                <b>Źródła</b>
-                <span>{`${sourcesDone} / ${sources.length}`}</span>
-              </div>
-
-              <div className="pp-packs" ref={setGridEl} style={gridStyle}>
-                {sourceCells.map(({ name, stateClass, tip, styleObj }) => (
-                  <div key={name} className={`pp-pack ${stateClass}`} style={styleObj} data-tip={tip} />
-                ))}
-              </div>
-
-              <div>
-                <div className="big">{sourcesBig}</div>
-                <div className="small">{sourcesSmall}</div>
-              </div>
-            </div>
-          ) : (
-            <div className="pp-card">
-              <div className="h">
-                <b>{packs ? `Paczki po ${packs.size}` : 'Paczki'}</b>
-                <span>{packs ? `${packs.done} / ${packs.total}` : '—'}</span>
-              </div>
-
-              <div className="pp-packs" ref={setGridEl} style={gridStyle}>
-                {packCells.map(({ packIdx, stateClass, styleObj }) => (
-                  <div key={packIdx} className={`pp-pack ${stateClass}`} style={styleObj} />
-                ))}
-              </div>
-
-              {(scoring?.total === 0 || !packs) && (
-                <div className="hint">
-                  {scoring?.total === 0 ? 'nic nowego do oceny' : 'liczba paczek pojawi się ze startem oceny AI'}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Karta 2: Klucze API — kafelek na klucz, rozciągnięty na całe pole karty */}
+          {/* Karta 1: Źródła */}
           <div className="pp-card">
             <div className="h">
-              <b>Klucze API</b>
-              <span>{activeModelName}</span>
+              <b>Źródła</b>
+              <span>{`${sourcesDone} / ${sources.length}`}</span>
             </div>
 
-            <div
-              className="pp-keys"
-              style={{ gridTemplateColumns: `repeat(${keyCount <= 6 ? Math.max(1, keyCount) : Math.ceil(keyCount / 2)}, minmax(0, 1fr))` }}
-            >
-              {keyItems.map((k) => (
-                <div
-                  key={k.idx}
-                  className={`pp-key${k.isOn ? ' on' : ''}${k.isCool ? ' cool' : ''}`}
-                  style={k.isCool ? ({ '--cool': Math.min(1, k.remainingSecs / 70) } as React.CSSProperties) : undefined}
-                  data-tip={`Klucz ${k.idx + 1}: ${k.state}`}
-                >
-                  <b>{k.idx + 1}</b>
-                  {k.isCool && <span>{k.remainingSecs}s</span>}
-                </div>
+            <div className="pp-packs" ref={setGridEl} style={gridStyle}>
+              {sourceCells.map(({ name, stateClass, tip, styleObj }) => (
+                <div key={name} className={`pp-pack ${stateClass}`} style={styleObj} data-tip={tip} />
               ))}
             </div>
 
             <div>
-              <div className="big">
-                {keyCount === 0 || !scoring
-                  ? 'Czeka na ocenę AI'
-                  : keysWorking
-                    ? `Pracuje klucz ${activeKeyIdx + 1} z ${keyCount}`
-                    : `Skonfigurowano ${keyCount} ${plural(keyCount, KEYS)}`}
-              </div>
-              <div className="small">
-                {activeCooldownKey
-                  ? `klucz ${activeCooldownKey.idx + 1} trafił limit — wraca za ${activeCooldownKey.remainingSecs}s`
-                  : keyCount > 0 && !scoring
-                    ? `${keyCount} ${plural(keyCount, KEYS)} w rotacji przy limitach`
-                    : 'rotacja modeli i kluczy przy limitach'}
-              </div>
+              <div className="big">{sourcesBig}</div>
+              <div className="small">{sourcesSmall}</div>
             </div>
           </div>
 
+          {/* Karta 2: Dopasowanie (prefiltr + Jev) */}
+          <div className="pp-card">
+            <div className="h">
+              <b>Dopasowanie</b>
+              <span>{toScore ? `${scoredCount} / ${toScore}` : (isRunning && currentStageIdx === 5 ? 'w toku' : '—')}</span>
+            </div>
+
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 10 }}>
+              {toScore && toScore > 0 ? (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--ink-2)' }}>
+                    <span>Postęp punktacji</span>
+                    <span className="tnum">{Math.round((scoredCount / toScore) * 100)}%</span>
+                  </div>
+                  <div style={{ height: 6, borderRadius: 3, background: 'rgba(255, 255, 255, 0.06)', overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${Math.min(100, Math.round((scoredCount / toScore) * 100))}%`,
+                        background: 'var(--accent)',
+                        borderRadius: 3,
+                        transition: 'width 0.3s ease',
+                      }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="hint">
+                  {prefilterRejected !== null
+                    ? `Prefiltr odrzucił ${prefilterRejected.toLocaleString('pl-PL')} ofert`
+                    : 'Prefiltr regułowy + punktacja Jev'}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="big">
+                {toScore
+                  ? `${scoredCount.toLocaleString('pl-PL')} z ${toScore.toLocaleString('pl-PL')}` +
+                    (rateVal ? ` (${rateVal.toFixed(1)}/s)` : '')
+                  : scoredCount > 0
+                    ? `${scoredCount.toLocaleString('pl-PL')} dopasowanych`
+                    : isRunning && currentStageIdx === 5
+                      ? 'Punktowanie ofert w toku…'
+                      : 'Czeka na etap dopasowania'}
+              </div>
+              <div className="small">
+                {prefilterRejected !== null
+                  ? `${prefilterRejected.toLocaleString('pl-PL')} ${plural(prefilterRejected, OFFERS)} odrzuconych przez prefiltr`
+                  : 'ocena zgodności z profilem CV'}
+              </div>
+            </div>
+          </div>
           {/* Karta 3: Na żywo */}
           <div className="pp-card">
             <div className="h">
@@ -644,22 +606,10 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
 
               <button
                 type="button"
-                className="iconbtn pp-step-profile"
-                onClick={() => onRunStep('profile')}
-                data-tip={profileTip}
-                aria-label={profileNew > 0 ? `Przelicz profil preferencji (${profileNew} ${plural(profileNew, NEW_ONES)} ${plural(profileNew, DECISIONS)})` : 'Przelicz profil preferencji'}
-                disabled={isRunning || isStopping}
-              >
-                <Brain size={16} />
-                {profileNew > 0 && <span className="pp-step-badge" aria-hidden="true">{profileNew}</span>}
-              </button>
-
-              <button
-                type="button"
                 className="iconbtn"
-                onClick={() => onRunStep('analysis')}
-                data-tip="Oceń brakujące oferty (waterfall AI)"
-                aria-label="Oceń brakujące oferty"
+                onClick={() => onRunStep('matching')}
+                data-tip="Dopasuj brakujące oferty (matching)"
+                aria-label="Dopasuj brakujące oferty"
                 disabled={isRunning || isStopping}
               >
                 <Sparkles size={16} />

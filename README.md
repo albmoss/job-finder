@@ -5,14 +5,14 @@
 **Every job board in Poland, read overnight and ranked against one CV.**
 
 ![Python](https://img.shields.io/badge/Python-5A70FF?style=flat-square&logo=python&logoColor=white)
-![LLM: Gemini · OpenAI · Claude · local](https://img.shields.io/badge/LLM-Gemini_%C2%B7_OpenAI_%C2%B7_Claude_%C2%B7_local-8B5CFF?style=flat-square)
+![Jev by TypeSafe](https://img.shields.io/badge/Matching-Jev_by_TypeSafe-8B5CFF?style=flat-square)
 ![Playwright](https://img.shields.io/badge/Playwright-5A70FF?style=flat-square)
 ![Starlette](https://img.shields.io/badge/Starlette-5A70FF?style=flat-square)
 ![React 19](https://img.shields.io/badge/React_19-5A70FF?style=flat-square&logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5A70FF?style=flat-square&logo=typescript&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-5A70FF?style=flat-square&logo=vite&logoColor=white)
 
-[How it works](#how-it-works) · [Pipeline](#pipeline) · [Quick start](#quick-start) · [Model provider](#model-provider) · [Design notes](#design-notes)
+[How it works](#how-it-works) · [Pipeline](#pipeline) · [Quick start](#quick-start) · [Matching](#matching) · [CV reader](#cv-reader) · [Design notes](#design-notes)
 
 <br>
 
@@ -24,43 +24,46 @@
 
 ## How it works
 
-Ten job boards go in, one ranked list comes out. Every offer gets a match score against my
-CV, and I decide on it in one click. Those decisions feed back into the prompt that scores
-the next run. Violet comes from me, blue runs on its own.
+Job boards go in, one ranked list comes out. The CV is the only input: it sets the city and
+seniority the scrapers look for, and every offer gets a match percentage against it. I decide
+on each offer in one click. Violet comes from me, blue runs on its own.
 
 ```mermaid
 flowchart LR
-    cv(["Upload CV"]) --> run["Scrape & LLM-score<br/>10 job boards"]
-    run --> list["Ranked<br/>list"]
+    cv(["Upload CV"]) --> profile["CV profile<br/>city, level, skills"]
+    profile --> run["Scrape<br/>job boards"]
+    run --> match["Prefilter +<br/>Jev scoring"]
+    profile --> match
+    match --> list["Ranked<br/>list"]
     list --> me(["Decide<br/>& rate"])
     me --> apps(["Applications<br/>board"])
-    me -. "preference profile" .-> run
 
     classDef step fill:#161a33,stroke:#5A70FF,stroke-width:1.5px,color:#ffffff
     classDef me fill:#241a3d,stroke:#8B5CFF,stroke-width:1.5px,color:#ffffff
-    class run,list step
+    class profile,run,match,list step
     class cv,me,apps me
 ```
 
 ## Pipeline
 
-One command, seven stages, always in this order. A failed stage stops the run, and
-`--resume` picks up where it stopped.
+One command, always in this order. A failed stage stops the run, and `--resume` picks up
+where it stopped.
 
 | # | Stage | Why it is there |
 |:-:|---|---|
 | 0 | `purge_stale_offers` | archives my ratings before old offers are dropped |
+| 0.5 | `utils/cv_profile` | reads the CV once per change: city, level, skills, languages |
 | 1 | `main_scraper` | pulls every board in parallel: the API where there is one, HTML where not |
 | 1.5 | `migrate_normalize_links` | the same offer under `?utm_source=…` must not count twice |
 | 2 | `deduplicate_db` | one offer often sits on four boards at once |
-| 2.5 | `clean_db` | trims boilerplate so scoring does not burn tokens on it |
-| 3 | `waterfall_analysis` | a cascade of models from the chosen provider; API keys rotate |
+| 2.5 | `clean_db` | trims boilerplate from descriptions |
+| 3 | `matching/run` | drops certain mismatches in code, scores the rest with Jev |
 | 4 | `eval_ranking` | checks the ranking against ratings I entered by hand |
 
 <div align="center">
-<img src="docs/pipeline.png" alt="Pipeline sheet: stage counts, scoring batches, API keys and live log" width="640">
+<img src="docs/pipeline.png" alt="Pipeline sheet: stage counts and live log" width="640">
 <br>
-<sub>The pipeline sheet in the UI: per-stage counts, scoring batches, key rotation, live log.</sub>
+<sub>The pipeline sheet in the UI: per-stage counts, matching progress, live log.</sub>
 </div>
 
 ## Quick start
@@ -68,13 +71,13 @@ One command, seven stages, always in this order. A failed stage stops the run, a
 ```bash
 pip install -r requirements.txt
 playwright install chromium
-cp .env.example .env                      # pick a model provider, add its API key
+cp .env.example .env                      # TYPESAFE_API_KEY + a key for the CV reader
 
 cd frontend && npm install && npm run build && cd ..
 PYTHONIOENCODING=utf-8 python server.py   # → http://127.0.0.1:8501
 ```
 
-Runs start from the UI, which checks the CV and keys and asks for API cost consent first.
+Runs start from the UI, which checks the CV and keys first.
 
 <details>
 <summary><b>Command line</b></summary>
@@ -83,13 +86,13 @@ Runs start from the UI, which checks the CV and keys and asks for API cost conse
 
 ```bash
 python run_final_pipeline.py                  # full run
-python run_final_pipeline.py --skip-scraping  # score offers already in the DB (still paid)
+python run_final_pipeline.py --skip-scraping  # match offers already in the DB
 python run_final_pipeline.py --resume         # continue an interrupted or failed run
+python run_final_pipeline.py --rescore-all    # rescore everything, e.g. after changing weights
 
+python -m utils.cv_profile                    # show the profile read from the CV
+python -m matching.run --limit 100            # score up to 100 new offers
 python eval_ranking.py                        # is the ranking any good?
-python skill_gaps.py                          # what the good offers ask for and the CV lacks
-python benchmark_models.py                    # which model agrees with my ratings
-python compare_before_after.py                # did a prompt change help?
 
 PYTHONIOENCODING=utf-8 python tests/integration_test.py   # no API calls
 ```
@@ -99,46 +102,50 @@ Success is exit code 0 **and** `PIPELINE COMPLETE`. For frontend work, `npm run 
 
 </details>
 
-## Model provider
+## Matching
 
-Scoring is not tied to one vendor. Set `LLM_PROVIDER` in `.env` or switch it in the UI
-before a run:
+Every scraper stores what the board gives as fields, not text: seniority, work mode,
+contract, schedule, salary, required and nice-to-have skills, languages. Years of experience
+and language requirements are read from the description when a board has no field for them.
 
-| `LLM_PROVIDER` | Key | Default cascade |
+Code drops only certain mismatches: a level two steps above the CV, far more years than the
+CV shows, a required language the CV lacks. Everything else goes to
+[Jev](https://docs.typesafe.ai/), a model that returns typed answers with probabilities
+instead of text. It answers six narrow questions per offer (share of requirements met, how
+close the work is to the CV, level fit, hard blockers, interview chance, whether the offer
+follows the direction the CV points to). `matching/jev.py` turns them into a percentage with
+fixed weights, so the same offer and CV always get the same score.
+
+Scores are cached per offer text and CV. A run scores only new or changed offers; a new CV
+rescores everything.
+
+## CV reader
+
+One LLM call turns the CV into the profile. Set `LLM_PROVIDER` in `.env` or switch it in
+the UI:
+
+| `LLM_PROVIDER` | Key | Default models, first choice first |
 |---|---|---|
-| `gemini` (default) | `GEMINI_API_KEY_PRIMARY` | `gemini-3.1-flash-lite` → `gemini-3.5-flash-lite` → `gemini-3.7-flash` → `gemini-2.5-flash` |
-| `openai` | `OPENAI_API_KEY` | `gpt-6-luna` |
-| `anthropic` | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` → `claude-sonnet-5` |
+| `gemini` (default) | `GEMINI_API_KEY_PRIMARY` | `gemini-3.6-flash` → `gemini-3.5-flash` → `gemini-3.5-flash-lite` → `gemini-2.5-flash` |
+| `openai` | `OPENAI_API_KEY` | `gpt-5.6-terra` → `gpt-6-luna` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5` → `claude-haiku-4-5` |
 
 `openai` speaks the Chat Completions API, so `OPENAI_BASE_URL` points it at any compatible
-server: OpenRouter, Groq, DeepSeek, Mistral, or a local Ollama / LM Studio. Your own cascade
-goes in `GEMINI_MODELS`, `OPENAI_MODELS` or `ANTHROPIC_MODELS`, comma-separated, first choice
-first. Extra keys (`…_1` to `…_4`) rotate when one hits a rate limit.
-
-```bash
-# a local model through Ollama, no API bill
-LLM_PROVIDER=openai
-OPENAI_BASE_URL=http://localhost:11434/v1
-OPENAI_API_KEY=ollama
-OPENAI_MODELS=qwen3:14b
-```
-
-Every provider gets the same prompt and the same JSON schema. Only the Gemini cascade is
-benchmarked against my ratings; run `python benchmark_models.py <model> …` before trusting
-another one.
+server: OpenRouter, Groq, DeepSeek, Mistral, or a local Ollama / LM Studio. Your own list
+goes in `GEMINI_MODELS`, `OPENAI_MODELS` or `ANTHROPIC_MODELS`, comma-separated. Extra keys
+(`…_1` to `…_4`) take over when one hits a rate limit.
 
 ## Design notes
 
-- **A cascade, not one model.** The first model scores the bulk; when it hits a limit or
-  fails, the run moves to the next key, then down the list. `benchmark_models.py` decides
-  the order.
-- **The profile is built from contrasts.** Near-identical offers I rated differently teach the
-  model more than a pile of good examples.
-- **Scores are never silently redone.** Existing scores stay; `--rescore-changed` and
-  `--rescore-all` are explicit, because every rescore costs money.
-- **Stopping is safe.** A stop lands between stages or scoring batches of 75; saved batches
-  are never scored twice.
+- **The CV is the only input.** No hand-written preference profile; city and level for the
+  scrapers come from the CV too.
+- **Narrow questions, fixed formula.** A single "what percent" answer drifts between runs.
+  Separate questions combined in code stay stable, and a weight change is a number in code.
+- **Prefilter errs on the side of keeping.** An offer dropped in code never reaches the
+  list, so only clear mismatches are dropped there.
+- **Stopping is safe.** A stop lands between stages or between scored offers; saved scores
+  are never redone.
 - **The database is JSON files** with atomic writes and backup rotation. Postgres is the
   obvious next step.
-- **Personal data stays local.** Keys live in `.env`; the CV, ratings and decisions are
-  gitignored.
+- **Personal data stays local.** Keys live in `.env`; the CV, its profile, scores, ratings
+  and decisions are gitignored.

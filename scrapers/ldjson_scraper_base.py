@@ -7,10 +7,9 @@ JobPosting, filtry zakresu - jest identyczna, więc siedzi tutaj. To ten sam uk�
 co `candidate_api_base.py`, który w ten sposób obsługuje JustJoin.it i RocketJobs.
 
 Dlaczego strony szczegółów, a nie same listingi: listing daje wyłącznie tytuł i
-link. Opis z ld+json na stronie oferty ma 700-1700 znaków, a przy opisie krótszym
-niż 150 znaków `waterfall_analysis` oznacza ofertę jako [BRAK PEŁNEGO OPISU] i
-ścina jej ocenę do 55%. Bez pobrania szczegółów każda oferta z tych portali
-wpadałaby w ten limit.
+link. Opis z ld+json na stronie oferty ma 700-1700 znaków, a ofertę z opisem
+krótszym niż 150 znaków (i bez listy umiejętności) matching/run.py pomija jako
+`brak_opisu`. Bez pobrania szczegółów każda oferta z tych portali by odpadła.
 """
 
 import logging
@@ -28,7 +27,15 @@ import requests
 from utils.data_models import Job
 from utils.links import canonical_link
 from utils.text_cleaner import strip_html
-
+from utils.offer_fields import (
+    make_salary,
+    norm_contracts,
+    norm_schedules,
+    norm_skills,
+    norm_work_modes,
+    years_from_text,
+)
+from utils.candidate_scope import city_slug, scope_city, scope_levels
 logger = logging.getLogger(__name__)
 
 _LD_JSON_RE = re.compile(
@@ -92,15 +99,25 @@ class LdJsonPortalScraper:
         self.config = config
         cfg = config.get(self.CONFIG_KEY, {}) or {}
         self.cfg = cfg
-        self.location_filter = (cfg.get("location") or config.get("location", "Warszawa")).lower()
+        city = scope_city(default=cfg.get("location") or config.get("location", "Warszawa"))
+        self.city = city
+        self.location_filter = city.lower()
+        self.city_slug = cfg.get("city_slug") or city_slug(city)
         self.max_pages = cfg.get("max_pages", self.DEFAULT_MAX_PAGES)
         self.max_offers = cfg.get("max_offers", self.DEFAULT_MAX_OFFERS)
-        self.skip_senior = cfg.get("skip_senior_titles", True)
+
+        levels = scope_levels()
+        below_senior = not any(lvl in ("senior", "lead", "manager") for lvl in levels)
+        if "skip_senior_titles" in cfg:
+            self.skip_senior = cfg["skip_senior_titles"]
+        else:
+            self.skip_senior = below_senior
+
         # Pomijanie stron szczegółów ofert już znanych bazie. Wyłącz tylko wtedy,
         # gdy chcesz odświeżyć opisy (wtedy i tak potrzebny jest --refresh).
         self.skip_known_details = cfg.get("skip_known_details", True)
         self.seen_again_links = []
-
+        self.enrich_stats = None
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": random.choice(self.USER_AGENTS),
@@ -229,43 +246,77 @@ class LdJsonPortalScraper:
         return ""
 
     @staticmethod
-    def _salary(posting: dict) -> str:
+    def _parse_salary(posting: dict) -> Optional[dict]:
         base = posting.get("baseSalary")
         if not isinstance(base, dict):
-            return ""
+            return None
+        currency = base.get("currency") or "PLN"
         value = base.get("value")
-        currency = base.get("currency") or ""
-        if not isinstance(value, dict):
-            return ""
-        lo, hi, unit = value.get("minValue"), value.get("maxValue"), value.get("unitText") or ""
-        if lo is None and hi is None:
-            lo = value.get("value")
-        parts = []
-        if lo is not None:
-            parts.append(f"od {lo}")
-        if hi is not None:
-            parts.append(f"do {hi}")
-        if not parts:
-            return ""
-        return f"Wynagrodzenie: {' '.join(parts)} {currency} {unit}".strip()
+        lo, hi, unit = None, None, None
+        if isinstance(value, dict):
+            lo = value.get("minValue")
+            hi = value.get("maxValue")
+            unit = value.get("unitText")
+            if lo is None and hi is None:
+                lo = value.get("value")
+        elif isinstance(value, (int, float, str)):
+            lo = value
+            unit = base.get("unitText")
+        else:
+            lo = base.get("minValue")
+            hi = base.get("maxValue")
+            unit = base.get("unitText")
+        return make_salary(min_value=lo, max_value=hi, currency=currency, period=unit)
 
     def _build_job(self, posting: dict, link: str) -> Optional[Job]:
         title = str(posting.get("title") or "").strip()
         if not title:
             return None
 
-        desc_parts = [strip_html(str(posting.get("description") or ""))]
+        description = strip_html(str(posting.get("description") or "")).strip()
 
-        salary = self._salary(posting)
-        if salary:
-            desc_parts.append(salary)
-        if posting.get("employmentType"):
-            et = posting["employmentType"]
-            desc_parts.append(f"Typ zatrudnienia: {', '.join(et) if isinstance(et, list) else et}")
-        if posting.get("industry"):
-            desc_parts.append(f"Branża: {posting['industry']}")
+        salary = self._parse_salary(posting)
 
-        description = "\n".join(p for p in desc_parts if p)
+        et_raw = posting.get("employmentType")
+        if isinstance(et_raw, dict):
+            et_values = list(et_raw.values())
+        elif isinstance(et_raw, list):
+            et_values = et_raw
+        elif et_raw:
+            et_values = [et_raw]
+        else:
+            et_values = []
+
+        contract_types = norm_contracts(et_values)
+        schedules = norm_schedules(et_values)
+
+        work_modes = None
+        jlt = posting.get("jobLocationType")
+        if jlt:
+            work_modes = norm_work_modes(jlt)
+        if not work_modes and ("TELECOMMUTE" in str(jlt or "") or posting.get("applicantLocationRequirements")):
+            work_modes = ["remote"]
+
+        category = str(posting.get("industry") or posting.get("occupationalCategory") or "").strip() or None
+
+        years_required = None
+        exp_req = posting.get("experienceRequirements")
+        if isinstance(exp_req, dict):
+            months = exp_req.get("monthsOfExperience")
+            if months is not None:
+                try:
+                    years_required = int(months) // 12
+                except (ValueError, TypeError):
+                    pass
+        elif isinstance(exp_req, str):
+            years_required = years_from_text(exp_req)
+
+        skills_required = None
+        quals = posting.get("qualifications")
+        if isinstance(quals, list):
+            skills_required = norm_skills(quals)
+        elif isinstance(quals, str):
+            skills_required = norm_skills([q.strip() for q in re.split(r"[,;\n•]+", quals) if q.strip()])
 
         now = datetime.now().isoformat()
         return Job(
@@ -276,10 +327,18 @@ class LdJsonPortalScraper:
             source=self.get_source_name(),
             location=self._location(posting) or None,
             posted_date=str(posting.get("datePosted") or "") or None,
-            # Deklarowana data wygaśnięcia - twardy sygnał martwej oferty
             valid_through=str(posting.get("validThrough") or "") or None,
             scraped_at=now,
             last_seen=now,
+            seniority=None,
+            work_modes=work_modes,
+            contract_types=contract_types,
+            schedules=schedules,
+            salary=salary,
+            skills_required=skills_required,
+            skills_nice=None,
+            category=category,
+            years_required=years_required,
         )
 
     # --- filtry zakresu ------------------------------------------------------
@@ -293,6 +352,9 @@ class LdJsonPortalScraper:
         """
         if self.skip_senior and _SENIOR_TITLE_RE.search(job.title):
             return False
+
+        if job.work_modes and "remote" in job.work_modes:
+            return True
 
         haystack = f"{job.location or ''} {job.title}"
         if self.location_filter in haystack.lower():
@@ -439,4 +501,10 @@ class LdJsonPortalScraper:
                 f"JobPosting in ld+json - check whether the board changed its structure"
             )
 
+        self.enrich_stats = {
+            "ok": len(links) - no_ldjson,
+            "error": no_ldjson,
+            "blocked": 0,
+            "ze_stanu": len(self.seen_again_links),
+        }
         return jobs

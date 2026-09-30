@@ -43,58 +43,50 @@ SCRAPER_CONFIG = {
     # Filtry poziomu wejściowego - osobne dla każdego portalu
     # Pracuj.pl: pięć poziomów doświadczenia daje ok. 4374 oferty
     "pracuj_pl": {
-        # Kody poziomu doświadczenia (parametr et)
-        "experience_levels": [2, 3, 4, 5, 6],  
-        # 2 = Praktykant/stażysta (146)
-        # 3 = Asystent (572)
-        # 4 = Młodszy specjalista/Junior (1719)
-        # 5 = Menedżer (707)
-        # 6 = Pracownik fizyczny (1421)
-        # Razem: ok. 4374 oferty
+        # Dni wstecz (parametr itth). Poziomy doświadczenia (parametr et)
+        # i miasto wyznacza teraz CV przez utils.candidate_scope (scope_levels, scope_city).
+        # Zweryfikowane na żywo kody et:
+        # 1 = Praktykant / Stażysta (intern)
+        # 3 = Asystent (junior)
+        # 17 = Młodszy specjalista / Junior (junior)
+        # 4 = Specjalista / Mid / Regular (mid)
+        # 18 = Starszy specjalista / Senior (senior)
+        # 19 = Ekspert (senior)
+        # 5 = Kierownik / Koordynator (lead, manager)
+        # 20 = Menedżer (manager)
+        # 6 = Dyrektor (manager)
+        # 21 = Prezes (manager)
+        # 2 = Pracownik fizyczny
         "days_param": 7,  # itth=7, czyli ostatnie 7 dni
     },
     
     "olx_praca": {
-        # OLX ma tylko jeden filtr doświadczenia: bez doświadczenia
-        # Bez zawężania kategorii - bierzemy wszystko dla początkujących
-        "experience_filter": "bez-doswiadczenia",
-        "location": "warszawa",
+        # Zakres (miasto i filtr poziomu) wyznaczany przez CV (utils/candidate_scope.py).
+        # bez-doswiadczenia włączane tylko gdy poziomy to wyłącznie intern/junior.
         "radius": "15",  # +15 km
     },
     
     "linkedin": {
-        # LinkedIn: filtr poziomu doświadczenia (parametr f_E)
-        "experience_levels": ["1", "2"],  # 1 = staż, 2 = poziom podstawowy
+        # Zakres (miasto i filtr f_E) wyznaczany przez CV (utils/candidate_scope.py).
         "job_types": ["F", "P"],  # F = pełny etat, P = część etatu
     },
     
     # RocketJobs i JustJoin.it dzielą to samo candidate-api.
-    # Jedyne prawidłowe wartości experienceLevels to: junior, mid, senior, intern.
-    # ("staz", "asystent", "trainee", "entry" zwracają 0 wyników - nie zmieniaj bez sprawdzenia.)
-    "rocketjobs": {
-        "location": "warszawa",
-        "experience_levels": ["junior", "intern"],
-    },
+    # Zakres (miasto i poziomy) wyznaczany przez CV (utils/candidate_scope.py).
+    # Candidate-api akceptuje wyłącznie: intern, junior, mid, senior.
+    "rocketjobs": {},
 
-    "nofluffjobs": {
-         "location": "warszawa",
-         "criteria": "seniority=trainee,junior"
-    },
+    # NoFluffJobs: zakres wyznaczany przez CV (utils/candidate_scope.py).
+    # criteriaSearch.seniority: trainee, junior, mid, senior, expert, lead.
+    "nofluffjobs": {},
 
-    # SOLID.Jobs zwraca oferty z całej Polski i wszystkich poziomów.
-    # Bez filtra ~750 ofert trafiało do analizy, z czego 31% seniorskich
-    # i tylko ~2% juniorskich - przy medianie opisu 3800 znaków.
+    # SOLID.Jobs: zakres wyznaczany przez CV (utils/candidate_scope.py).
     # experienceLevel w API: Intern / Junior / Regular / Senior
     "solid_jobs": {
-         "location": "warszawa",
-         "experience_levels": ["Junior", "Intern", "Trainee"],
          "keep_unknown_level": True,   # oferty bez podanego poziomu zostawiamy
     },
 
-    "justjoinit": {
-         "location": "warszawa",
-         "experience_levels": ["junior", "intern"],
-    },
+    "justjoinit": {},
 
     # === Portale ogólne (nie-IT) ===
     # Wspólna baza: scrapers/ldjson_scraper_base.py - listing daje linki,
@@ -106,26 +98,20 @@ SCRAPER_CONFIG = {
     # że kolejne pobierają strony wyłącznie NOWYCH ofert, a reszta listingu
     # kosztuje jedynie pobranie samych stron listingu.
     "praca_pl": {
-        "location": "warszawa",
         "max_pages": 35,
         "max_offers": 2500,
-        "skip_senior_titles": True,
     },
 
     "aplikuj": {
-        "location": "warszawa",
         "max_pages": 100,
         "max_offers": 6000,
-        "skip_senior_titles": True,
         # Kategorie tematyczne dobierane po wyczerpaniu listingu miejskiego
         "extra_paths": ["staz", "przy-komputerze"],
     },
 
     "gowork": {
-        "location": "warszawa",
         "max_pages": 100,
         "max_offers": 5000,
-        "skip_senior_titles": True,
     },
 
     # Indeed jest z założenia niskonakładowy - paginacja jest za ścianą logowania,
@@ -141,11 +127,19 @@ SCRAPER_CONFIG = {
     # Gdy znowu przepuści, wystarczy "enabled": True.
     "indeed": {
         "enabled": False,
-        "location": "Warszawa",
-        "keywords": ["junior", "praktykant", "asystent"],
         "max_offers_per_keyword": 15,
         "pause_between_keywords": (45, 75),
         "fetch_descriptions": True,
+    },
+    
+    # === Feedy ATS (Greenhouse, Lever, Ashby, SmartRecruiters, Recruitee, Teamtailor, Workable) ===
+    "ats_feeds": {
+        "enabled": True,
+        "max_slugs_per_run": 150,      # Budżet firm (slugów) na pojedynczy przebieg
+        "time_budget_seconds": 180,    # Górny limit czasu pracy scrapera ATS (s)
+        "request_timeout": 8,
+        "max_workers": 8,
+        "delay_between_requests": 0.05,
     },
     
     # === API Scraper Keys (passed to scrapers via config dict) ===

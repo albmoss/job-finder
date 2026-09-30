@@ -1,7 +1,7 @@
 """
 Bezpieczny zapis JSON: atomowy + rotacyjne backupy.
 
-Powód: user_decisions.json i preference_profile.json to dane, których NIE DA SIĘ
+Powód: user_decisions.json i rated_archive.json to dane, których NIE DA SIĘ
 odtworzyć (setki ręcznych ocen). Zapis wprost do pliku oznacza, że przerwanie
 procesu w trakcie writeu zostawia obcięty/pusty plik i dane przepadają.
 """
@@ -21,15 +21,16 @@ BACKUP_DIR_NAME = "backups"
 DEFAULT_KEEP = 10
 
 # Głębokość historii zależy od tego, czy plik da się odtworzyć.
-# jobs_database.json i analyzed_jobs_waterfall.json odtwarza pipeline, a ważą
-# po ~30 MB i są przepisywane przez cztery etapy każdego przebiegu - dziesięć
-# pokoleń każdego z nich to ponad pół giga kopii danych, które i tak umie
+# jobs_database.json i match_results.json odtwarza pipeline, a baza waży ~30 MB
+# i jest przepisywana przez kilka etapów każdego przebiegu - dziesięć
+# pokoleń to setki MB kopii danych, które i tak umie
 # wyprodukować `run_final_pipeline.py`. Zostawiamy poprzednią wersję (jest po co
 # cofnąć nieudany etap) i na tym koniec. Reszta - z user_decisions.json na czele -
 # trzyma pełne dziesięć, bo tych danych nie odtworzy nic.
 REGENERABLE_KEEP = 2
 _KEEP_BY_NAME = {
     "jobs_database.json": REGENERABLE_KEEP,
+    "match_results.json": REGENERABLE_KEEP,
 }
 
 

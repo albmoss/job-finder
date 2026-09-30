@@ -17,7 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("TokenDiet")
 
-def reduce_file(filepath, is_analyzed=False):
+def reduce_file(filepath):
     path = Path(filepath)
     if not path.exists():
         logger.warning(f"File not found: {path}")
@@ -34,28 +34,16 @@ def reduce_file(filepath, is_analyzed=False):
     zmienione = 0
     final_chars = 0
     
-    if is_analyzed:
-        for item in data:
-            orig_desc = item['job'].get('description', '') or ''
-            initial_chars += len(orig_desc)
-            
-            cleaned = clean_job_description(orig_desc)
-            if cleaned != orig_desc:
-                zmienione += 1
-            item['job']['description'] = cleaned
+    for item in data:
+        orig_desc = item.get('description', '') or ''
+        initial_chars += len(orig_desc)
 
-            final_chars += len(cleaned)
-    else:
-        for item in data:
-            orig_desc = item.get('description', '') or ''
-            initial_chars += len(orig_desc)
-            
-            cleaned = clean_job_description(orig_desc)
-            if cleaned != orig_desc:
-                zmienione += 1
-            item['description'] = cleaned
+        cleaned = clean_job_description(orig_desc)
+        if cleaned != orig_desc:
+            zmienione += 1
+        item['description'] = cleaned
 
-            final_chars += len(cleaned)
+        final_chars += len(cleaned)
 
     # Zapis tylko wtedy, gdy cokolwiek faktycznie sie zmienilo. Przy juz
     # przyciętej bazie ten etap przepisywał 64 MB i robił do tego kopię
@@ -77,13 +65,7 @@ def reduce_file(filepath, is_analyzed=False):
 
 def run():
     logger.info("Starting Token Diet Procedure...")
-    
-    # 1. Oferty z ocenami
-    reduce_file("analyzed_jobs_waterfall.json", is_analyzed=True)
-    
-    # 2. Surowa baza
-    reduce_file("jobs_database.json", is_analyzed=False)
-    
+    reduce_file("jobs_database.json")
     logger.info("Token Diet Complete. Ready for efficient analysis.")
 
 if __name__ == "__main__":

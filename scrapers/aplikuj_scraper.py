@@ -32,7 +32,7 @@ class AplikujScraper(LdJsonPortalScraper):
 
     def __init__(self, config: dict):
         super().__init__(config)
-        self.city_slug = self.cfg.get("city_slug", self.location_filter)
+        self.city_slug = self.cfg.get("city_slug") or self.city_slug
         # Ścieżki kategorii doklejane po wyczerpaniu listingu głównego,
         # np. ["staz", "przy-komputerze", "umowa-zlecenie"]
         self.extra_paths: List[str] = self.cfg.get("extra_paths", ["staz"])

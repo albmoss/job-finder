@@ -8,8 +8,6 @@ export interface Stats {
   applications_stale: number;
   /** ISO czasu wygenerowania profilu preferencji; null, gdy profilu nie ma. */
   profile_generated_at: string | null;
-  /** Decyzje nowe, zmienione albo cofnięte od ostatniego profilu — ocena AI ich jeszcze nie zna. */
-  profile_new_decisions: number;
 }
 
 export type StageStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
@@ -38,33 +36,27 @@ export interface SourceTelemetry {
 export interface ScoringTelemetry {
   total: number | null;
   processed: number;
-  batch: number;
-  /** Ofert w paczce („Target Batch Size” z waterfall_analysis). */
-  batch_size?: number | null;
-  remaining: number | null;
-  model: string | null;
-  key?: number | null;
-  key_count?: number | null;
-  cooldowns?: Record<string, number>;
-  /** Start pierwszej paczki i koniec ostatniej udanej (epoch s) — tempo do ETA. */
+  /** Etap dopasowania: odrzucone przez przesiew, do oceny, ocenione, tempo (ofert/s). */
+  prefilter_rejected?: number | null;
+  to_score?: number | null;
+  scored?: number | null;
+  rate?: number | null;
+  /** Pierwszy i ostatni meldunek postępu oceny (epoch s) — tempo do ETA. */
   first_batch_at?: number | null;
   last_done_at?: number | null;
 }
-
 /** Liczby etapów porządkowych, sparsowane z logu przebiegu. */
 export interface StageStats {
   phase0?: { removed: number };
   phase1_5?: { links: number; merged: number };
   phase2?: { removed: number };
   phase2_5?: { chars_before: number; chars_after: number };
+  phase3?: { prefilter_rejected?: number; to_score?: number; scored?: number; total?: number; rate?: number };
 }
-
 export interface PipelineTelemetry {
   sources: SourceTelemetry[];
   scoring: ScoringTelemetry | null;
   stages?: StageStats;
-  /** Liczba kluczy API znana od startu przebiegu. */
-  key_count?: number | null;
 }
 
 export type PipelineStatus = 'idle' | 'running' | 'stopping' | 'stopped' | 'failed' | 'completed';
@@ -143,11 +135,6 @@ export interface OffersResponse {
   gap_threshold: number | null;
 }
 
-/** Lista zawężona do ofert z brakiem `skill` (ten sam próg co w panelu braków). */
-export interface GapFilter {
-  skill: string;
-  threshold: number;
-}
 
 /** Następny krok aplikacji; `due` "YYYY-MM-DD HH:MM" albo sam dzień. */
 export interface NextStep {
@@ -162,6 +149,34 @@ export interface DescriptionBlock {
 }
 
 
+export interface SalaryInfo {
+  min: number | null;
+  max: number | null;
+  currency: string;
+  period: string;
+  gross: boolean | null;
+  contract?: string | null;
+}
+
+export interface LanguageRequirement {
+  name: string;
+  level?: string | null;
+  required?: boolean | null;
+}
+
+export interface OfferFields {
+  seniority?: string[] | null;
+  work_modes?: string[] | null;
+  contract_types?: string[] | null;
+  schedules?: string[] | null;
+  salary?: SalaryInfo | null;
+  languages?: LanguageRequirement[] | null;
+  years_required?: number | null;
+  skills_required?: string[] | null;
+  skills_nice?: string[] | null;
+  category?: string | null;
+}
+
 export interface OfferDetail {
   link: string;
   title: string;
@@ -172,11 +187,7 @@ export interface OfferDetail {
   is_gone: boolean;
   work_mode: string;
   match_percentage: number | null;
-  reason: string | null;
-  industry: string | null;
-  is_entry_level: boolean;
-  learnable_in_month: boolean;
-  missing_skills: string[];
+  fields: OfferFields;
   description_blocks: DescriptionBlock[];
   raw_description: string;
   status: string | null;
@@ -187,10 +198,7 @@ export interface OfferDetail {
   dot_color: string | null;
   dot_label: string | null;
   next_step: NextStep | null;
-  /** Hasła streszczające ofertę; puste dla ofert ocenionych przed dodaniem pola. */
-  highlights: string[];
 }
-
 export interface ActivityRow {
   timestamp: string;
   time_str: string;
@@ -215,22 +223,6 @@ export interface RecentDecision {
 export interface ActivityResponse {
   activity_rows: ActivityRow[];
   recent_decisions: RecentDecision[];
-}
-
-export interface SkillGapRow {
-  skill: string;
-  /** Liczba różnych ofert z tym brakiem — tyle pokaże lista po „Pokaż N ofert”. */
-  offers: number;
-  mean_match: number;
-  width_pct: number;
-}
-
-export interface SkillGapsResponse {
-  threshold: number;
-  rows: SkillGapRow[];
-  considered: number;
-  skipped: number;
-  total_gaps: number;
 }
 
 export interface CVInfo {
