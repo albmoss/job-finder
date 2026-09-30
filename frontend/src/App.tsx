@@ -325,7 +325,7 @@ export const App: React.FC = () => {
   // treść czeka rozmyta na dane (oferty, oferta otwierana razem z widokiem, dane narzędzia)
   // i wyostrza się; klasy w base.css. Z klawiatury podmiana jest natychmiastowa.
   const [pendingView, setPendingView] = useState<string | null>(null);
-  // Widok narzędzia (tablica, braki) sam pobiera dane i zgłasza koniec przez onReady.
+  // Widok narzędzia (tablica aplikacji) sam pobiera dane i zgłasza koniec przez onReady.
   const [loadingTool, setLoadingTool] = useState(false);
   const onToolReady = useCallback(() => setLoadingTool(false), []);
   const viewSwap = useBlurSwap(loadingOffers || loadingDetail || loadingTool);
@@ -727,8 +727,6 @@ export const App: React.FC = () => {
         open={isSheetOpen}
         onClose={() => setIsSheetOpen(false)}
         pipeline={pipeline}
-        activityRows={activityRows}
-        stats={stats}
         onStop={stopPipeline}
         onForceStop={() => runPipelineAction(api.forceStopPipeline, 'Błąd wymuszenia zatrzymania', false)}
         onResume={resumePipeline}

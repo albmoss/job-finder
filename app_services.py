@@ -5,6 +5,7 @@ Niezależna warstwa usługowa dla backendu HTTP.
 
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ from utils.data_models import JobDatabase, Job, JobMatch
 from utils.text_cleaner import detect_work_mode, strip_html
 from utils.safe_io import save_json_atomic, load_json_safe
 from utils.links import canonical_link
+from utils.candidate_scope import load_profile
 from utils.liveness import zdjete_z_portalu
 from utils.offer_fields import STRUCTURED_FIELDS
 import ui_theme
@@ -34,21 +36,6 @@ SCRAPER_STATUS_PATH = Path("scraper_status.json")
 
 DECIDED_STATUSES = frozenset({"reject", "save", "apply", "rated", "aspirational"})
 
-WS_TABS = ["Dopasowane", "Wszystkie", "Ocenione", "Zapisane", "Aspiracyjne", "Odrzucone"]
-WS_TOOLS = ["Uruchom pipeline", "Dodaj z linku"]
-WS_ALL = WS_TABS + WS_TOOLS
-
-WS_TAB_HINT = {
-    "Dopasowane": "ocenione przez AI, jeszcze nietknięte przez Ciebie",
-    "Wszystkie": "cała baza prosto ze skraperów",
-    "Ocenione": "wystawiłeś ocenę i zostawiłeś na później",
-    "Zapisane": "zapisane oraz te, gdzie aplikacja już poszła",
-    "Aspiracyjne": "za wysoko na teraz, ale w tę stronę celujesz",
-    "Odrzucone": "odrzucone - profil uczy się, czego nie chcesz",
-    "Uruchom pipeline": "konfiguracja CV i kluczy, uruchomienie pełnego pipeline'u oraz postęp na żywo",
-    "Dodaj z linku": "wklej adres oferty; po lewej podgląd tego, co wpadnie do bazy",
-    "Panel sterowania": "konfiguracja CV i kluczy, uruchomienie pełnego pipeline'u oraz postęp na żywo",
-}
 
 WS_STAGE_NAMES = {
     "save": "Zapisane",
@@ -541,7 +528,7 @@ class JobDataService:
             }
 
     def ws_collect(
-        self, tab: str, search: str = "", gap: Optional[str] = None, gap_threshold: int = 50
+        self, tab: str, search: str = ""
     ) -> List[Tuple[Job, Optional[JobMatch], Optional[str], Optional[int]]]:
         with self._lock:
             self.ensure_loaded()
@@ -617,6 +604,10 @@ class JobDataService:
             status, rating, stage, decided_at, applied_at = self.get_decision(job.link)
 
             pct = int(match.match_percentage) if match and match.match_percentage is not None else None
+            # Powód odrzucenia przez przesiew (matching/prefilter.py) - oferta oceniona,
+            # tylko bez procentu; karta nie może wtedy mówić, że czeka na ocenę.
+            result = self.match_results.get(canonical_link(job.link)) or self.match_results.get(job.link)
+            filtered = result.get("filtered") if isinstance(result, dict) and pct is None else None
 
             stage_norm = WS_STAGE_LEGACY.get(stage, stage)
             if stage_norm not in WS_STAGE_NAMES:
@@ -640,6 +631,7 @@ class JobDataService:
                 "is_gone": job.link in self.zdjete,
                 "work_mode": work_mode["label"],
                 "match_percentage": pct,
+                "filtered": filtered,
                 "fields": {
                     "seniority": getattr(job, "seniority", None),
                     "work_modes": getattr(job, "work_modes", None),
@@ -784,6 +776,24 @@ def get_cv_info() -> Dict[str, Any]:
         "filename": filename,
         "pdf_exists": cv_pdf_path.exists(),
         "txt_exists": cv_txt_path.exists(),
+        "profile": _profile_summary(text),
+    }
+
+
+def _profile_summary(cv: str) -> Optional[Dict[str, Any]]:
+    """Profil kandydata z CV (utils/cv_profile.py) w skrócie dla okna uruchomienia:
+    wyznacza zakres scrapowania i przesiew. `current` = policzony z bieżącego CV;
+    inaczej pipeline przeliczy go na starcie."""
+    profile = load_profile()
+    if not profile:
+        return None
+    sha = (profile.get("_metadata") or {}).get("cv_sha256")
+    return {
+        "city": profile.get("city"),
+        "seniority": profile.get("seniority"),
+        "years": profile.get("years_experience"),
+        "skills": len(profile.get("skills") or []),
+        "current": bool(cv) and sha == hashlib.sha256(cv.encode("utf-8")).hexdigest(),
     }
 
 
@@ -1011,11 +1021,18 @@ def check_pipeline_prerequisites() -> Dict[str, Any]:
     api_info = get_api_keys_info()
     db_count = len(job_data_service.raw_jobs)
     pw_ok, pw_msg = check_playwright_chromium()
+    # Jev (TypeSafe) ocenia oferty i wybiera kategorie portali - bez klucza etap 3 pada.
+    jev_ready = bool((os.environ.get("TYPESAFE_API_KEY") or _read_env_file().get("TYPESAFE_API_KEY") or "").strip())
+    # Model z LLM_PROVIDER czyta tylko CV; przy aktualnym profilu przebieg go nie woła.
+    profile = cv_info.get("profile")
+    llm_needed = not (profile and profile.get("current"))
 
     issues = []
     if not cv_info["ready"]:
-        issues.append("Brak aktywnego CV (dodaj plik lub wklej treść w lewym panelu).")
-    if not api_info["ready"]:
+        issues.append("Brak CV. Dodaj plik albo wklej treść w wierszu „CV”.")
+    if not jev_ready:
+        issues.append("Brak klucza TYPESAFE_API_KEY, bez którego Jev nie oceni ofert.")
+    if llm_needed and not api_info["ready"]:
         issues.append(api_info["error"])
 
     ready_skip = len(issues) == 0 and db_count > 0
@@ -1036,6 +1053,8 @@ def check_pipeline_prerequisites() -> Dict[str, Any]:
         "issues_skip": issues_skip,
         "cv_ready": cv_info["ready"],
         "api_ready": api_info["ready"],
+        "jev_ready": jev_ready,
+        "llm_needed": llm_needed,
         "playwright_ready": pw_ok,
         "playwright_msg": pw_msg,
         "db_count": db_count,

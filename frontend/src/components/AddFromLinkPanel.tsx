@@ -144,6 +144,7 @@ export const AddFromLinkPanel: React.FC<AddFromLinkPanelProps> = ({
       is_gone: false,
       work_mode: '',
       match_percentage: null,
+      filtered: null,
       fields: {},
       description_blocks: blocks,
       raw_description: draft.description,

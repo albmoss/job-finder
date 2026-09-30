@@ -12,10 +12,11 @@ import {
   XOctagon,
   ChevronDown,
 } from 'lucide-react';
-import type { ActivityRow, PipelineState, Stats } from '../types';
+import type { PipelineState } from '../types';
 import { Stream } from './ui/Stream';
-import { OFFERS, plural } from '../plural';
+import { ERRORS, OFFERS, plural } from '../plural';
 import {
+  PREFILTER_LABELS,
   SHEET_STREAM_LOOP,
   STAGE_SHORT_NAMES,
   calculateOverallPipelineProgress,
@@ -24,6 +25,8 @@ import {
   formatDuration,
   parseLogLine,
   pipelineStatus,
+  runLabel,
+  scoringEtaSeconds,
   stageDuration,
   useNowSeconds,
 } from '../pipeline';
@@ -33,8 +36,6 @@ export interface PipelineSheetProps {
   open: boolean;
   onClose(): void;
   pipeline: PipelineState | null;
-  activityRows: ActivityRow[];
-  stats: Stats | null;
   onStop(): void;
   onForceStop(): void;
   onResume(): void;
@@ -47,8 +48,6 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
   open,
   onClose,
   pipeline,
-  activityRows: _activityRows,
-  stats: _stats,
   onStop,
   onForceStop,
   onResume,
@@ -171,6 +170,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
     const end = pipeline.finished_at ?? nowSec;
     return formatDuration(end - pipeline.started_at);
   }, [pipeline?.started_at, pipeline?.finished_at, nowSec]);
+  const elapsedWord = isRunning || isStopping ? 'trwa' : 'trwał';
 
   const startTimeStr = formatClock(pipeline?.started_at);
 
@@ -192,12 +192,13 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
   const stageCols = useMemo(() => {
     return STAGE_SHORT_NAMES.map((name, idx) => {
       const stage = stages[idx];
+      const isSkipped = stage?.status === 'skipped';
       // Bez biegnącego etapu „bieżący” jest tylko tam, gdzie przebieg stanął (błąd, stop).
       const isCur = currentStageIdx === idx
         || (currentStageIdx === -1 && (isStopping || isFailed || isStopped) && pipeline?.current_stage_idx === idx);
-      const isDone = stage?.status === 'done' || stage?.status === 'skipped' || isCompleted;
+      const isDone = stage?.status === 'done' || (isCompleted && !isSkipped);
       const isWait = !isCur && !isDone;
-      const stateWord = isDone ? 'gotowe' : isCur ? 'w toku' : 'czeka';
+      const stateWord = isSkipped ? 'pominięte' : isDone ? 'gotowe' : isCur ? 'w toku' : 'czeka';
 
       const dur = stage ? stageDuration(stage, nowSec) : null;
       const durStr = dur !== null ? formatDuration(dur) : null;
@@ -208,7 +209,11 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
       let hasMetric = true;
       const totalFound = sources.reduce((acc, s) => acc + (s.found ?? 0), 0);
       const diet = stageStats?.phase2_5;
-      if (idx === 1 && totalFound > 0) {
+      const evaluation = stageStats?.phase4;
+      if (isSkipped) {
+        topVal = '—';
+        hasMetric = false;
+      } else if (idx === 1 && totalFound > 0) {
         topVal = totalFound.toLocaleString('pl-PL');
         subVal = 'ofert';
       } else if (stage?.id === 'phase0' && stageStats?.phase0) {
@@ -226,21 +231,21 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
         const pct = Math.round(((diet.chars_before - diet.chars_after) / diet.chars_before) * 100);
         topVal = pct > 0 ? `−${pct}%` : '0%';
         subVal = 'znaków opisu';
-      } else if (idx === 5) {
-        const scored = scoring?.scored ?? scoring?.processed ?? stageStats?.phase3?.scored ?? 0;
-        const total = scoring?.to_score ?? scoring?.total ?? stageStats?.phase3?.total;
-        const rate = scoring?.rate ?? stageStats?.phase3?.rate;
-        const prefilterRejected = scoring?.prefilter_rejected ?? stageStats?.phase3?.prefilter_rejected ?? null;
-        if (total || scored > 0) {
-          topVal = scored.toLocaleString('pl-PL');
-          const rateStr = rate ? ` · ${rate.toFixed(1)}/s` : '';
-          subVal = total ? `z ${total.toLocaleString('pl-PL')}${rateStr}` : 'dopasowanych';
-        } else if (prefilterRejected !== null && prefilterRejected > 0) {
-          topVal = `−${prefilterRejected.toLocaleString('pl-PL')}`;
-          subVal = 'z prefiltru';
-        } else {
-          hasMetric = false;
-        }
+      } else if (stage?.id === 'phase3' && scoring?.to_score) {
+        topVal = scoring.scored.toLocaleString('pl-PL');
+        subVal = `z ${scoring.to_score.toLocaleString('pl-PL')}`;
+      } else if (stage?.id === 'phase3' && scoring?.to_score === 0) {
+        topVal = '0';
+        subVal = 'nowych do oceny';
+      } else if (stage?.id === 'phase4' && evaluation?.rho !== undefined) {
+        // Spearman: czy wyższy % dopasowania idzie w parze z wyższą ręczną oceną.
+        topVal = `${evaluation.rho >= 0 ? '+' : '−'}${Math.abs(evaluation.rho).toFixed(2).replace('.', ',')}`;
+        subVal = 'zgodność z ocenami';
+      } else if (stage?.id === 'phase4' && evaluation?.insufficient) {
+        topVal = '—';
+        subVal = 'za mało ocen';
+      } else {
+        hasMetric = false;
       }
 
       return {
@@ -308,12 +313,16 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
     : undefined;
   const runningSources = isRunning ? sources.filter((s) => s.state === 'running') : [];
   const detailed = runningSources.find((s) => s.details_total);
+  const scrapingSkipped = stages[1]?.status === 'skipped';
   let sourcesBig = `${sourcesFound.toLocaleString('pl-PL')} ${plural(sourcesFound, OFFERS)}`;
   let sourcesSmall = 'łącznie ze wszystkich źródeł';
   if (detailed) {
     sourcesBig = `${detailed.name}: opisy ${(detailed.details_done ?? 0).toLocaleString('pl-PL')} / ${(detailed.details_total ?? 0).toLocaleString('pl-PL')}`;
   } else if (runningSources.length) {
     sourcesBig = `W toku: ${runningSources.map((s) => s.name).join(', ')}`;
+  } else if (!sources.length) {
+    sourcesBig = scrapingSkipped ? 'Bez pobierania' : 'Czeka na pobieranie';
+    sourcesSmall = scrapingSkipped ? 'ten przebieg ocenia oferty z bazy' : 'kafelek = źródło ofert';
   }
   if (runningSources.length) {
     sourcesSmall = sourcesDone > 0
@@ -321,16 +330,29 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
       : 'zbieranie list ofert';
   }
 
-  // Telemetria dopasowania (prefiltr + Jev)
-  const prefilterRejected =
-    scoring?.prefilter_rejected ??
-    stageStats?.phase3?.prefilter_rejected ??
-    null;
-  const scoredCount = scoring?.scored ?? scoring?.processed ?? stageStats?.phase3?.scored ?? 0;
-  const toScore = scoring?.to_score ?? scoring?.total ?? stageStats?.phase3?.total ?? null;
-  const rateVal = scoring?.rate ?? stageStats?.phase3?.rate ?? null;
-  // Pulse dla Stream
-  const batchPulse = scoring?.scored ?? scoring?.processed ?? 0;
+  // Dopasowanie: przesiew w kodzie (powody) + ocena Jev (postęp, tempo, błędy).
+  const matchStage = stages[5];
+  const toScore = scoring?.to_score ?? null;
+  const scoredCount = scoring?.scored ?? 0;
+  const scoringPct = toScore ? Math.min(100, Math.round((scoredCount / toScore) * 100)) : null;
+  const scoringEta = isRunning ? scoringEtaSeconds(scoring, nowSec) : null;
+  // Obok paska oceny: czas do końca w trakcie, potem tempo; liczby ocenionych są niżej.
+  const meterAside = scoringEta !== null
+    ? `~${formatDuration(scoringEta)}`
+    : scoring?.rate ? `${scoring.rate.toLocaleString('pl-PL', { maximumFractionDigits: 1 })}/s` : '';
+  const reasons = Object.entries(scoring?.prefilter_reasons ?? {})
+    .filter(([, n]) => (n ?? 0) > 0)
+    .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0)) as Array<[keyof typeof PREFILTER_LABELS, number]>;
+  const jevErrors = scoring?.errors ?? 0;
+  const withPercent = stageStats?.phase3?.with_percent;
+  let matchBig = 'Czeka na etap dopasowania';
+  if (matchStage?.status === 'skipped') matchBig = 'Pominięte w tym przebiegu';
+  else if (toScore === 0) matchBig = 'Nic nowego do oceny';
+  else if (toScore) matchBig = `${scoredCount.toLocaleString('pl-PL')} z ${toScore.toLocaleString('pl-PL')} ocenionych`;
+  else if (matchStage?.status === 'running') matchBig = 'Przesiew ofert…';
+  let matchSmall = 'przesiew w kodzie, ocena Jev';
+  if (jevErrors > 0) matchSmall = `${jevErrors.toLocaleString('pl-PL')} ${plural(jevErrors, ERRORS)} Jev`;
+  else if (withPercent !== undefined) matchSmall = `z procentem w bazie: ${withPercent.toLocaleString('pl-PL')}`;
 
   return (
     <>
@@ -359,7 +381,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
             <span>
               {isIdle
                 ? 'spoczynek · oczekiwanie na start'
-                : `pełny przebieg · start ${startTimeStr} · trwa ${elapsedStr}`}
+                : `${runLabel(pipeline)} · start ${startTimeStr} · ${elapsedWord} ${elapsedStr}`}
             </span>
           </div>
 
@@ -375,8 +397,8 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
                 type="button"
                 className="pp-round press"
                 onClick={onStop}
-                data-tip="Wstrzymaj po paczce"
-                aria-label="Zatrzymaj po paczce"
+                data-tip="Zatrzymaj po bieżącym etapie"
+                aria-label="Zatrzymaj po bieżącym etapie"
               >
                 <Pause size={16} />
               </button>
@@ -393,7 +415,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
           )}
 
           {isStopping && (
-            <button type="button" className="pp-round" disabled aria-label="Kończę paczkę…">
+            <button type="button" className="pp-round" disabled aria-label="Kończę bieżący etap…">
               <Loader2 size={16} className="pp-spin" />
             </button>
           )}
@@ -428,7 +450,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
           <div className="pp-band">
             <Stream
               progress={isIdle ? 0 : progress}
-              pulse={batchPulse}
+              pulse={scoredCount}
               loop={isRunning ? SHEET_STREAM_LOOP : undefined}
               depth={0.552}
               width={26}
@@ -484,57 +506,50 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
             </div>
           </div>
 
-          {/* Karta 2: Dopasowanie (prefiltr + Jev) */}
+          {/* Karta 2: Dopasowanie — przesiew w kodzie, potem ocena Jev */}
           <div className="pp-card">
             <div className="h">
               <b>Dopasowanie</b>
-              <span>{toScore ? `${scoredCount} / ${toScore}` : (isRunning && currentStageIdx === 5 ? 'w toku' : '—')}</span>
+              <span>{scoringPct !== null ? `${scoringPct}%` : '—'}</span>
             </div>
 
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 10 }}>
-              {toScore && toScore > 0 ? (
-                <>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--ink-2)' }}>
-                    <span>Postęp punktacji</span>
-                    <span className="tnum">{Math.round((scoredCount / toScore) * 100)}%</span>
+            <div className="pp-match">
+              {toScore ? (
+                <div className="pp-meter">
+                  <div className="pp-meter-head">
+                    <span>Ocena Jev</span>
+                    <span className="tnum">{meterAside}</span>
                   </div>
-                  <div style={{ height: 6, borderRadius: 3, background: 'rgba(255, 255, 255, 0.06)', overflow: 'hidden' }}>
-                    <div
-                      style={{
-                        height: '100%',
-                        width: `${Math.min(100, Math.round((scoredCount / toScore) * 100))}%`,
-                        background: 'var(--accent)',
-                        borderRadius: 3,
-                        transition: 'width 0.3s ease',
-                      }}
-                    />
+                  <div className="pp-meter-track">
+                    <i style={{ width: `${scoringPct}%` }} />
                   </div>
-                </>
-              ) : (
-                <div className="hint">
-                  {prefilterRejected !== null
-                    ? `Prefiltr odrzucił ${prefilterRejected.toLocaleString('pl-PL')} ofert`
-                    : 'Prefiltr regułowy + punktacja Jev'}
                 </div>
-              )}
+              ) : null}
+              {reasons.length > 0 ? (
+                <div className="pp-reasons">
+                  <div className="pp-meter-head">
+                    <span>Przesiew odrzucił</span>
+                    <span className="tnum">{(scoring?.prefilter_rejected ?? 0).toLocaleString('pl-PL')}</span>
+                  </div>
+                  <dl>
+                    {reasons.map(([reason, n]) => (
+                      <div key={reason}>
+                        <dt>{PREFILTER_LABELS[reason] ?? reason}</dt>
+                        <dd className="tnum">{n.toLocaleString('pl-PL')}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              ) : !toScore ? (
+                <div className="hint">
+                  Przesiew w kodzie odrzuca pewne niedopasowania (miasto, poziom, lata, język), Jev ocenia resztę względem CV.
+                </div>
+              ) : null}
             </div>
 
             <div>
-              <div className="big">
-                {toScore
-                  ? `${scoredCount.toLocaleString('pl-PL')} z ${toScore.toLocaleString('pl-PL')}` +
-                    (rateVal ? ` (${rateVal.toFixed(1)}/s)` : '')
-                  : scoredCount > 0
-                    ? `${scoredCount.toLocaleString('pl-PL')} dopasowanych`
-                    : isRunning && currentStageIdx === 5
-                      ? 'Punktowanie ofert w toku…'
-                      : 'Czeka na etap dopasowania'}
-              </div>
-              <div className="small">
-                {prefilterRejected !== null
-                  ? `${prefilterRejected.toLocaleString('pl-PL')} ${plural(prefilterRejected, OFFERS)} odrzuconych przez prefiltr`
-                  : 'ocena zgodności z profilem CV'}
-              </div>
+              <div className="big">{matchBig}</div>
+              <div className="small">{matchSmall}</div>
             </div>
           </div>
           {/* Karta 3: Na żywo */}
@@ -597,8 +612,8 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
                 type="button"
                 className="iconbtn"
                 onClick={() => onRunStep('scrapers')}
-                data-tip="Pobierz oferty ze scraperów"
-                aria-label="Pobierz ze scraperów"
+                data-tip="Pobierz oferty ze źródeł (bez oceny)"
+                aria-label="Pobierz oferty ze źródeł"
                 disabled={isRunning || isStopping}
               >
                 <Globe size={16} />
@@ -608,8 +623,8 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
                 type="button"
                 className="iconbtn"
                 onClick={() => onRunStep('matching')}
-                data-tip="Dopasuj brakujące oferty (matching)"
-                aria-label="Dopasuj brakujące oferty"
+                data-tip="Oceń nowe oferty (przesiew + Jev)"
+                aria-label="Oceń nowe oferty"
                 disabled={isRunning || isStopping}
               >
                 <Sparkles size={16} />
@@ -617,7 +632,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
 
               {confirmingRescore ? (
                 <div className="pp-confirm-rescore">
-                  <span>Przeliczyć wszystko od nowa?</span>
+                  <span>Ocenić całą bazę od nowa w Jev?</span>
                   <button
                     type="button"
                     className="btn btn-primary"
@@ -627,7 +642,7 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
                       onRunStep('rescore_all');
                     }}
                   >
-                    Tak, rescore
+                    Tak, przelicz
                   </button>
                   <button
                     type="button"
@@ -643,8 +658,8 @@ export const PipelineSheet: React.FC<PipelineSheetProps> = ({
                   type="button"
                   className="iconbtn"
                   onClick={() => setConfirmingRescore(true)}
-                  data-tip="Przelicz wszystkie oceny od zera (wymaga potwierdzenia)"
-                  aria-label="Przelicz wszystkie oceny od nowa"
+                  data-tip="Oceń całą bazę od nowa, także już ocenione oferty (płatne, wymaga potwierdzenia)"
+                  aria-label="Oceń całą bazę od nowa"
                   disabled={isRunning || isStopping}
                 >
                   <RotateCcw size={16} />

@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 STATE_LOCK_FILE = Path(__file__).parent / "pipeline_run_state.json"
 STOP_FLAG_FILE = Path(__file__).parent / "pipeline_stop_requested.flag"
 CHECKPOINT_FILE = Path(__file__).parent / "pipeline_checkpoint.json"
+# Scrapery nie sprawdzają flagi, więc stop zadziała dopiero po całym pobieraniu;
+# dopasowanie kończy rozpoczęte oceny i wychodzi.
+STOP_REQUESTED_MSG = ("Wysłano żądanie zatrzymania. Pipeline skończy bieżący etap "
+                      "(w dopasowaniu - rozpoczęte oceny) i zapisze wyniki przed wyjściem.")
 
 
 def _get_process_creation_time(pid):
@@ -216,7 +220,7 @@ class PipelineProcessManager:
                 cls._instance = cls()
             return cls._instance
 
-    def _init_stages(self, mode):
+    def _init_stages(self, mode, stage=None):
         stages_def = [
             # Profil z CV (PHASE 0.5) jest częścią etapu 00 - tor ma zostać siedmioetapowy.
             {"id": "phase0", "num": "00", "title": "Archiwizacja i profil z CV", "pattern": r"PHASE 0(?:\.5)?\b"},
@@ -228,12 +232,18 @@ class PipelineProcessManager:
             {"id": "phase4", "num": "04", "title": "Ewaluacja rankingu", "pattern": r"PHASE 4\b"},
         ]
         self._stages = []
+        now = time.time()
         for s in stages_def:
-            status = "skipped" if (mode == "skip_scraping" and s["id"] == "phase1") else "pending"
+            if mode == "standalone":
+                # Pojedynczy krok (np. same scrapery) biegnie od razu jako swój etap;
+                # reszta toru jest pominięta, a nie „czeka”.
+                status = "running" if s["id"] == stage else "skipped"
+            else:
+                status = "skipped" if (mode == "skip_scraping" and s["id"] == "phase1") else "pending"
             self._stages.append({
                 **s,
                 "status": status,
-                "started_at": None,
+                "started_at": now if status == "running" else None,
                 "finished_at": None,
             })
 
@@ -264,16 +274,16 @@ class PipelineProcessManager:
     def _ensure_scoring(self) -> dict:
         if self._telemetry["scoring"] is None:
             self._telemetry["scoring"] = {
-                "total": None,
-                "processed": 0,
-                # Etap dopasowania (matching/run.py): odrzucone przez przesiew,
-                # do oceny, ocenione i tempo z linii „Scored X/Y (R/s)”.
+                # Etap dopasowania (matching/run.py): odrzucone przez przesiew
+                # (łącznie i per powód), do oceny, ocenione, błędy Jev i tempo
+                # z linii „Scored X/Y (R/s)”.
                 "prefilter_rejected": None,
+                "prefilter_reasons": None,
                 "to_score": None,
                 "scored": 0,
+                "errors": 0,
                 "rate": None,
-                # Tempo oceny: pierwszy i ostatni meldunek postępu (epoch s).
-                "first_batch_at": None,
+                # Czas ostatniego meldunku postępu (epoch s) - od niego liczy się ETA.
                 "last_done_at": None,
             }
         return self._telemetry["scoring"]
@@ -374,26 +384,55 @@ class PipelineProcessManager:
             return
 
         # Dopasowanie (matching/run.py). Wzorce = treść logów tego modułu.
-        m = re.search(r"Prefilter:\s*(\d+)\s+rejected\b.*\|\s*to score:\s*(\d+)", line)
+        m = re.search(r"Prefilter:\s*(\d+)\s+rejected\s*(\{[^}]*\})?.*\|\s*to score:\s*(\d+)", line)
         if m:
             sc = self._ensure_scoring()
+            reasons = {k: int(v) for k, v in re.findall(r"['\"](\w+)['\"]:\s*(\d+)", m.group(2) or "")}
             sc["prefilter_rejected"] = int(m.group(1))
-            sc["to_score"] = sc["total"] = int(m.group(2))
-            stages["phase3"] = {"prefilter_rejected": int(m.group(1)), "to_score": int(m.group(2))}
+            sc["prefilter_reasons"] = reasons
+            sc["to_score"] = int(m.group(3))
+            stages["phase3"] = {"prefilter_rejected": int(m.group(1)), "prefilter_reasons": reasons,
+                                "to_score": int(m.group(3))}
             return
 
         m = re.search(r"Scored\s+(\d+)/(\d+)\s*\(([\d.]+)/s\)", line)
         if m:
             sc = self._ensure_scoring()
-            now = round(time.time(), 1)
-            sc["scored"] = sc["processed"] = int(m.group(1))
-            sc["to_score"] = sc["total"] = int(m.group(2))
+            sc["scored"] = int(m.group(1))
+            sc["to_score"] = int(m.group(2))
             sc["rate"] = float(m.group(3))
-            if sc["first_batch_at"] is None:
-                sc["first_batch_at"] = now
-            sc["last_done_at"] = now
+            sc["last_done_at"] = round(time.time(), 1)
             phase3 = stages.setdefault("phase3", {})
-            phase3.update({"scored": sc["scored"], "total": sc["total"], "rate": sc["rate"]})
+            phase3.update({"scored": sc["scored"], "total": sc["to_score"], "rate": sc["rate"]})
+            return
+
+        if re.search(r"^\s*Jev error:", line):
+            sc = self._ensure_scoring()
+            sc["errors"] += 1
+            return
+
+        m = re.search(r"Matching done:\s*(\d+)\s+scored now,\s*(\d+)\s+errors,\s*(\d+)\s+offers with a percent", line)
+        if m:
+            sc = self._ensure_scoring()
+            sc["errors"] = int(m.group(2))
+            phase3 = stages.setdefault("phase3", {})
+            phase3.update({"scored_now": int(m.group(1)), "errors": int(m.group(2)),
+                           "with_percent": int(m.group(3))})
+            return
+
+        # Ewaluacja rankingu (eval_ranking.py): zgodność % dopasowania z ręcznymi ocenami.
+        m = re.search(r"Of those, with an AI score:\s*(\d+)", line)
+        if m:
+            stages.setdefault("phase4", {})["common"] = int(m.group(1))
+            return
+
+        if re.search(r"No manual ratings|Not enough common records", line):
+            stages.setdefault("phase4", {})["insufficient"] = True
+            return
+
+        m = re.search(r"Spearman correlation \(AI score vs rating\):\s*([+-]?[\d.]+)", line)
+        if m:
+            stages.setdefault("phase4", {})["rho"] = float(m.group(1))
             return
 
     def _release_finished_process(self):
@@ -438,8 +477,9 @@ class PipelineProcessManager:
                     pass
             return False
 
-    def start_pipeline(self, mode="full", cmd=None, is_resume=False, echo=None):
-        """`echo`: funkcja dostająca każdą linię wyjścia procesu (np. druk w konsoli)."""
+    def start_pipeline(self, mode="full", cmd=None, is_resume=False, echo=None, stage=None):
+        """`echo`: funkcja dostająca każdą linię wyjścia procesu (np. druk w konsoli).
+        `stage`: w trybie „standalone” identyfikator etapu, który ten krok wykonuje."""
         with self._lock:
             if self.is_running():
                 active_pid = self._process.pid if (self._process and self._process.poll() is None) else "inny proces"
@@ -454,8 +494,9 @@ class PipelineProcessManager:
             self._cmd = cmd
             self._echo = echo
             if not is_resume:
-                self._init_stages(mode)
-                self._active_stage_idx = 0
+                self._init_stages(mode, stage)
+                self._active_stage_idx = next(
+                    (i for i, s in enumerate(self._stages) if s["status"] == "running"), 0)
             self._logs.clear()
             self._started_at = time.time()
             self._finished_at = None
@@ -510,8 +551,8 @@ class PipelineProcessManager:
     def stop_pipeline(self, force=False):
         """
         Bezpieczne zatrzymanie procesu pipeline'u na żądanie użytkownika.
-        Domyślnie (force=False) zatrzymuje kooperatywnie na granicy paczki,
-        czekając na bezpieczny zapis in-flight batcha bez utraty danych i tokenów.
+        Domyślnie (force=False) zatrzymuje kooperatywnie: flaga stopu działa między etapami,
+        a w dopasowaniu po rozpoczętych ocenach, więc wyniki zdążą się zapisać.
         Przy force=True natychmiast kończy drzewo procesów.
         """
         with self._lock:
@@ -579,9 +620,9 @@ class PipelineProcessManager:
                     if self._stages[self._active_stage_idx]["status"] == "running":
                         self._stages[self._active_stage_idx]["status"] = "pending"
                 self._sync_state_to_disk(force=True)
-            return True, "Wymuszono natychmiastowe zatrzymanie procesu (trwająca paczka mogła nie zostać zapisana)."
+            return True, "Wymuszono natychmiastowe zatrzymanie procesu (rozpoczęte oceny mogły nie zostać zapisane)."
 
-        return True, "Wysłano żądanie zatrzymania. Pipeline dokończy bieżącą paczkę i zapisze wyniki przed wyjściem."
+        return True, STOP_REQUESTED_MSG
 
     def _stop_foreign_run(self, disk_state, force):
         """
@@ -598,13 +639,13 @@ class PipelineProcessManager:
             logger.warning(f"Błąd tworzenia pliku flagi stopu: {e}")
             return False, f"Nie udało się zgłosić zatrzymania: {e}"
         if not force:
-            return True, "Wysłano żądanie zatrzymania. Pipeline dokończy bieżącą paczkę i zapisze wyniki przed wyjściem."
+            return True, STOP_REQUESTED_MSG
 
         pid = disk_state.get("pid")
         logger.info(f"Wymuszono natychmiastowe zatrzymanie procesu pipeline'u (PID: {pid}).")
         if not _terminate_process_tree(pid, disk_state.get("create_time")):
             return False, "Nie udało się zakończyć procesu pipeline'u."
-        return True, "Wymuszono natychmiastowe zatrzymanie procesu (trwająca paczka mogła nie zostać zapisana)."
+        return True, "Wymuszono natychmiastowe zatrzymanie procesu (rozpoczęte oceny mogły nie zostać zapisane)."
 
     def wait(self):
         """Czeka na koniec przebiegu uruchomionego przez ten menedżer; zwraca kod wyjścia procesu."""
@@ -628,6 +669,9 @@ class PipelineProcessManager:
 
             cp = load_json_safe(CHECKPOINT_FILE, default={}) or {}
             completed_stages = set(cp.get("completed_stages", []))
+            # Etap 00 w torze to archiwizacja i profil z CV; bez profilu nie jest skończony.
+            if "phase0_5" not in completed_stages:
+                completed_stages.discard("phase0")
             options = cp.get("options", {})
 
             saved_cmd = self._cmd or state.get("cmd")
@@ -637,10 +681,14 @@ class PipelineProcessManager:
             if options.get("skip_scraping"):
                 mode = "skip_scraping"
 
+            standalone_stage = None
             if is_standalone:
                 cmd = list(saved_cmd)
+                mode = "standalone"
                 action_desc = f"krok: {Path(cmd[-1]).name if len(cmd) > 2 else 'narzędzie standalone'}"
                 first_incomplete = action_desc
+                standalone_stage = next((s.get("id") for s in state.get("stages") or []
+                                         if isinstance(s, dict) and s.get("status") != "skipped"), None)
             else:
                 disk_stages_by_id = {s["id"]: s for s in state.get("stages", []) if isinstance(s, dict) and "id" in s}
                 for s in self._stages:
@@ -673,7 +721,8 @@ class PipelineProcessManager:
 
                 self._active_stage_idx = first_idx
 
-        ok, msg = self.start_pipeline(mode=mode, cmd=cmd, is_resume=True)
+        # Pojedynczy krok nie ma checkpointu: startuje od nowa na swoim etapie.
+        ok, msg = self.start_pipeline(mode=mode, cmd=cmd, is_resume=not is_standalone, stage=standalone_stage)
         if ok:
             stage_hint = f" od etapu: {first_incomplete}" if first_incomplete else ""
             return True, f"Wznowiono pipeline{stage_hint}."
@@ -682,8 +731,8 @@ class PipelineProcessManager:
     def _sync_state_to_disk(self, force=False):
         now = time.time()
         if not force and (now - self._last_disk_sync) < 0.35:
-            # Odroczony zapis: inaczej ostatnia linia przed dłuższą ciszą (np. start paczki
-            # przed wywołaniem modelu) nie trafia na dysk, a stamtąd czyta go serwer.
+            # Odroczony zapis: inaczej ostatnia linia przed dłuższą ciszą (np. start scrapera
+            # albo wolne zapytanie do Jev) nie trafia na dysk, a stamtąd czyta go serwer.
             if self._pending_sync is None:
                 self._pending_sync = threading.Timer(0.4, self._flush_pending_sync)
                 self._pending_sync.daemon = True
@@ -759,10 +808,19 @@ class PipelineProcessManager:
                                     stages[prev_idx]["finished_at"] = now
                                     stage_changed = True
                             if s["status"] != "skipped" and s["status"] != "failed":
+                                if "already completed in checkpoint" in line:
+                                    # Etap zrobiony w przerwanym przebiegu: gotowy, bez startu teraz.
+                                    if s["status"] != "done":
+                                        s["status"] = "done"
+                                        stage_changed = True
+                                    break
                                 if s["status"] != "running":
                                     stage_changed = True
-                                    if s.get("started_at") is None:
+                                    # Etap 00 wraca z „done” do pracy, gdy po archiwizacji z checkpointu
+                                    # rusza profil z CV - czas liczy się od tej chwili.
+                                    if s.get("started_at") is None or s["status"] == "done":
                                         s["started_at"] = now
+                                        s["finished_at"] = None
                                 elif self._active_stage_idx != idx:
                                     stage_changed = True
                                 s["status"] = "running"
@@ -870,7 +928,7 @@ class PipelineProcessManager:
                     progress_label = "Oczekuje na uruchomienie"
                 elif self._status == "stopping":
                     progress_percent = round((done_count / total) * 100, 1) if total else None
-                    progress_label = f"Zatrzymywanie po zakończeniu bieżącej paczki ({current_title})..."
+                    progress_label = f"Zatrzymywanie po bieżącym etapie ({current_title})..."
                 elif self._status == "running":
                     progress_percent = round((done_count / total) * 100, 1) if total else None
                     progress_label = f"Etap {self._active_stage_idx + 1} z {total}: {current_title}"
@@ -958,7 +1016,7 @@ class PipelineProcessManager:
                             disk_state["progress_label"] = "Oczekuje na uruchomienie"
                         elif status == "stopping":
                             disk_state["progress_percent"] = round((done_count / total) * 100, 1) if total else None
-                            disk_state["progress_label"] = f"Zatrzymywanie po zakończeniu bieżącej paczki ({current_title})..."
+                            disk_state["progress_label"] = f"Zatrzymywanie po bieżącym etapie ({current_title})..."
                         elif status == "running":
                             disk_state["progress_percent"] = round((done_count / total) * 100, 1) if total else None
                             disk_state["progress_label"] = f"Etap {current_idx + 1} z {total}: {current_title}"

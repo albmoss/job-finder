@@ -9,8 +9,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import type { CVInfo, EnvKeysResponse, PipelinePrerequisites } from '../types';
-import { KEYS, plural } from '../plural';
-import { CvEditor, KeysEditor } from './PipelineSetup';
+import { CvEditor, JevKeyEditor, KeysEditor } from './PipelineSetup';
 import '../styles/pipeline.css';
 
 export type PipelineMode = 'full' | 'skip_scraping';
@@ -42,7 +41,7 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
 }) => {
   const [mode, setMode] = useState<PipelineMode>('full');
   const [confirmedCosts, setConfirmedCosts] = useState(false);
-  const [activeSetup, setActiveSetup] = useState<'cv' | 'keys' | 'scrapers' | null>(null);
+  const [activeSetup, setActiveSetup] = useState<'cv' | 'jev' | 'llm' | 'scrapers' | null>(null);
 
   // Zgoda na koszty resetuje się przy każdym otwarciu okna
   useEffect(() => {
@@ -100,7 +99,20 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
 
   // Wiersze gotowości
   const cvOk = Boolean(cvInfo?.ready);
-  const keysOk = Boolean(prerequisites?.api_ready);
+  const profile = cvInfo?.profile;
+  // Profil z CV wyznacza zakres: miasto + oferty zdalne, poziom z CV ± sąsiedni.
+  const cvVal = !cvOk
+    ? 'brak pliku CV'
+    : profile?.current
+      ? `${cvInfo?.filename} · ${[profile.seniority, profile.city ? `${profile.city} i zdalnie` : null].filter(Boolean).join(', ')}`
+      : `${cvInfo?.filename} · profil przeliczy się przy starcie`;
+  const jevOk = Boolean(prerequisites?.jev_ready);
+  const llmOk = Boolean(prerequisites?.api_ready);
+  // Model czyta CV tylko wtedy, gdy profil trzeba policzyć od nowa.
+  const llmNeeded = prerequisites?.llm_needed ?? true;
+  const llmVal = llmOk && llm
+    ? `${llmLabel} · ${llm.models[0]}`
+    : llmNeeded ? llm?.error || 'brak klucza API' : 'nieużywany, profil jest aktualny';
   const scrapersOk = Boolean(prerequisites?.playwright_ready);
 
   return (
@@ -153,10 +165,10 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
               <span className="pp-mode-title">Pełny przebieg</span>
             </div>
             <div className="pp-mode-desc">
-              Pobiera oferty ze wszystkich portali, porządkuje bazę i ocenia nowe oferty względem CV.
+              Pobiera oferty z portali w zakresie z CV, porządkuje bazę i ocenia nowe oferty.
             </div>
             <div className="pp-mode-meta">
-              <Globe size={12} /> scraping + ocena AI
+              <Globe size={12} /> scraping + przesiew + Jev
             </div>
           </div>
 
@@ -178,7 +190,7 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
               <span className="pp-mode-radio">
                 {mode === 'skip_scraping' && <span className="pp-mode-radio-dot" />}
               </span>
-              <span className="pp-mode-title">Tylko ocena AI</span>
+              <span className="pp-mode-title">Tylko ocena</span>
             </div>
             <div className="pp-mode-desc">
               Bez pobierania. Porządkuje lokalną bazę i ocenia oferty, które czekają na ocenę.
@@ -197,9 +209,7 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
               {cvOk ? <Check size={15} /> : <AlertTriangle size={15} />}
             </span>
             <span className="pp-ready-label">CV</span>
-            <span className="pp-ready-val">
-              {cvOk ? `${cvInfo?.filename} · ${cvInfo?.words} słów` : 'brak pliku CV'}
-            </span>
+            <span className="pp-ready-val" title={cvVal}>{cvVal}</span>
             <button
               type="button"
               className="pp-ready-btn"
@@ -209,23 +219,37 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
             </button>
           </div>
 
-          {/* Klucze API */}
+          {/* Jev: ocena ofert */}
           <div className="pp-ready-row">
-            <span className={`pp-ready-icon ${keysOk ? 'is-ok' : 'is-warn'}`}>
-              {keysOk ? <Check size={15} /> : <AlertTriangle size={15} />}
+            <span className={`pp-ready-icon ${jevOk ? 'is-ok' : 'is-warn'}`}>
+              {jevOk ? <Check size={15} /> : <AlertTriangle size={15} />}
             </span>
-            <span className="pp-ready-label">Model AI</span>
+            <span className="pp-ready-label">Ocena ofert</span>
             <span className="pp-ready-val">
-              {keysOk && llm
-                ? `${llmLabel} · ${llm.models[0]} · ${llm.count} ${plural(llm.count, KEYS)}`
-                : llm?.error || 'brak klucza API'}
+              {jevOk ? 'Jev (TypeSafe) · klucz ustawiony' : 'brak klucza TYPESAFE_API_KEY'}
             </span>
             <button
               type="button"
               className="pp-ready-btn"
-              onClick={() => setActiveSetup(activeSetup === 'keys' ? null : 'keys')}
+              onClick={() => setActiveSetup(activeSetup === 'jev' ? null : 'jev')}
             >
-              {activeSetup === 'keys' ? 'Zwiń' : keysOk ? 'Zmień' : 'Skonfiguruj'}
+              {activeSetup === 'jev' ? 'Zwiń' : jevOk ? 'Zmień' : 'Dodaj'}
+            </button>
+          </div>
+
+          {/* Model czytający CV */}
+          <div className="pp-ready-row">
+            <span className={`pp-ready-icon ${llmOk || !llmNeeded ? 'is-ok' : 'is-warn'}`}>
+              {llmOk || !llmNeeded ? <Check size={15} /> : <AlertTriangle size={15} />}
+            </span>
+            <span className="pp-ready-label">Czytanie CV</span>
+            <span className="pp-ready-val" title={llmVal}>{llmVal}</span>
+            <button
+              type="button"
+              className="pp-ready-btn"
+              onClick={() => setActiveSetup(activeSetup === 'llm' ? null : 'llm')}
+            >
+              {activeSetup === 'llm' ? 'Zwiń' : llmOk ? 'Zmień' : 'Skonfiguruj'}
             </button>
           </div>
 
@@ -262,10 +286,19 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
           </div>
         )}
 
-        {activeSetup === 'keys' && (
+        {activeSetup === 'jev' && (
           <div className="pp-setup-drawer">
             <div className="pp-setup-head">
-              <span>Model AI i klucze API</span>
+              <span>Jev: ocena ofert</span>
+            </div>
+            <JevKeyEditor envKeys={envKeys} onSaved={refreshAll} showToast={showToast} />
+          </div>
+        )}
+
+        {activeSetup === 'llm' && (
+          <div className="pp-setup-drawer">
+            <div className="pp-setup-head">
+              <span>Model czytający CV i pozostałe klucze</span>
             </div>
             <KeysEditor envKeys={envKeys} full onSaved={refreshAll} showToast={showToast} />
           </div>
@@ -310,20 +343,11 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
 
         {/* Ostrzeżenia, jeśli brakuje wymagań */}
         {!isReady && issues.length > 0 && (
-          <div
-            style={{
-              padding: '12px 14px',
-              borderRadius: 14,
-              background: 'rgba(247, 183, 49, 0.08)',
-              border: '1px solid rgba(247, 183, 49, 0.25)',
-              fontSize: 12.5,
-              color: 'var(--ink)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, color: 'var(--ink)', marginBottom: 4 }}>
+          <div className="pp-issues">
+            <div className="pp-issues-title">
               <AlertTriangle size={14} /> Najpierw uzupełnij
             </div>
-            <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--ink-2)', lineHeight: 1.5 }}>
+            <ul>
               {issues.map((issue, idx) => (
                 <li key={idx}>{issue}</li>
               ))}
@@ -344,7 +368,8 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
           <span className="pp-consent-text">
             <strong>Rozumiem koszty API</strong>
             <span>
-              Ocena wysyła oferty do skonfigurowanego modelu AI. Wywołania mogą być płatne według cennika Twojego konta u dostawcy.
+              Jev ocenia każdą nową ofertę. Model z wiersza „Czytanie CV” dostaje CV tylko wtedy, gdy
+              trzeba policzyć profil. Oba wywołania mogą być płatne według cennika Twoich kont.
             </span>
           </span>
         </label>

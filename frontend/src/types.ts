@@ -6,8 +6,6 @@ export interface Stats {
   funnel: Record<string, number>;
   /** Aplikacje (bez archiwum), które stoją na etapie co najmniej 14 dni. */
   applications_stale: number;
-  /** ISO czasu wygenerowania profilu preferencji; null, gdy profilu nie ma. */
-  profile_generated_at: string | null;
 }
 
 export type StageStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
@@ -33,25 +31,41 @@ export interface SourceTelemetry {
   details_total?: number | null;
 }
 
+/** Przesiew w kodzie (matching/prefilter.py): powód → liczba odrzuconych ofert. */
+export type PrefilterReasons = Partial<Record<'miasto' | 'poziom' | 'lata' | 'jezyk' | 'brak_opisu', number>>;
+
+/** Etap dopasowania na żywo, z linii „Prefilter: …” i „Scored X/Y (R/s)” matching/run.py. */
 export interface ScoringTelemetry {
-  total: number | null;
-  processed: number;
-  /** Etap dopasowania: odrzucone przez przesiew, do oceny, ocenione, tempo (ofert/s). */
-  prefilter_rejected?: number | null;
-  to_score?: number | null;
-  scored?: number | null;
-  rate?: number | null;
-  /** Pierwszy i ostatni meldunek postępu oceny (epoch s) — tempo do ETA. */
-  first_batch_at?: number | null;
-  last_done_at?: number | null;
+  prefilter_rejected: number | null;
+  prefilter_reasons: PrefilterReasons | null;
+  to_score: number | null;
+  scored: number;
+  /** Nieudane zapytania do Jev. */
+  errors: number;
+  /** Oceny na sekundę od startu oceniania. */
+  rate: number | null;
+  /** Czas ostatniego meldunku postępu (epoch s). */
+  last_done_at: number | null;
 }
-/** Liczby etapów porządkowych, sparsowane z logu przebiegu. */
+/** Liczby etapów, sparsowane z logu przebiegu. */
 export interface StageStats {
   phase0?: { removed: number };
   phase1_5?: { links: number; merged: number };
   phase2?: { removed: number };
   phase2_5?: { chars_before: number; chars_after: number };
-  phase3?: { prefilter_rejected?: number; to_score?: number; scored?: number; total?: number; rate?: number };
+  phase3?: {
+    prefilter_rejected?: number;
+    prefilter_reasons?: PrefilterReasons;
+    to_score?: number;
+    scored?: number;
+    total?: number;
+    rate?: number;
+    errors?: number;
+    /** Oferty z procentem w całej bazie po etapie. */
+    with_percent?: number;
+  };
+  /** Ewaluacja rankingu: Spearman % dopasowania vs ręczne oceny; `insufficient` przy < 10 ocen. */
+  phase4?: { rho?: number; common?: number; insufficient?: boolean };
 }
 export interface PipelineTelemetry {
   sources: SourceTelemetry[];
@@ -84,14 +98,6 @@ export interface PipelineState {
 
 export interface BootstrapData {
   stats: Stats;
-  tabs: string[];
-  tools: string[];
-  all_views: string[];
-  tab_hints: Record<string, string>;
-  stages: Record<string, string>;
-  source_colors: Record<string, string>;
-  source_fallback_color: string;
-  state_colors: Record<string, string>;
   pipeline: PipelineState;
 }
 
@@ -130,9 +136,6 @@ export interface OffersResponse {
   fresh_count: number;
   /** Start ostatniego pobierania (ISO, czas lokalny); null, gdy nigdy nie zapisany. */
   fresh_since: string | null;
-  /** Filtr „oferty z tym brakiem” (panel braków) — echo zapytania; null bez filtra. */
-  gap: string | null;
-  gap_threshold: number | null;
 }
 
 
@@ -187,6 +190,8 @@ export interface OfferDetail {
   is_gone: boolean;
   work_mode: string;
   match_percentage: number | null;
+  /** Powód odrzucenia przez przesiew; oferta oceniona, ale bez procentu. */
+  filtered: keyof PrefilterReasons | null;
   fields: OfferFields;
   description_blocks: DescriptionBlock[];
   raw_description: string;
@@ -233,6 +238,17 @@ export interface CVInfo {
   filename: string;
   pdf_exists: boolean;
   txt_exists: boolean;
+  /** Profil z CV (candidate_profile.json); null przed pierwszym przebiegiem. */
+  profile: CandidateProfileSummary | null;
+}
+
+export interface CandidateProfileSummary {
+  city: string | null;
+  seniority: string | null;
+  years: number | null;
+  skills: number;
+  /** Policzony z bieżącego CV; false = pipeline przeliczy go na starcie. */
+  current: boolean;
 }
 
 export interface EnvField {
@@ -253,7 +269,7 @@ export interface LlmProvider {
   default_base_url: string;
 }
 
-/** Stan dostawcy modelu oceniającego oferty (LLM_PROVIDER w .env). */
+/** Dostawca modelu, który czyta CV i buduje z niego profil (LLM_PROVIDER w .env). */
 export interface ApiKeysInfo {
   ready: boolean;
   error: string;
@@ -278,6 +294,10 @@ export interface PipelinePrerequisites {
   issues_skip: string[];
   cv_ready: boolean;
   api_ready: boolean;
+  /** Klucz TYPESAFE_API_KEY (Jev ocenia oferty). */
+  jev_ready: boolean;
+  /** Profil trzeba policzyć z CV, więc model z LLM_PROVIDER jest wymagany. */
+  llm_needed: boolean;
   playwright_ready: boolean;
   playwright_msg: string;
   db_count: number;

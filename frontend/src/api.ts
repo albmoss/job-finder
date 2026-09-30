@@ -49,7 +49,6 @@ export const api = {
   getBootstrap: () => request<BootstrapData>('/bootstrap'),
   getStats: () => request<Stats>('/stats'),
 
-  /** `gap`: oferty z tym brakiem (panel braków) zamiast zakładki; próg jak w panelu. */
   getOffers: (
     tab: string,
     search: string = '',

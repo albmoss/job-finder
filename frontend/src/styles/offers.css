@@ -353,53 +353,6 @@
   background: var(--stroke);
 }
 
-/* Filtr „Pokaż N ofert” z panelu braków. */
-.ol-filter {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  align-self: flex-start;
-  margin: 10px 12px 0;
-  padding: 3px 3px 3px 12px;
-  border-radius: 999px;
-  background: var(--fill-2);
-  border: 1px solid var(--stroke);
-  font-size: 12.5px;
-  color: var(--ink-3);
-  flex: none;
-  max-width: calc(100% - 24px);
-}
-
-.ol-filter-label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ol-filter-label b {
-  color: var(--ink);
-  font-weight: 500;
-}
-
-.ol-filter-clear {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 0;
-  background: transparent;
-  color: var(--ink-3);
-  cursor: pointer;
-  flex: none;
-  transition: background-color 150ms ease, color 150ms ease;
-}
-
-.ol-filter-clear:hover {
-  background: var(--fill-3);
-  color: var(--ink);
-}
-
 .ol-row-score {
   font-family: var(--mono);
   font-size: 18px;
@@ -809,14 +762,16 @@
   line-height: 1.55;
 }
 
-/* Facts row */
+/* Fakty z pól oferty: do ośmiu (poziom, miejsce, tryb, umowa, wymiar, widełki, języki, lata),
+   więc cztery kolumny z łamaniem wiersza zamiast ściskania wszystkich w jednym rzędzie. */
 .od-facts {
   margin-top: 30px;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  row-gap: 18px;
 }
 
 .od-fact {
-  flex: 1 1 0;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -825,7 +780,7 @@
   border-left: 1px solid var(--stroke);
 }
 
-.od-fact:first-child {
+.od-fact:nth-child(4n + 1) {
   padding-left: 0;
   border-left: none;
 }
@@ -865,19 +820,13 @@
   line-height: 1.3;
 }
 
-/* Reason */
-.od-why {
-  margin-top: 30px;
-  padding: 2px 0 2px 24px;
-  font-size: 17px;
-  line-height: 1.5;
-  color: var(--ink);
-  border-left: 2px solid var(--accent-soft);
-}
-
-/* Keywords / Gaps */
+/* Umiejętności z pól ogłoszenia: wymagane, potem mile widziane */
 .od-kw {
   margin-top: 30px;
+}
+
+.od-kw-group + .od-kw-group {
+  margin-top: 18px;
 }
 
 .od-kw-head {
@@ -888,23 +837,6 @@
   font-size: 12px;
   color: var(--ink-3);
   font-weight: 500;
-}
-
-.od-kw-legend {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-weight: 400;
-  font-size: 11px;
-}
-
-/* Próbka wyglądu luki: ten sam przerywany obrys co `.chip.gap`. */
-.od-kw-legend::before {
-  content: "";
-  width: 16px;
-  height: 10px;
-  border-radius: 3px;
-  border: 1px dashed var(--gap-dash);
 }
 
 /* Recruitment stage switch row */

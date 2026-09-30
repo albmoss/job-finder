@@ -1,47 +1,17 @@
 import { useEffect, useState } from 'react';
-import type { ActivityRow, PipelineStage, PipelineState, PipelineStatus, ScoringTelemetry, StageStatus } from './types';
+import type { ActivityRow, PipelineStage, PipelineState, PipelineStatus, PrefilterReasons, ScoringTelemetry, StageStatus } from './types';
 import type { StreamLoop } from './components/ui/Stream';
 
-/** Fale strumienia w trakcie przebiegu — widać, że pipeline pracuje także między paczkami
- *  (scraping trwa kwadrans bez jednej paczki). Czas przejścia jak `cross` danego miejsca,
- *  ale siła ~⅔ — ciągłe fale przy pełnej sile wyglądały jak zmiana kształtu strumienia. */
+/** Fale strumienia w trakcie przebiegu — widać, że pipeline pracuje także wtedy, gdy nic
+ *  się nie kończy (scraping trwa kwadrans bez meldunku postępu). Czas przejścia jak `cross`
+ *  danego miejsca, ale siła ~⅔ — ciągłe fale przy pełnej sile wyglądały jak zmiana kształtu strumienia. */
 export const PILL_STREAM_LOOP: StreamLoop = { period: 1.6, running: 0.36, gap: [2, 5] };
 export const SHEET_STREAM_LOOP: StreamLoop = { period: 2.6, running: 0.4, gap: [2, 5] };
 
-// Opis etapów widoczny w widoku pipeline'u. Kolejność i identyfikatory
-// pochodzą z pipeline_manager.py; tutaj tylko krótkie wyjaśnienie „po co”.
-export const STAGE_INFO: Record<string, { short: string; about: string }> = {
-  phase0: {
-    short: 'Archiwizacja',
-    about: 'Przenosi ręczne oceny starych ofert do archiwum, zanim wygasłe ogłoszenia znikną z bazy.',
-  },
-  phase1: {
-    short: 'Pobieranie',
-    about: 'Odwiedza portale pracy i dopisuje nowe oferty. Źródła pobrane dziś z powodzeniem są pomijane.',
-  },
-  phase1_5: {
-    short: 'Normalizacja',
-    about: 'Ujednolica adresy ofert, zanim ruszy deduplikacja — inaczej ta sama oferta liczyłaby się dwa razy.',
-  },
-  phase2: {
-    short: 'Deduplikacja',
-    about: 'Scala tę samą ofertę znalezioną na kilku portalach i łączy jej źródła.',
-  },
-  phase2_5: {
-    short: 'Czyszczenie',
-    about: 'Przycina opisy przed płatnym ocenianiem: mniej tokenów, ten sam sens.',
-  },
-  phase3: {
-    short: 'Dopasowanie',
-    about: 'Prefiltr regułowy odrzuca oferty niespełniające kryteriów, a Jev punktuje dopasowanie do CV.',
-  },
-  phase4: {
-    short: 'Ewaluacja',
-    about: 'Sprawdza bieżący ranking względem Twoich ręcznych ocen.',
-  },
-};
+// Krótkie nazwy 7 etapów toru; kolejność i identyfikatory pochodzą z pipeline_manager.py.
+// Etap 00 obejmuje też profil z CV (PHASE 0.5).
 export const STAGE_SHORT_NAMES = [
-  'Archiwizacja',
+  'Archiwum i CV',
   'Pobieranie',
   'Normalizacja',
   'Deduplikacja',
@@ -49,6 +19,26 @@ export const STAGE_SHORT_NAMES = [
   'Dopasowanie',
   'Ewaluacja',
 ];
+
+/** Powody odrzucenia przez przesiew (matching/prefilter.py) w kolejności pokazywania. */
+export const PREFILTER_LABELS: Record<keyof PrefilterReasons, string> = {
+  miasto: 'miasto',
+  poziom: 'poziom',
+  lata: 'lata',
+  jezyk: 'język',
+  brak_opisu: 'bez opisu',
+};
+
+/** Opis przebiegu w nagłówku arkusza: tryb z pipeline_manager i wznowienie z polecenia. */
+export function runLabel(p: PipelineState | null): string {
+  if (!p) return 'przebieg';
+  if (p.mode === 'standalone') {
+    const stage = p.stages?.find((s) => s.status !== 'skipped');
+    return stage ? `pojedynczy krok · ${stage.title}` : 'pojedynczy krok';
+  }
+  const resumed = p.cmd?.includes('--resume') ? 'wznowiony ' : '';
+  return p.mode === 'skip_scraping' ? `${resumed}przebieg bez pobierania` : `${resumed}pełny przebieg`;
+}
 
 
 export const STAGE_STATUS_LABEL: Record<StageStatus, string> = {
@@ -119,18 +109,14 @@ export function stageDuration(stage: PipelineStage, nowSec: number): number | nu
 }
 
 /**
- * Sekundy do końca oceny z realnego tempa bieżącego przebiegu: ocenione / (ostatni
- * meldunek postępu − pierwszy), odliczane od ostatniego meldunku. Bez meldunku — null
- * (pasek pokazuje wtedy same liczby).
+ * Sekundy do końca oceny z tempa podanego przez matching/run.py (oceny/s od startu),
+ * odliczane od ostatniego meldunku. Bez meldunku — null (pasek pokazuje same liczby).
  */
 export function scoringEtaSeconds(scoring: ScoringTelemetry | null | undefined, nowSec: number): number | null {
-  const total = scoring?.to_score ?? scoring?.total;
-  const processed = scoring?.scored ?? scoring?.processed;
-  if (!total || !scoring?.first_batch_at || !scoring.last_done_at || !processed || processed <= 0) return null;
-  const elapsed = scoring.last_done_at - scoring.first_batch_at;
-  const left = total - processed;
-  if (elapsed <= 0 || left <= 0) return null;
-  const eta = (left * elapsed) / processed - (nowSec - scoring.last_done_at);
+  if (!scoring?.to_score || !scoring.rate || !scoring.last_done_at) return null;
+  const left = scoring.to_score - scoring.scored;
+  if (left <= 0) return null;
+  const eta = left / scoring.rate - (nowSec - scoring.last_done_at);
   return eta > 0 ? eta : null;
 }
 
@@ -190,7 +176,7 @@ export interface LastRunSummary {
   sources: ActivityRow[];
 }
 
-/** Ostatnie pobrania per źródło i ostatnia ocena AI z dziennika aktywności. */
+/** Ostatnie pobrania per źródło i ostatnie dopasowanie z dziennika aktywności (app_services). */
 export function summarizeActivity(rows: ActivityRow[]): LastRunSummary {
   const sources: ActivityRow[] = [];
   const seen = new Set<string>();
@@ -199,7 +185,7 @@ export function summarizeActivity(rows: ActivityRow[]): LastRunSummary {
     if (row.op === 'pobieranie' && !seen.has(row.what)) {
       seen.add(row.what);
       sources.push(row);
-    } else if (row.op.startsWith('ocena') && !scoring) {
+    } else if (row.op === 'dopasowanie' && !scoring) {
       scoring = row;
     }
   }
@@ -226,8 +212,8 @@ export function calculateOverallPipelineProgress(p: PipelineState | null): { pro
   }
   // Etap dopasowania (phase3 / indeks 5)
   else if (activeIdx === 5) {
-    const total = p.telemetry?.scoring?.to_score ?? p.telemetry?.scoring?.total;
-    const proc = p.telemetry?.scoring?.scored ?? p.telemetry?.scoring?.processed ?? 0;
+    const total = p.telemetry?.scoring?.to_score;
+    const proc = p.telemetry?.scoring?.scored ?? 0;
     withinStage = total && total > 0 ? Math.min(1, proc / total) : 0.5;
   } else {
     const resolved = stages.filter((s) => s.status === 'done' || s.status === 'skipped').length;
@@ -237,21 +223,6 @@ export function calculateOverallPipelineProgress(p: PipelineState | null): { pro
   const progress = Math.min(0.99, Math.max(0.01, (activeIdx + withinStage) / totalStages));
   const totalPct = Math.round(progress * 100);
   return { progress, totalPct };
-}
-
-/** Liczba świeżych ofert dodanych w ostatnim przebiegu. */
-export function getFreshOffersCount(p: PipelineState | null, activityRows: ActivityRow[]): number {
-  if (p?.telemetry?.sources?.length) {
-    const added = p.telemetry.sources.reduce((acc, s) => acc + (s.added ?? 0), 0);
-    if (added > 0) return added;
-  }
-  for (const row of activityRows) {
-    if (row.op === 'scoring' || row.op === 'scrape') {
-      const m = /\+(\d+)/.exec(row.detail);
-      if (m) return parseInt(m[1], 10);
-    }
-  }
-  return 0;
 }
 
 export type LogTone = 'phase' | 'err' | 'warn' | 'ok' | 'plain';
@@ -276,8 +247,8 @@ export function parseLogLine(raw: string): ParsedLogLine | null {
   let tone: LogTone = 'plain';
   if (level === 'ERROR' || level === 'CRITICAL') tone = 'err';
   else if (/PHASE \d|PIPELINE (COMPLETE|STOPPED)|^PIPELINE:/.test(text)) tone = 'phase';
-  else if (/\b(ERROR|CRITICAL|Traceback)\b|✗|Failed|FAILED|PIPELINE INCOMPLETE/.test(text)) tone = 'err';
-  else if (level === 'WARNING' || /Rate limit|Toxic|Sleeping|Waiting/.test(text)) tone = 'warn';
+  else if (/\b(ERROR|CRITICAL|Traceback)\b|✗|Failed|FAILED|PIPELINE INCOMPLETE|Jev error|^Brak /.test(text)) tone = 'err';
+  else if (level === 'WARNING' || /Stop requested|Rate limit/.test(text)) tone = 'warn';
   else if (/✓|Success!|DONE\./.test(text)) tone = 'ok';
   return { time, text, tone };
 }

@@ -129,27 +129,75 @@ interface KeysEditorProps {
   showToast: (msg: string, action?: { label: string; run: () => void }, done?: boolean) => void;
 }
 
+const JEV_KEY = 'TYPESAFE_API_KEY';
+
+/** Klucz Jev (TypeSafe): ocenia oferty i wybiera kategorie portali. */
+export const JevKeyEditor: React.FC<Omit<KeysEditorProps, 'full'>> = ({ envKeys, disabled, onSaved, showToast }) => {
+  const configured = Boolean(envKeys?.fields.find((f) => f.key === JEV_KEY)?.configured);
+  const [value, setValue] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await api.saveEnvKeys({ [JEV_KEY]: value.trim() });
+      showToast(res.message);
+      setValue('');
+      onSaved();
+    } catch (err) {
+      showToast(`Błąd zapisu klucza: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const busy = disabled || saving;
+
+  return (
+    <div className="pp-setup-stack">
+      <div className="field">
+        <label className="field-label pp-field-row" htmlFor="jev-key">
+          <span>Klucz TypeSafe ({JEV_KEY})</span>
+          <span className="pp-field-state">{configured ? 'ustawiony' : 'brak'}</span>
+        </label>
+        <div className="pp-key-input">
+          <input
+            id="jev-key"
+            className="input"
+            type={showKey ? 'text' : 'password'}
+            placeholder={configured ? '•••••••• (bez zmian)' : 'klucz z panelu TypeSafe'}
+            value={value}
+            disabled={busy}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <button
+            type="button"
+            className="iconbtn"
+            onClick={() => setShowKey(!showKey)}
+            aria-label={showKey ? 'Ukryj klucz' : 'Pokaż klucz'}
+          >
+            {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
+          </button>
+        </div>
+        <span className="field-help">
+          Jev odpowiada na pytania o każdą nową ofertę, a procent dopasowania liczy z tych odpowiedzi kod.
+        </span>
+      </div>
+      <div>
+        <button type="button" className="btn btn-primary" disabled={busy || !value.trim()} onClick={save}>
+          Zapisz klucz
+        </button>
+      </div>
+    </div>
+  );
+};
+
+/** Model czytający CV (LLM_PROVIDER) oraz zapasowe klucze i klucze portali z .env. */
 export const KeysEditor: React.FC<KeysEditorProps> = ({ envKeys, full, disabled, onSaved, showToast }) => {
   const info = envKeys?.api_info;
-  const envFields = envKeys?.fields ?? [];
-  const allFields = useMemo(() => {
-    const list = [...envFields];
-    const tsIdx = list.findIndex((f) => f.key === 'TYPESAFE_API_KEY');
-    if (tsIdx >= 0) {
-      list[tsIdx] = {
-        ...list[tsIdx],
-        label: 'TypeSafe (Jev) API Key',
-      };
-    } else {
-      list.unshift({
-        key: 'TYPESAFE_API_KEY',
-        label: 'TypeSafe (Jev) API Key',
-        secret: true,
-        configured: false,
-      });
-    }
-    return list;
-  }, [envFields]);
+  // Klucz Jev ma własny edytor (JevKeyEditor).
+  const allFields = useMemo(() => (envKeys?.fields ?? []).filter((f) => f.key !== JEV_KEY), [envKeys]);
   const [picked, setPicked] = useState<string | null>(null);
   const [key, setKey] = useState('');
   const [showKey, setShowKey] = useState(false);
@@ -241,7 +289,7 @@ export const KeysEditor: React.FC<KeysEditorProps> = ({ envKeys, full, disabled,
                   ? `W użyciu · klucz ${info.primary_masked}` +
                     (info.count > 1 ? ` + ${info.count - 1} ${plural(info.count - 1, BACKUPS)}` : '')
                   : info.error
-                : 'Zapis przełączy ocenę ofert na tego dostawcę.'}
+                : 'Zapis przełączy czytanie CV na tego dostawcę.'}
             </span>
           </div>
 

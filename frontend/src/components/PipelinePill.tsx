@@ -7,7 +7,6 @@ import {
   calculateOverallPipelineProgress,
   formatDuration,
   formatStamp,
-  getFreshOffersCount,
   pipelineStatus,
   scoringEtaSeconds,
   summarizeActivity,
@@ -45,14 +44,15 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
   const nowSec = useNowSeconds(isRunning || isStopping);
   const { progress, totalPct } = calculateOverallPipelineProgress(pipeline);
 
-  // Pulse przy każdej nowej ocenie dopasowania
-  const batchPulse = pipeline?.telemetry?.scoring?.scored ?? pipeline?.telemetry?.scoring?.processed ?? 0;
+  // Fala przy każdym meldunku postępu oceny
+  const scoredPulse = pipeline?.telemetry?.scoring?.scored ?? 0;
   // Obliczenia napisów dla pigułki
   let stageTitle = 'Gotowy';
   let stageMeta = '';
 
   const summary = summarizeActivity(activityRows);
-  const freshCount = getFreshOffersCount(pipeline, activityRows);
+  // Nowe oferty zapisane przez scrapery w tym przebiegu (linie „saved N new offers”).
+  const freshCount = (pipeline?.telemetry?.sources ?? []).reduce((acc, s) => acc + (s.added ?? 0), 0);
 
   if (isIdle) {
     stageTitle = 'Gotowy';
@@ -65,12 +65,12 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
     }
   } else if (isStopping) {
     stageTitle = 'Zatrzymywanie…';
-    stageMeta = 'kończę rozpoczęte zapytania';
+    stageMeta = 'kończę bieżący etap';
   } else if (isFailed || isStopped) {
     const curStage = pipeline?.current_stage_title;
     if (isStopped) {
       stageTitle = 'Wstrzymano';
-      stageMeta = 'zatrzymano po paczce';
+      stageMeta = curStage ? `etap: ${curStage}` : 'przebieg wstrzymany';
     } else {
       stageTitle = curStage ? `${curStage} przerwane` : 'Błąd etapu';
       stageMeta = pipeline?.error_message || 'pipeline zatrzymany';
@@ -84,15 +84,11 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
     stageTitle = pipeline?.current_stage_title || 'W toku';
     const scoring = pipeline?.telemetry?.scoring;
     const sources = pipeline?.telemetry?.sources;
-    const toScore = scoring?.to_score ?? scoring?.total;
-    const scored = scoring?.scored ?? scoring?.processed ?? 0;
 
-    if (scoring && ((toScore && toScore > 0) || scored > 0)) {
+    if (scoring?.to_score) {
       const eta = scoringEtaSeconds(scoring, nowSec);
-      const rateStr = scoring.rate ? ` (${scoring.rate.toFixed(1)}/s)` : '';
-      stageMeta = toScore
-        ? `${scored} / ${toScore}${rateStr}${eta !== null ? ` · ~${formatDuration(eta)}` : ''}`
-        : `${scored} dopasowanych${rateStr}`;
+      stageMeta = `${scoring.scored.toLocaleString('pl-PL')} / ${scoring.to_score.toLocaleString('pl-PL')}`
+        + (eta !== null ? ` · ~${formatDuration(eta)}` : '');
     } else if (sources && sources.length > 0) {
       const doneSources = sources.filter((s) => s.state === 'done' || s.state === 'skipped').length;
       stageMeta = `${doneSources} / ${sources.length} źródeł`;
@@ -128,7 +124,7 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
   const ringButtonAriaLabel = isIdle
     ? 'Uruchom pipeline'
     : isRunning
-    ? 'Zatrzymaj po paczce'
+    ? 'Zatrzymaj po bieżącym etapie'
     : isStopping
     ? 'Zatrzymywanie…'
     : isCompleted
@@ -140,11 +136,11 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
   const ringButtonTip = isIdle
     ? 'Uruchom pipeline'
     : isRunning
-    ? 'Zatrzymaj po paczce'
+    ? 'Zatrzymaj po bieżącym etapie'
     : isStopping
-    ? 'Kończę paczkę…'
+    ? 'Kończę bieżący etap…'
     : isCompleted
-    ? 'Pokaż nowe oferty'
+    ? 'Pokaż dopasowane oferty'
     : pipeline?.can_resume
     ? 'Wznów pipeline'
     : 'Uruchom pipeline';
@@ -177,7 +173,7 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
 
       <Stream
         progress={isIdle ? 0 : progress}
-        pulse={batchPulse}
+        pulse={scoredPulse}
         loop={isRunning ? PILL_STREAM_LOOP : undefined}
         depth={0.8}
         width={17.68}

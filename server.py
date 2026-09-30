@@ -25,11 +25,6 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from app_services import (
-    WS_ALL,
-    WS_STAGE_NAMES,
-    WS_TAB_HINT,
-    WS_TABS,
-    WS_TOOLS,
     check_pipeline_prerequisites,
     fetch_job_from_link,
     get_api_keys_info,
@@ -97,7 +92,7 @@ async def origin_check_middleware(request: Request, call_next):
 # --- Endpointy API ---
 
 async def api_bootstrap(request: Request) -> JSONResponse:
-    """Zwraca metadane początkowe, tokeny motywu, status pipeline'u i statystyki bazy."""
+    """Zwraca status pipeline'u i statystyki bazy."""
     job_data_service.ensure_loaded()
     stats = job_data_service.get_stats()
 
@@ -107,14 +102,6 @@ async def api_bootstrap(request: Request) -> JSONResponse:
 
     return JSONResponse({
         "stats": stats,
-        "tabs": WS_TABS,
-        "tools": WS_TOOLS,
-        "all_views": WS_ALL,
-        "tab_hints": WS_TAB_HINT,
-        "stages": WS_STAGE_NAMES,
-        "source_colors": ui_theme.SOURCES,
-        "source_fallback_color": ui_theme.SOURCE_FALLBACK,
-        "state_colors": ui_theme.STATES,
         "pipeline": p_state,
     })
 
@@ -202,8 +189,6 @@ async def api_offers(request: Request) -> JSONResponse:
         "page_marks": page_marks,
         "fresh_count": fresh_count,
         "fresh_since": fresh_since,
-        "gap": None,
-        "gap_threshold": None,
     })
 
 
@@ -451,15 +436,17 @@ async def api_pipeline_run_step(request: Request) -> JSONResponse:
     if mgr.is_running():
         return JSONResponse({"error": "Inny proces jest już w toku"}, status_code=400)
 
-    cmd_map = {
-        "scrapers": [sys.executable, "-u", "main_scraper.py"],
-        "matching": [sys.executable, "-u", "-m", "matching.run"],
-        "rescore_all": [sys.executable, "-u", "-m", "matching.run", "--rescore-all"],
+    # Krok → polecenie i etap toru, na którym arkusz pokazuje jego postęp.
+    step_map = {
+        "scrapers": ([sys.executable, "-u", "main_scraper.py"], "phase1"),
+        "matching": ([sys.executable, "-u", "-m", "matching.run"], "phase3"),
+        "rescore_all": ([sys.executable, "-u", "-m", "matching.run", "--rescore-all"], "phase3"),
     }
-    if step not in cmd_map:
+    if step not in step_map:
         return JSONResponse({"error": f"Nieznany krok: {step}"}, status_code=400)
 
-    ok, msg = mgr.start_pipeline(mode="standalone", cmd=cmd_map[step], is_resume=False)
+    cmd, stage = step_map[step]
+    ok, msg = mgr.start_pipeline(mode="standalone", cmd=cmd, is_resume=False, stage=stage)
     state = mgr.get_state()
     state["logs"] = sanitize_logs(state.get("logs", []))
     if not ok:

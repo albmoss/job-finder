@@ -136,9 +136,11 @@ def main(argv=None):
     ratings = load_manual_ratings()
     scores = load_scores()
 
+    # Brak ocen to brak danych, nie błąd: bez tego świeża instalacja kończyłaby
+    # każdy pipeline jako nieudany na ostatnim etapie.
     if not ratings:
         print("No manual ratings - nothing to evaluate.")
-        return 1
+        return 0
 
     # Wspólny zbiór: oferty ocenione ręcznie ORAZ mające wynik z AI
     common = [(scores[canonical_link(link)], rating) for link, rating in ratings.items()
@@ -153,7 +155,7 @@ def main(argv=None):
 
     if len(common) < 10:
         print("\nNot enough common records for meaningful metrics.")
-        return 1
+        return 0
 
     dist = {}
     for _, r in common:

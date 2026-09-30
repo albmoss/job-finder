@@ -104,9 +104,10 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
 
         <div className="help-about">
           <p>
-            <b>Dopasowane</b> są ułożone od najlepszego dopasowania do CV. Każda decyzja zdejmuje
-            ofertę z tej kolejki i uczy profil, czego szukasz. W pozostałych zakładkach wybierz ofertę
-            z listy, żeby zobaczyć opis i zmienić decyzję.
+            <b>Dopasowane</b> są ułożone od najlepszego dopasowania do CV. Decyzja zdejmuje ofertę
+            z tej kolejki. Oferty, które przesiew odrzucił (np. inne miasto bez pracy zdalnej albo
+            wymagany język spoza CV), nie mają procentu i są tylko w zakładce <b>Wszystkie</b>. W pozostałych
+            zakładkach wybierz ofertę z listy, żeby zobaczyć opis i zmienić decyzję.
           </p>
           <p>
             Klik w zakres stron w stopce listy („1–25 z …”) rozwija skok o wiele stron: suwak i progi

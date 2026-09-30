@@ -75,7 +75,7 @@ h1, h2, h3, p { margin: 0; }
 .workspace.is-detail-leaving > .panel:last-child > * { transition: filter 200ms ease-in; }
 .workspace.is-settling > .panel > *,
 .workspace.is-detail-settling > .panel:last-child > * { transition: filter 420ms ease; }
-/* To samo rozmycie dla części panelu (strona listy ofert, strona tabeli braków): useBlurSwap
+/* To samo rozmycie dla części panelu (strona listy ofert): useBlurSwap
    w swap.ts. Przewijane listy przycinają rozlane rozmycie u siebie (clip-path w arkuszu widoku),
    żeby nie zachodziło na nagłówek i stopkę panelu. */
 .swap-out, .swap-in { filter: blur(12px); }
@@ -165,9 +165,6 @@ canvas { will-change: transform; }
 }
 .section-label .aside { font-family: var(--mono); font-size: 11px; font-weight: 400; }
 .section-label button.aside:hover { color: var(--ink); }
-.stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.stat b { font-size: 30px; font-weight: 300; letter-spacing: -1px; line-height: 1.1; font-variant-numeric: tabular-nums; }
-.stat span { font-size: 12px; color: var(--ink-3); }
 
 /* ---------- słowa kluczowe ---------- */
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -175,7 +172,6 @@ canvas { will-change: transform; }
   display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px;
   border-radius: var(--r-chip); background: var(--fill-2); font-size: 12.5px; color: var(--ink);
 }
-.chip.gap { background: none; border: 1px dashed var(--gap-dash); color: var(--ink-2); }
 .chip svg { width: 13px; height: 13px; flex: none; }
 
 /* ---------- pola ---------- */
@@ -270,7 +266,7 @@ canvas { will-change: transform; }
 @keyframes fade-out { to { opacity: 0; } }
 @keyframes modal-out { to { opacity: 0; transform: translateY(8px) scale(0.98); } }
 
-/* ---------- suwak (próg braków, skok o wiele stron listy) ---------- */
+/* ---------- suwak (skok o wiele stron listy) ---------- */
 .range-slider {
   -webkit-appearance: none;
   appearance: none;

@@ -927,12 +927,18 @@ def test_pipeline_stop_and_resume_lifecycle():
         # 4. Standalone tool exit semantics: code 0 = completed, code 1 = failed
         mgr_sa = PipelineProcessManager()
         sa_cmd = [sys.executable, "-c", "import sys; sys.exit(0)"]
-        ok_sa, _ = mgr_sa.start_pipeline(mode="full", cmd=sa_cmd, is_resume=False)
+        ok_sa, _ = mgr_sa.start_pipeline(mode="standalone", cmd=sa_cmd, is_resume=False, stage="phase3")
+        running_ids = [s["id"] for s in mgr_sa._stages if s["status"] == "running"]
+        check("standalone step runs as its own stage, the rest skipped",
+              running_ids == ["phase3"] and mgr_sa._active_stage_idx == 5
+              and all(s["status"] == "skipped" for s in mgr_sa._stages if s["id"] != "phase3"), running_ids)
         if mgr_sa._thread:
             mgr_sa._thread.join(timeout=3.0)
         sa_state = mgr_sa.get_state()
         check("standalone exit code 0 marked as completed", sa_state.get("status") == "completed")
         check("standalone exit code 0 marked as success", sa_state.get("success") is True)
+        check("standalone step stage done on success",
+              next(s for s in sa_state["stages"] if s["id"] == "phase3")["status"] == "done")
 
         mgr_fa = PipelineProcessManager()
         fa_cmd = [sys.executable, "-c", "import sys; sys.exit(1)"]
@@ -1217,24 +1223,37 @@ def test_pipeline_stage_stats_and_eta():
     mgr._parse_telemetry("2026-09-23 10:02:15,000 - deduplicate_db - INFO - jobs_database.json: 1192 ofert, brak duplikatow - plik bez zmian")
     check("dedup without duplicates reports zero", mgr._telemetry_snapshot()["stages"]["phase2"] == {"removed": 0})
 
-    mgr._parse_telemetry("Prefilter: 12 rejected {'tech': 10, 'level': 2} | to score: 38")
-    check("scoring: prefilter rejected and to_score parsed",
-          mgr._telemetry_snapshot()["stages"]["phase3"] == {"prefilter_rejected": 12, "to_score": 38})
+    mgr._parse_telemetry("Prefilter: 12 rejected {'miasto': 10, 'poziom': 2} | to score: 38")
+    check("scoring: prefilter rejected, reasons and to_score parsed",
+          mgr._telemetry_snapshot()["stages"]["phase3"]
+          == {"prefilter_rejected": 12, "prefilter_reasons": {"miasto": 10, "poziom": 2}, "to_score": 38})
     check("scoring: prefilter records to_score and total",
           mgr._telemetry["scoring"]["to_score"] == 38 and mgr._telemetry["scoring"]["prefilter_rejected"] == 12)
 
     mgr._parse_telemetry("   Scored 10/38 (5.0/s)")
-    first = mgr._telemetry["scoring"]["first_batch_at"]
-    check("scoring: first progress line sets rate and first_batch_at",
-          first is not None and mgr._telemetry["scoring"]["rate"] == 5.0 and mgr._telemetry["scoring"]["scored"] == 10)
+    check("scoring: progress line sets rate, scored and report time",
+          mgr._telemetry["scoring"]["last_done_at"] is not None
+          and mgr._telemetry["scoring"]["rate"] == 5.0 and mgr._telemetry["scoring"]["scored"] == 10)
 
     mgr._parse_telemetry("   Scored 25/38 (5.2/s)")
     sc = mgr._telemetry_snapshot()["scoring"]
-    check("scoring: first start is kept across progress updates", sc["first_batch_at"] == first)
-    check("scoring: progress update updates scored, processed, and rate",
-          sc["scored"] == 25 and sc["processed"] == 25 and sc["rate"] == 5.2)
-    check("scoring: phase3 stage telemetry tracks scored, total, rate",
-          mgr._telemetry_snapshot()["stages"]["phase3"] == {"prefilter_rejected": 12, "to_score": 38, "scored": 25, "total": 38, "rate": 5.2})
+    check("scoring: progress update updates scored and rate",
+          sc["scored"] == 25 and sc["rate"] == 5.2)
+    mgr._parse_telemetry("   Jev error: HTTP 500")
+    check("scoring: Jev errors are counted live", mgr._telemetry["scoring"]["errors"] == 1)
+    mgr._parse_telemetry("Matching done: 36 scored now, 2 errors, 140 offers with a percent.")
+    phase3 = mgr._telemetry_snapshot()["stages"]["phase3"]
+    check("scoring: final summary sets errors and offers with a percent",
+          (phase3["errors"], phase3["with_percent"], mgr._telemetry["scoring"]["errors"]) == (2, 140, 2), phase3)
+
+    mgr._parse_telemetry("Of those, with an AI score:         66")
+    mgr._parse_telemetry("Spearman correlation (AI score vs rating): +0.551  (umiarkowana)")
+    check("evaluation: Spearman and common count parsed",
+          mgr._telemetry_snapshot()["stages"]["phase4"] == {"common": 66, "rho": 0.551})
+    fresh = PipelineProcessManager()
+    fresh._parse_telemetry("No manual ratings - nothing to evaluate.")
+    check("evaluation: missing ratings reported as insufficient",
+          fresh._telemetry_snapshot()["stages"]["phase4"] == {"insufficient": True})
     for line in [
         "2026-09-25 18:14:00,000 - main_scraper - INFO - Running aplikuj.pl scraper...",
         "2026-09-25 18:14:01,000 - main_scraper - INFO - Running OLX Praca scraper...",

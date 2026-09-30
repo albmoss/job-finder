@@ -254,6 +254,12 @@ export const OfferDetailPanel: React.FC<OfferDetailPanelProps> = ({
     facts.push({ icon: <Calendar />, label: 'Doświadczenie', value: val });
   }
 
+  // Umiejętności z pól portalu (utils/offer_fields.py), nie z modelu.
+  const skillGroups = [
+    { label: 'Wymagane umiejętności', items: fields?.skills_required?.filter(Boolean) ?? [] },
+    { label: 'Mile widziane', items: fields?.skills_nice?.filter(Boolean) ?? [] },
+  ].filter((g) => g.items.length > 0);
+
   const blocks = offer.description_blocks ?? [];
   const title = offer.title || 'Bez tytułu';
   const titleCut = title.lastIndexOf(' ') + 1;
@@ -390,6 +396,7 @@ export const OfferDetailPanel: React.FC<OfferDetailPanelProps> = ({
         <MatchCard
           link={offer.link}
           matchPercentage={offer.match_percentage}
+          filtered={offer.filtered}
           preview={preview}
           still={pipelineRunning}
         />
@@ -409,6 +416,25 @@ export const OfferDetailPanel: React.FC<OfferDetailPanelProps> = ({
           </div>
         )}
 
+        {/* Umiejętności z ogłoszenia */}
+        {skillGroups.length > 0 && (
+          <div className="od-kw">
+            {skillGroups.map((group) => (
+              <div key={group.label} className="od-kw-group">
+                <div className="od-kw-head">
+                  <span>{group.label}</span>
+                </div>
+                <div className="chips">
+                  {group.items.map((skill, idx) => (
+                    <span key={`${idx}-${skill}`} className="chip">
+                      {skill}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Przełącznik etapu rekrutacji */}
         {Boolean(offer.status) && !preview && (

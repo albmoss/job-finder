@@ -524,9 +524,9 @@
 }
 
 
-/* ---------- 3. Trzy karty (Paczki / Klucze / Na żywo) ----------
+/* ---------- 3. Trzy karty (Źródła / Dopasowanie / Na żywo) ----------
    „Na żywo” jest szersza — niesie najwięcej treści. Karty mają stałą wysokość, żeby siatka
-   paczek i kafelki kluczy mogły wypełnić wolne pole zamiast rosnąć z treścią. */
+   źródeł wypełniała wolne pole zamiast rosnąć z treścią. */
 .pp-now {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.55fr);
@@ -585,7 +585,7 @@
   color: var(--ink);
 }
 
-/* Siatka paczek i źródeł: rozmiar kafelka (--cell) i kolumny liczy fitGrid z wymiarów pola. */
+/* Siatka źródeł: rozmiar kafelka (--cell) i kolumny liczy fitGrid z wymiarów pola. */
 .pp-packs {
   flex: 1 1 0;
   min-height: 0;
@@ -640,70 +640,75 @@
   margin-top: auto;
 }
 
-/* Klucze API: kafelek na klucz, siatka rozciągnięta na wolne pole karty. */
-.pp-keys {
+/* Dopasowanie: pasek oceny Jev i powody odrzucenia przez przesiew. */
+.pp-match {
   flex: 1 1 0;
   min-height: 0;
-  display: grid;
-  grid-auto-rows: minmax(0, 1fr);
-  gap: 6px;
-}
-
-.pp-key {
-  position: relative;
-  overflow: hidden;
-  min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
   justify-content: center;
-  gap: 2px;
-  padding: 6px 4px;
-  border-radius: 12px;
-  background: var(--fill-2);
-  border: 1px solid var(--stroke);
-  transition: background-color 200ms ease, border-color 200ms ease;
+  gap: 10px;
 }
 
-.pp-key b {
+.pp-meter-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--ink-3);
+  margin-bottom: 4px;
+}
+
+.pp-meter-head .tnum {
   font-family: var(--mono);
-  font-size: 15px;
-  font-weight: 500;
   color: var(--ink-2);
 }
 
-.pp-key span {
-  font-family: var(--mono);
-  font-size: 10px;
+.pp-meter-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--fill-2);
+  overflow: hidden;
+}
+
+/* Wypełnienie w barwie gotowego kafelka źródła (początek strumienia). */
+.pp-meter-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-2);
+  transition: width 400ms var(--ease-out);
+}
+
+.pp-reasons dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 14px;
+  row-gap: 1px;
+}
+
+.pp-reasons dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.pp-reasons dt {
   color: var(--ink-2);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.pp-key.on {
-  background: linear-gradient(
-    160deg,
-    color-mix(in oklab, var(--accent-2) 72%, transparent),
-    color-mix(in oklab, var(--stream-end) 58%, transparent)
-  );
-  border-color: transparent;
-}
-
-.pp-key.on b,
-.pp-key.on span {
-  color: var(--ink);
-}
-
-/* Limit: pasek u dołu kafelka topnieje do powrotu klucza (--cool = pozostała część). */
-.pp-key.cool::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 3px;
-  width: calc(var(--cool, 0) * 100%);
-  background: var(--accent-hot);
-  opacity: 0.7;
-  transition: width 1s linear;
+.pp-reasons dd {
+  margin: 0;
+  font-family: var(--mono);
+  color: var(--ink-3);
 }
 
 .pp-card .big {
@@ -847,30 +852,6 @@
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-/* Liczba decyzji, których profil preferencji jeszcze nie uwzględnia. */
-.pp-step-profile {
-  position: relative;
-}
-
-.pp-step-badge {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  background: var(--ink);
-  color: var(--surface-solid);
-  box-shadow: 0 0 0 2px var(--surface-solid);
-  font-family: var(--mono);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 1;
 }
 
 .pp-confirm-rescore {
@@ -1053,7 +1034,7 @@
 .pp-ready-label {
   font-weight: 500;
   color: var(--ink-3);
-  min-width: 70px;
+  min-width: 96px;
 }
 
 .pp-ready-val {
@@ -1202,4 +1183,65 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+.pp-setup-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pp-field-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.pp-field-state {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+/* Pole klucza z przyciskiem pokaż/ukryj w środku. */
+.pp-key-input {
+  position: relative;
+}
+
+.pp-key-input .input {
+  font-family: var(--mono);
+  padding-right: 40px;
+}
+
+.pp-key-input .iconbtn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  background: none;
+}
+
+/* Braki przed startem: neutralnie, bez koloru ostrzegawczego. */
+.pp-issues {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--fill);
+  border: 1px solid var(--stroke-strong);
+  font-size: 12.5px;
+}
+
+.pp-issues-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.pp-issues ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+  line-height: 1.5;
 }

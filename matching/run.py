@@ -40,6 +40,8 @@ STOP_FLAG_FILE = BASE_DIR / "pipeline_stop_requested.flag"
 
 WORKERS = 8
 SAVE_EVERY = 200
+# Linia postępu co tyle sekund (i na końcu): arkusz pipeline'u liczy z niej postęp i ETA.
+PROGRESS_EVERY_S = 2.0
 MIN_DESCRIPTION = 150
 
 
@@ -125,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
 
     session = requests.Session()
     done = errors = 0
-    started = time.monotonic()
+    started = last_report = time.monotonic()
 
     def score(item):
         link, job, fp = item
@@ -162,8 +164,10 @@ def main(argv: list[str] | None = None) -> int:
                 done += 1
                 if done % SAVE_EVERY == 0:
                     save_json_atomic(str(RESULTS_PATH), results, backup=False)
-                if done % 100 == 0 or done == total:
-                    rate = done / max(time.monotonic() - started, 1e-6)
+                now_s = time.monotonic()
+                if now_s - last_report >= PROGRESS_EVERY_S or done == total:
+                    last_report = now_s
+                    rate = done / max(now_s - started, 1e-6)
                     print(f"   Scored {done}/{total} ({rate:.1f}/s)")
             if not stopped and STOP_FLAG_FILE.exists():
                 print("   Stop requested - finishing in-flight offers.")
