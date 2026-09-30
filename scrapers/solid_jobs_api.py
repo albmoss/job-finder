@@ -16,6 +16,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.candidate_scope import scope_city, scope_levels
+from utils.portal_categories import pick_categories
 from utils.data_models import Job
 from utils.offer_fields import (
     norm_seniority,
@@ -30,6 +31,18 @@ from utils.offer_fields import (
 logger = logging.getLogger(__name__)
 
 DIVISIONS = ["it", "engineering", "marketing", "sales", "hr", "logistics", "finances", "other"]
+
+# Katalog działów / kategorii portalu - źródło: https://solid.jobs (sprawdzone 2026-09-30)
+SOLID_DIVISIONS_CATALOG = {
+    "engineering": "Inżynieria",
+    "finances": "Finanse",
+    "hr": "HR",
+    "it": "IT",
+    "logistics": "Logistyka",
+    "marketing": "Marketing",
+    "other": "Pozostałe",
+    "sales": "Sprzedaż",
+}
 BASE_URL = "https://solid.jobs/public-api/offers"
 CAMPAIGN_ID = "job-scratcher"  # Parametr wymagany: małe litery, cyfry, myślniki
 # Mniejsze strony są stabilniejsze - przy pageSize=500 API bywa niekonsekwentne
@@ -64,6 +77,29 @@ class SolidJobsAPIScraper:
             "Accept": "application/json",
             "User-Agent": "JobScratcher/1.0"
         })
+
+    def _fetch_category_catalog(self) -> dict[str, str]:
+        """Pobierz katalog działów/kategorii z portalu w czasie działania lub użyj słownika zapasowego."""
+        try:
+            resp = self.session.get("https://solid.jobs", timeout=10)
+            if resp.status_code == 200:
+                import re
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(resp.text, "html.parser")
+                cats = {}
+                for a in soup.find_all("a", href=True):
+                    m = re.match(r"^/offers/([a-zA-Z0-9_-]+)$", a["href"])
+                    if m:
+                        slug = m.group(1)
+                        raw = a.get_text(strip=True)
+                        clean = re.sub(r"[\d\s\xa0]+$", "", raw)
+                        if clean and not clean.startswith("Przeglądaj") and slug in DIVISIONS:
+                            cats[slug] = clean
+                if cats:
+                    return cats
+        except Exception as e:
+            logger.debug(f"SOLID.Jobs: nie udało się pobrać działów z HTML ({e}), używam słownika zapasowego")
+        return dict(SOLID_DIVISIONS_CATALOG)
 
     def get_source_name(self) -> str:
         return "SOLID.Jobs"
@@ -283,7 +319,15 @@ class SolidJobsAPIScraper:
         fetched = 0
         skipped = 0
 
-        for division in DIVISIONS:
+        catalog = self._fetch_category_catalog()
+        picked_divisions = pick_categories("solid_jobs", catalog) if catalog else None
+        if picked_divisions is not None:
+            logger.info(f"SOLID.Jobs: {len(picked_divisions)} kategorii z CV")
+            divisions = [d for d in picked_divisions if d in DIVISIONS]
+        else:
+            divisions = DIVISIONS
+
+        for division in divisions:
             offers = self._fetch_division(division)
             fetched += len(offers)
             for offer in offers:

@@ -221,17 +221,30 @@ class OLXScraper(BaseScraper):
         jobs = []
         seen_links = set()
         
-        categories = [
-            "administracja-biurowa", "badania-i-rozwoj", "bankowosc", "bhp-ochrona-srodowiska",
-            "budowa-remonty", "dostawca-kurier-miejski", "e-commerce-handel-internetowy",
-            "edukacja", "finanse-ksiegowosc", "franczyza-wlasna-firma", 
-            "fryzjerstwo-kosmetyka", "gastronomia", "hr", "hostessa-roznoszenie-ulotek",
-            "hotelarstwo", "inzynieria", "it-telekomunikacja", "kierowca", "logistyka-zakupy-spedycja",
-            "marketing-pr", "mechanika-lakiernictwo", "montaz-serwis", "obsluga-klienta-call-center",
-            "ochrona", "opieka", "organizacja-obsluga-imprez", "praca-magazynowe", "pracownik-sklepu",
-            "produkcja", "rolnictwo-ogrodnictwo", "sprzatanie", "sprzedaz", "ubezpieczenia",
-            "wykladanie-ekspozycja-towaru", "zdrowie", "praktyki-staze", "pozostale-oferty-pracy"
-        ]
+        # Kategorie OLX Praca (slug w adresie -> nazwa na portalu), olx.pl/praca, 30.09.2026.
+        all_categories = {
+            "administracja-biurowa": "Administracja biurowa", "badania-i-rozwoj": "Badania i rozwój",
+            "bankowosc": "Bankowość", "bhp-ochrona-srodowiska": "BHP i ochrona środowiska",
+            "budowa-remonty": "Budowa i remonty", "dostawca-kurier-miejski": "Dostawca, kurier miejski",
+            "e-commerce-handel-internetowy": "E-commerce i handel internetowy", "edukacja": "Edukacja",
+            "finanse-ksiegowosc": "Finanse i księgowość", "franczyza-wlasna-firma": "Franczyza i własna firma",
+            "fryzjerstwo-kosmetyka": "Fryzjerstwo i kosmetyka", "gastronomia": "Gastronomia", "hr": "HR",
+            "hostessa-roznoszenie-ulotek": "Hostessa, roznoszenie ulotek", "hotelarstwo": "Hotelarstwo",
+            "inzynieria": "Inżynieria", "it-telekomunikacja": "IT i telekomunikacja", "kierowca": "Kierowca",
+            "logistyka-zakupy-spedycja": "Logistyka, zakupy i spedycja", "marketing-pr": "Marketing i PR",
+            "mechanika-lakiernictwo": "Mechanika i lakiernictwo", "montaz-serwis": "Montaż i serwis",
+            "obsluga-klienta-call-center": "Obsługa klienta i call center", "ochrona": "Ochrona",
+            "opieka": "Opieka", "organizacja-obsluga-imprez": "Organizacja i obsługa imprez",
+            "praca-magazynowe": "Prace magazynowe", "pracownik-sklepu": "Pracownik sklepu",
+            "produkcja": "Produkcja", "rolnictwo-ogrodnictwo": "Rolnictwo i ogrodnictwo",
+            "sprzatanie": "Sprzątanie", "sprzedaz": "Sprzedaż", "ubezpieczenia": "Ubezpieczenia",
+            "wykladanie-ekspozycja-towaru": "Wykładanie i ekspozycja towaru", "zdrowie": "Zdrowie",
+            "praktyki-staze": "Praktyki i staże", "pozostale-oferty-pracy": "Pozostałe oferty pracy",
+        }
+        from utils.portal_categories import pick_categories
+        picked = pick_categories("olx", all_categories)
+        categories = picked if picked is not None else list(all_categories)
+        logger.info(f"OLX Praca: {len(categories)}/{len(all_categories)} categories from CV")
         
         import os, json
         state_file = "olx_category_state.json"

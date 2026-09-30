@@ -125,15 +125,15 @@ def build_state(job: Job, profile: dict, cv_text: str | None) -> dict:
 
 
 def ask(state: dict, key: str, session: requests.Session | None = None,
-        retries: int = 5) -> dict:
-    """Jedno zapytanie z ponawianiem przy 429/529/5xx. Zwraca słownik `answers`."""
+        retries: int = 5, questions: dict | None = None) -> dict:
+    """Jedno zapytanie z ponawianiem przy 429/529/5xx. Domyślnie pytania o ofertę (QUESTIONS)."""
     http = session or requests
     delay = 1.0
     for attempt in range(retries):
         try:
             resp = http.post(
                 API_URL,
-                json={"state": state, "model": MODEL, "questions": QUESTIONS},
+                json={"state": state, "model": MODEL, "questions": questions or QUESTIONS},
                 headers={"Authorization": f"Bearer {key}"},
                 timeout=60,
             )

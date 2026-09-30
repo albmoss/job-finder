@@ -15,6 +15,7 @@ from datetime import datetime
 
 from scrapers.base_scraper import BaseScraper
 from utils.candidate_scope import scope_city, scope_levels
+from utils.portal_categories import pick_categories
 from utils.data_models import Job
 from utils.offer_fields import (
     norm_seniority,
@@ -47,6 +48,47 @@ NFJ_LEVEL_MAP = {
     "manager": "lead",
 }
 
+# Kategorie portalu - źródło: https://nofluffjobs.com/pl (sprawdzone 2026-09-30)
+NOFLUFF_CATEGORIES = {
+    "agile": "Agile",
+    "architecture": "Architecture",
+    "artificial-intelligence": "AI/ML",
+    "automation": "Automatyka",
+    "backend": "Backend",
+    "business-analyst": "Business Analysis",
+    "business-intelligence": "Business Intelligence",
+    "consulting": "Doradztwo",
+    "customer-service": "Obsługa klienta",
+    "data": "Data",
+    "devops": "DevOps",
+    "electrical-eng": "Inżynieria elektryczna",
+    "electronics": "Elektronika",
+    "embedded": "Embedded",
+    "erp": "ERP",
+    "finance": "Finanse",
+    "frontend": "Frontend",
+    "fullstack": "Fullstack",
+    "game-dev": "GameDev",
+    "hr": "HR",
+    "law": "Prawo",
+    "logistics": "Logistyka",
+    "marketing": "Marketing",
+    "mechanics": "Mechanika",
+    "mobile": "Mobile",
+    "office-administration": "Administracja biurowa",
+    "other": "Inne IT",
+    "pm": "PM",
+    "product-management": "Product Management",
+    "project-manager": "Project Manager",
+    "sales": "Sprzedaż",
+    "security": "Security",
+    "support": "Support",
+    "sys-administrator": "Sys. Administrator",
+    "telecommunication": "Telekomunikacja",
+    "testing": "Testing",
+    "ux": "Design",
+}
+
 
 class NoFluffScraper(BaseScraper):
     """Scraper NoFluffJobs na wewnętrznym API - bez przeglądarki."""
@@ -66,6 +108,32 @@ class NoFluffScraper(BaseScraper):
     def scrape_jobs(self) -> List[Job]:
         """Not used — run() is overridden to use API instead of browser."""
         return []
+
+    def _fetch_category_catalog(self, session: requests.Session) -> dict[str, str]:
+        """Pobierz katalog kategorii z portalu w czasie działania lub użyj słownika zapasowego."""
+        try:
+            resp = session.get(
+                "https://nofluffjobs.com/pl",
+                headers={"User-Agent": HEADERS["User-Agent"], "Accept-Language": "pl"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                import re
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(resp.text, "html.parser")
+                cats = {}
+                for a in soup.find_all("a", href=True):
+                    m = re.match(r"^/pl/([a-zA-Z0-9_-]+)$", a["href"])
+                    if m:
+                        slug = m.group(1)
+                        text = a.get_text(strip=True)
+                        if slug not in ("companies", "kalkulator-wynagrodzen", "insights", "blog", "wizard", "praca") and text:
+                            cats[slug] = text
+                if cats:
+                    return cats
+        except Exception as e:
+            logger.debug(f"NFJ API: nie udało się pobrać kategorii z HTML ({e}), używam słownika zapasowego")
+        return dict(NOFLUFF_CATEGORIES)
 
     def _search(self, session: requests.Session, criteria: dict, label: str) -> list:
         """Pobierz wszystkie strony wyników dla jednego zestawu kryteriów."""
@@ -135,10 +203,18 @@ class NoFluffScraper(BaseScraper):
         raw_levels = scope_levels()
         seniority = list(dict.fromkeys(NFJ_LEVEL_MAP[lv] for lv in raw_levels if lv in NFJ_LEVEL_MAP)) or ["trainee", "junior"]
 
+        criteria = {"seniority": seniority, "country": ["poland"]}
+        catalog = self._fetch_category_catalog(session)
+        picked_categories = pick_categories("nofluffjobs", catalog) if catalog else None
+        if picked_categories is not None:
+            logger.info(f"NoFluffJobs: {len(picked_categories)} kategorii z CV")
+            criteria["category"] = picked_categories
+
+        label_cats = f" [{len(picked_categories)} cats]" if picked_categories else ""
         postings = self._search(
             session,
-            {"seniority": seniority, "country": ["poland"]},
-            f"PL {','.join(seniority)}",
+            criteria,
+            f"PL {','.join(seniority)}{label_cats}",
         )
 
         unique = {}

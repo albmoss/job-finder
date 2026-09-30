@@ -76,6 +76,75 @@ SENIORITY_TO_ET: dict[str, list[int]] = {
     "manager": [5, 6, 20, 21],
 }
 
+# Źródło: https://www.pracuj.pl __NEXT_DATA__ dictionary.categories (sprawdzono: 2026-09-30)
+PRACUJ_CATEGORIES: dict[str, str] = {
+    "5001": "Administracja biurowa",
+    "5002": "Badania i rozwój",
+    "5003": "Bankowość",
+    "5004": "BHP / Ochrona środowiska",
+    "5005": "Budownictwo",
+    "5006": "Call Center",
+    "5007": "Edukacja / Szkolenia",
+    "5008": "Finanse / Ekonomia",
+    "5009": "Franczyza / Własny biznes",
+    "5010": "Hotelarstwo / Gastronomia / Turystyka",
+    "5011": "Human Resources / Zasoby ludzkie",
+    "5012": "Inne",
+    "5013": "Internet / e-Commerce / Nowe media",
+    "5014": "Inżynieria",
+    "5015": "IT - Administracja",
+    "5016": "IT - Rozwój oprogramowania",
+    "5017": "Łańcuch dostaw",
+    "5018": "Marketing",
+    "5019": "Media / Sztuka / Rozrywka",
+    "5020": "Nieruchomości",
+    "5021": "Obsługa klienta",
+    "5022": "Praca fizyczna",
+    "5023": "Prawo",
+    "5024": "Produkcja",
+    "5025": "Public Relations",
+    "5026": "Reklama / Grafika / Kreacja / Fotografia",
+    "5027": "Sektor publiczny",
+    "5028": "Sprzedaż",
+    "5031": "Transport / Spedycja / Logistyka",
+    "5032": "Ubezpieczenia",
+    "5033": "Zakupy",
+    "5034": "Kontrola jakości",
+    "5035": "Zdrowie / Uroda / Rekreacja",
+    "5036": "Energetyka",
+    "5037": "Doradztwo / Konsulting",
+}
+
+
+def fetch_pracuj_categories() -> dict[str, str]:
+    """Pobiera słownik kategorii z __NEXT_DATA__ strony głównej Pracuj.pl, z fallbackiem do słownika statycznego."""
+    try:
+        req = urllib.request.Request(
+            "https://www.pracuj.pl",
+            headers={
+                'User-Agent': random.choice(USER_AGENTS),
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'pl-PL,pl;q=0.9,en;q=0.8',
+            }
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode('utf-8', errors='ignore')
+        soup = BeautifulSoup(html, 'html.parser')
+        script = soup.find('script', id='__NEXT_DATA__')
+        if script and script.string:
+            data = json.loads(script.string)
+            queries = data.get('props', {}).get('pageProps', {}).get('dehydratedState', {}).get('queries', [])
+            for q in queries:
+                qk = q.get('queryKey', [])
+                if qk and qk[0] == 'dictionary' and len(qk) > 1 and qk[1] == 'categories':
+                    cats_data = q.get('state', {}).get('data', [])
+                    cats = {str(c['id']): c['name'] for c in cats_data if c.get('level') == 1 and 'id' in c and 'name' in c}
+                    if cats:
+                        return cats
+    except Exception as e:
+        logger.debug(f"Pracuj.pl: nie udało się pobrać kategorii dynamicznie ({e}) - używam słownika statycznego")
+    return PRACUJ_CATEGORIES
+
 
 class PracujOptimizedScraper:
     """Scraper na urllib i JSON, bez Playwrighta.
@@ -101,6 +170,17 @@ class PracujOptimizedScraper:
             et_codes = [1, 3, 17]
         self.et_param = ",".join(str(c) for c in et_codes)
         self.days = cfg.get("days_param", 7)
+
+        catalog = fetch_pracuj_categories()
+        from utils.portal_categories import pick_categories
+        picked = pick_categories("pracuj", catalog)
+        if picked is not None:
+            self.categories: Optional[List[str]] = picked
+            self.cc_param = ",".join(str(c) for c in sorted(picked))
+            logger.info(f"Pracuj.pl: {len(picked)} categories from CV")
+        else:
+            self.categories = None
+            self.cc_param = ""
 
         self.parallel_threads = cfg.get("parallel_threads", 3)
         self.detail_threads = cfg.get("detail_threads", 3)
@@ -141,7 +221,10 @@ class PracujOptimizedScraper:
         return "Pracuj.pl"
 
     def build_search_url(self, page: int = 1) -> str:
-        return f"{self.BASE_URL}/praca/{self.city_slug};wp?et={self.et_param}&itth={self.days}&pn={page}"
+        url = f"{self.BASE_URL}/praca/{self.city_slug};wp?et={self.et_param}&itth={self.days}&pn={page}"
+        if self.cc_param:
+            url += f"&cc={self.cc_param}"
+        return url
 
     def fetch_html(self, url: str, max_attempts: int = 3, is_detail: bool = False) -> str:
         if is_detail and self._detail_aborted:
@@ -166,6 +249,19 @@ class PracujOptimizedScraper:
                     return content
 
             except urllib.error.HTTPError as e:
+                if e.code == 429 and is_detail:
+                    # Strony ofert mają osobny, ciasny limit: po ~50 wejściach każde
+                    # kolejne dostaje 429 z Retry-After >= 120 s, więc czekanie znaczy
+                    # dwie minuty na ofertę. Reszta idzie z danych listingu.
+                    with self._rate_lock:
+                        if not self._detail_aborted:
+                            self._detail_aborted = True
+                            logger.warning(
+                                "Pracuj.pl: HTTP 429 on offer pages - stopping detail fetch "
+                                "and falling back to listing summaries"
+                            )
+                    return ""
+
                 if e.code == 429:
                     retry_after = e.headers.get('Retry-After') if e.headers else None
                     try:
@@ -492,7 +588,8 @@ class PracujOptimizedScraper:
             return None
 
     def run(self) -> List[Job]:
-        logger.info(f"{self.get_source_name()}: Starting scrape (lokalizacja: {self.city}, et={self.et_param})")
+        cat_info = f", cc={self.cc_param}" if self.cc_param else ""
+        logger.info(f"{self.get_source_name()}: Starting scrape (lokalizacja: {self.city}, et={self.et_param}{cat_info})")
         all_items = self.fetch_all_listings()
         if not all_items:
             logger.warning(f"{self.get_source_name()}: No offers found")

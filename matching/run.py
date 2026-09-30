@@ -98,15 +98,18 @@ def main(argv: list[str] | None = None) -> int:
             for name, value in text_features(job.description).items():
                 setattr(job, name, value)
         fp = offer_fingerprint(job)
-        entry = results.get(link)
-        if entry and entry.get("offer_fp") == fp and entry.get("profile_fp") == profile_fp:
-            continue
+        # Przesiew idzie po każdej ofercie, także ocenionej: jest darmowy, a nowa
+        # reguła ma zdjąć z listy także oferty ocenione przed jej dodaniem.
         reason = reject_reason(job, profile) if _has_content(job) else "brak_opisu"
         if reason:
             filtered[reason] = filtered.get(reason, 0) + 1
             results[link] = {"percent": None, "filtered": reason, "answers": None,
                              "offer_fp": fp, "profile_fp": profile_fp, "model": None,
                              "scored_at": now}
+            continue
+        entry = results.get(link)
+        if (entry and entry.get("percent") is not None and entry.get("offer_fp") == fp
+                and entry.get("profile_fp") == profile_fp):
             continue
         todo.append((link, job, fp))
 

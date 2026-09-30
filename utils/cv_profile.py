@@ -34,7 +34,10 @@ class _Language(BaseModel):
 
 
 class CandidateProfile(BaseModel):
-    city: Optional[str] = Field(description="Miasto zamieszkania albo szukania pracy podane w CV; null, gdy brak")
+    city: Optional[str] = Field(description=(
+        "Miasto zamieszkania albo szukania pracy podane w CV, zapisane w języku kraju, "
+        "w którym leży (Warszawa, nie Warsaw; Kraków, nie Cracow) - tej nazwy używają "
+        "adresy portali z ofertami; null, gdy brak"))
     seniority: Literal["intern", "junior", "mid", "senior", "lead", "manager"] = Field(
         description="Poziom zawodowy kandydata w zawodzie, do którego CV prowadzi")
     years_experience: float = Field(

@@ -9,6 +9,10 @@ Metoda: HTTP + schema.org JobPosting w ld+json na stronie oferty
 Paginacja jest w postaci /praca/{miasto};l/{N};pg - segmenty z sufiksami
 (`;l` = lokalizacja, `;pg` = strona) zamiast query stringu.
 Strona 1 nie ma segmentu numeru.
+
+Filtry: portal obsługuje segmenty ;l (lokalizacja), ;pg (strona), ;st (pojedyncze
+stanowisko), ;e (etat), ;tr (tryb pracy), ale nie udostępnia filtra kategorii
+branżowych w listingach, więc scraper działa bez filtra kategorii.
 """
 
 import re

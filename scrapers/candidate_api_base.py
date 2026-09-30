@@ -22,6 +22,7 @@ import requests
 
 from scrapers.base_scraper import BaseScraper
 from utils.candidate_scope import scope_city, scope_levels
+from utils.portal_categories import pick_categories
 from utils.data_models import Job
 from utils.links import canonical_link
 from utils.offer_fields import (
@@ -53,6 +54,63 @@ CANDIDATE_API_LEVEL_MAP = {
     "manager": "senior",
 }
 
+# Kategorie portali - źródło: https://justjoin.it/job-offers/all-locations (sprawdzone 2026-09-30)
+JUSTJOIN_CATEGORIES = {
+    "admin": "Admin",
+    "ai": "AI/ML",
+    "analytics": "Analytics",
+    "architecture": "Architecture",
+    "c": "C",
+    "data": "Data",
+    "devops": "DevOps",
+    "erp": "ERP",
+    "game": "Game",
+    "go": "Go",
+    "html": "HTML",
+    "java": "Java",
+    "javascript": "JavaScript",
+    "mobile": "Mobile",
+    "net": "Net",
+    "other": "Other",
+    "php": "PHP",
+    "pm": "PM",
+    "python": "Python",
+    "ruby": "Ruby",
+    "scala": "Scala",
+    "security": "Security",
+    "support": "Support",
+    "testing": "Testing",
+    "ux": "UX/UI",
+}
+
+# Kategorie portali - źródło: https://rocketjobs.pl/oferty-pracy/warszawa (sprawdzone 2026-09-30)
+ROCKETJOBS_CATEGORIES = {
+    "bankowosc": "Bankowość",
+    "bi-data": "BI & Data",
+    "budownictwo": "Budownictwo",
+    "consulting": "Consulting",
+    "design": "Design",
+    "edukacja": "Edukacja",
+    "finanse": "Finanse",
+    "gastronomia": "Gastronomia",
+    "hr": "HR",
+    "inne": "Inne",
+    "inzynieria": "Inżynieria",
+    "logistyka": "Logistyka",
+    "marketing": "Marketing",
+    "media": "Media",
+    "nieruchomosci": "Nieruchomości",
+    "pm": "Zarządzanie",
+    "praca-biurowa": "Praca biurowa",
+    "praca-w-sklepie": "Praca w sklepie",
+    "prawo": "Prawo",
+    "produkcja": "Produkcja",
+    "sales": "Sprzedaż",
+    "support": "Obsługa klienta",
+    "turystyka": "Turystyka",
+    "zdrowie": "Zdrowie i uroda",
+}
+
 
 class CandidateAPIScraper(BaseScraper):
     """Baza dla scraperów opartych o candidate-api. Nie używa przeglądarki."""
@@ -61,6 +119,7 @@ class CandidateAPIScraper(BaseScraper):
     PORTAL_URL = ""          # np. "https://justjoin.it"
     SOURCE_NAME = ""
     CONFIG_KEY = ""          # klucz w SCRAPER_CONFIG
+    PORTAL_KEY = ""
 
     # Ile ofert maksymalnie dociągać ze szczegółami (opis) - najdroższa część.
     # RocketJobs zwraca ~960 ofert; przy limicie 600 aż 360 zostawało bez opisu,
@@ -99,6 +158,33 @@ class CandidateAPIScraper(BaseScraper):
         h["Origin"] = self.PORTAL_URL
         return h
 
+    def _fetch_category_catalog(self, session: requests.Session) -> dict[str, str]:
+        """Pobierz katalog kategorii z portalu w czasie działania lub użyj słownika zapasowego."""
+        portal_key = self.PORTAL_KEY or self.CONFIG_KEY
+        fallback = JUSTJOIN_CATEGORIES if portal_key == "justjoinit" else ROCKETJOBS_CATEGORIES
+        url_path = "/job-offers/all-locations" if portal_key == "justjoinit" else "/oferty-pracy/warszawa"
+        pattern = r"^/job-offers/[^/]+/([a-zA-Z0-9_-]+)$" if portal_key == "justjoinit" else r"^/oferty-pracy/[^/]+/([a-zA-Z0-9_-]+)$"
+        try:
+            resp = session.get(f"{self.PORTAL_URL}{url_path}", headers=self._headers(), timeout=10)
+            if resp.status_code == 200:
+                import re
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(resp.text, "html.parser")
+                cats = {}
+                for a in soup.find_all("a", href=True):
+                    m = re.match(pattern, a["href"])
+                    if m:
+                        slug = m.group(1)
+                        raw = a.get_text(strip=True)
+                        clean = re.sub(r"[\d\s\xa0]+$", "", raw)
+                        if clean:
+                            cats[slug] = clean
+                if cats:
+                    return cats
+        except Exception as e:
+            logger.debug(f"{self.SOURCE_NAME}: nie udało się pobrać kategorii z HTML ({e}), używam słownika zapasowego")
+        return dict(fallback)
+
     def _fetch_listing(self, session: requests.Session) -> List[dict]:
         """Pobierz wszystkie oferty z listy (paginacja kursorowa, miasto + zdalne)."""
         portal_cfg = self.config.get(self.CONFIG_KEY, {}) or {}
@@ -108,9 +194,18 @@ class CandidateAPIScraper(BaseScraper):
         raw_levels = scope_levels()
         levels = list(dict.fromkeys(CANDIDATE_API_LEVEL_MAP[lv] for lv in raw_levels if lv in CANDIDATE_API_LEVEL_MAP)) or ["junior", "intern"]
 
+        catalog = self._fetch_category_catalog(session)
+        portal_key = self.PORTAL_KEY or self.CONFIG_KEY
+        picked_categories = pick_categories(portal_key, catalog) if catalog else None
+        if picked_categories is not None:
+            logger.info(f"{self.SOURCE_NAME}: {len(picked_categories)} kategorii z CV")
+            cat_params = [("categories", c) for c in picked_categories]
+        else:
+            cat_params = []
+
         queries = [
-            ("city", [("city", city)] + [("experienceLevels", lv) for lv in levels]),
-            ("remote", [("isRemote", "true")] + [("experienceLevels", lv) for lv in levels]),
+            ("city", [("city", city)] + [("experienceLevels", lv) for lv in levels] + cat_params),
+            ("remote", [("isRemote", "true")] + [("experienceLevels", lv) for lv in levels] + cat_params),
         ]
 
         offers_by_slug = {}

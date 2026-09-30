@@ -1,11 +1,17 @@
 """
 Purge Stale Offers
 ==================
-Usuwa stare, nieocenione oferty z jobs_database.json.
+Usuwa z jobs_database.json oferty, których portal od 14 dni nie pokazuje.
 
 Zachowuje:
   - WSZYSTKIE oferty z decyzją użytkownika (rated/saved/rejected/aspirational)
-  - oferty pobrane w ciągu ostatnich 14 dni
+  - oferty widziane na portalu w ciągu ostatnich 14 dni (`last_seen`)
+
+Liczy się `last_seen`, nie data pobrania: każdy przebieg scrapera odświeża go
+ofertom, które nadal wiszą na liście portalu. Oferta wystawiona na 30 dni zostaje
+więc w bazie przez cały ten czas. Gdyby wypadła po 14 dniach od pobrania,
+następny przebieg wziąłby ją za nową - drugi raz pobierał jej stronę i płacił
+za ocenę. Usunięta zostaje dopiero oferta, której portal już nie pokazuje.
 
 Dodatkowo: oferty z RĘCZNĄ OCENĄ trafiają do rated_archive.json razem z procentem
 dopasowania. Powód: ocena przeżywa w user_decisions.json, ale sama oferta znikała
@@ -109,7 +115,8 @@ def main():
 
     for job in jobs:
         link = canonical_link(job.get("link", ""))
-        scraped_at = job.get("scraped_at", "") # format: 2026-03-22T...
+        # Starsze rekordy bez last_seen: data pobrania to ostatnia pewna obserwacja.
+        seen_at = job.get("last_seen") or job.get("scraped_at") or ""
 
         # Zostaje, jeśli oferta ma ręczną decyzję
         if link in decided_links:
@@ -117,15 +124,15 @@ def main():
             kept_decided += 1
             continue
 
-        # Zostaje, jeśli zescrapowana w ciągu ostatnich 14 dni
-        if scraped_at:
+        # Zostaje, jeśli portal pokazał ją w ciągu ostatnich 14 dni
+        if seen_at:
             try:
-                scraped_date = datetime.fromisoformat(scraped_at[:10]).date()
-                if scraped_date >= cutoff_date:
+                seen_date = datetime.fromisoformat(seen_at[:10]).date()
+                if seen_date >= cutoff_date:
                     kept_jobs.append(job)
                     kept_recent += 1
                     continue
-            except:
+            except ValueError:
                 pass
 
         # W przeciwnym razie leci z bazy
@@ -133,7 +140,7 @@ def main():
 
     print("\nResults:")
     print(f"   Kept (decided):   {kept_decided}")
-    print(f"   Kept (last 14d): {kept_recent}")
+    print(f"   Kept (seen in last 14d): {kept_recent}")
     print(f"   REMOVED (stale):  {removed_count}")
     print(f"   Final DB size:    {len(kept_jobs)}")
 

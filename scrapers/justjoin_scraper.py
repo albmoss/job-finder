@@ -18,6 +18,7 @@ class JustJoinScraper(CandidateAPIScraper):
     PORTAL_URL = "https://justjoin.it"
     SOURCE_NAME = "JustJoinIT"
     CONFIG_KEY = "justjoinit"
+    PORTAL_KEY = "justjoinit"
 
     def build_link(self, slug: str) -> str:
         return f"{self.PORTAL_URL}/offers/{slug}"

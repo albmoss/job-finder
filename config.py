@@ -32,7 +32,7 @@ CAREERJET_API_KEY = os.getenv("CAREERJET_API_KEY", "")
 
 SCRAPER_CONFIG = {
     "location": "Warszawa",
-    "radius_km": 15,  # Promień +15 km od miasta
+    "radius_km": 0,  # Tylko miasto z CV (plus oferty zdalne); przedmieścia odpadają w przesiewie
     "days_posted": 30,
     "headless": True,
     "timeout_ms": 30000,
@@ -61,9 +61,9 @@ SCRAPER_CONFIG = {
     },
     
     "olx_praca": {
-        # Zakres (miasto i filtr poziomu) wyznaczany przez CV (utils/candidate_scope.py).
+        # Zakres (miasto i filtr poziomu) wyznaczany przez CV (utils/candidate_scope.py),
+        # kategorie przez utils/portal_categories.py.
         # bez-doswiadczenia włączane tylko gdy poziomy to wyłącznie intern/junior.
-        "radius": "15",  # +15 km
     },
     
     "linkedin": {
@@ -105,8 +105,7 @@ SCRAPER_CONFIG = {
     "aplikuj": {
         "max_pages": 100,
         "max_offers": 6000,
-        # Kategorie tematyczne dobierane po wyczerpaniu listingu miejskiego
-        "extra_paths": ["staz", "przy-komputerze"],
+        # Kategorie dobierane automatycznie do profilu CV przez utils/portal_categories.py
     },
 
     "gowork": {

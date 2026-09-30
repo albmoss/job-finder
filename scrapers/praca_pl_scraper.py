@@ -8,6 +8,10 @@ na stronie szczegółów - stąd dwustopniowe pobieranie w LdJsonPortalScraper.
 
 Paginacja: /s-warszawa_2.html, /s-warszawa_3.html ... Wariant z parametrem
 (?p=2) jest ignorowany przez serwer i oddaje w kółko stronę 1.
+
+Filtry: portal nie udostępnia filtrowania kategorii branżowych w URL-ach
+listingu ani w wyszukiwarce (jedynie miasto i fraza tekstowa), więc scraper
+działa bez filtra kategorii i przeszukuje listing miejski.
 """
 
 import re

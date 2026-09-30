@@ -19,6 +19,7 @@ class RocketJobsScraper(CandidateAPIScraper):
     PORTAL_URL = "https://rocketjobs.pl"
     SOURCE_NAME = "RocketJobs"
     CONFIG_KEY = "rocketjobs"
+    PORTAL_KEY = "rocketjobs"
 
     def build_link(self, slug: str) -> str:
         return f"{self.PORTAL_URL}/oferta/{slug}"
