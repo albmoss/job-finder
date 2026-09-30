@@ -407,7 +407,7 @@ export const App: React.FC = () => {
           const newStats = await api.getStats();
           if (cancelled) return;
           const prev = statsRef.current;
-          const countsChanged = !prev || newStats.raw_count !== prev.raw_count || newStats.analyzed_count !== prev.analyzed_count;
+          const countsChanged = !prev || newStats.raw_count !== prev.raw_count || newStats.scored_count !== prev.scored_count;
           setStats(newStats);
           loadActivity();
           if (countsChanged || (wasBusy && !nowBusy)) {
@@ -626,6 +626,7 @@ export const App: React.FC = () => {
           <PipelinePill
             pipeline={pipeline}
             activityRows={activityRows}
+            freshCount={stats?.fresh_count ?? 0}
             onOpenSheet={() => setIsSheetOpen(true)}
             onOpenLaunchModal={openLaunchModal}
             onStop={stopPipeline}
@@ -664,7 +665,8 @@ export const App: React.FC = () => {
               onSelectOffer={handleSelectOffer}
               activeTab={activeView}
               rawCount={stats?.raw_count ?? 0}
-              analyzedCount={stats?.analyzed_count ?? 0}
+              scoredCount={stats?.scored_count ?? 0}
+              pendingCount={stats?.pending_scoring_count ?? 0}
               onOpenLaunchModal={openLaunchModal}
               loading={loadingOffers}
               exitingLink={exitingLink}

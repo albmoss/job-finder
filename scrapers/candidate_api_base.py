@@ -121,11 +121,12 @@ class CandidateAPIScraper(BaseScraper):
     CONFIG_KEY = ""          # klucz w SCRAPER_CONFIG
     PORTAL_KEY = ""
 
-    # Ile ofert maksymalnie dociągać ze szczegółami (opis) - najdroższa część.
-    # RocketJobs zwraca ~960 ofert; przy limicie 600 aż 360 zostawało bez opisu,
-    # a że record_scrape nie aktualizuje istniejących rekordów, zostawały takie na stałe.
-    # 1200 z zapasem pokrywa oba portale; przy 4 wątkach to ~1-2 minuty.
-    MAX_DETAIL_FETCH = 1200
+    # Ile ofert maksymalnie dociągać ze szczegółami (opis) w jednym przebiegu - najdroższa
+    # część. Oferty ponad limit zapisują się z zaślepką; `known_links` nie liczy ich jako
+    # znanych, więc następny przebieg pobiera ich opisy. Tempo zmierzone 30.09.2026 przy
+    # 3 wątkach: JustJoin ~310 opisów/min, RocketJobs ~195/min (przy limicie 1200 zostało
+    # wtedy 1408 + 1948 ofert bez opisu). 4000 to u RocketJobs ~20 min, mniej niż cały etap pobierania.
+    MAX_DETAIL_FETCH = 4000
     DETAIL_WORKERS = 3
 
     def __init__(self, config: dict):
@@ -474,8 +475,16 @@ class CandidateAPIScraper(BaseScraper):
                     return []
 
             # Szczegóły równolegle, ale delikatnie - to najwolniejsza faza.
-            to_detail = [o for o in offers if o.get("slug")][: self.MAX_DETAIL_FETCH]
+            with_slug = [o for o in offers if o.get("slug")]
+            to_detail = with_slug[: self.MAX_DETAIL_FETCH]
             logger.info(f"{self.SOURCE_NAME}: fetching descriptions for {len(to_detail)} offers...")
+            if len(with_slug) > len(to_detail):
+                # Podsumowanie niżej liczy procent tylko z pobieranych ofert, więc limit widać tylko tutaj.
+                logger.warning(
+                    f"{self.SOURCE_NAME}: {len(with_slug) - len(to_detail)} offers over the "
+                    f"{self.MAX_DETAIL_FETCH} detail limit saved without a description - "
+                    f"the next run fetches them"
+                )
 
             details = {}
 

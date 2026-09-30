@@ -61,6 +61,20 @@ def test_text_cleaning():
     check("plain text left untouched", strip_html("Zwykły opis") == "Zwykły opis")
     check("handles None/empty", strip_html("") == "" and clean_job_description("") == "")
 
+    from app_services import format_description
+    title = "Junior Frontend Developer"
+    check("title repeated as a heading is dropped from the description",
+          format_description(f"{title}\n\nPraca z React i TypeScript.", drop_prefix=title)
+          == ["Praca z React i TypeScript."])
+    mid = "Do zespołu poszukujemy Junior Frontend Developera z wiedzą o HTML."
+    check("title inside the first sentence keeps the whole sentence",
+          format_description(mid, drop_prefix=title) == [mid])
+
+    from matching.run import _has_content
+    from utils.data_models import Job
+    stub = Job(title="Tester", company="Firma", link="https://a.pl/x", source="JustJoinIT",
+               description="Oferta z JustJoinIT: Tester", skills_required=["Selenium"])
+    check("a placeholder with a portal skills list still goes to scoring", _has_content(stub))
 
 
 
@@ -230,6 +244,34 @@ def test_record_scrape():
         db.record_scrape([job("https://a.pl/1?utm_source=x")])
         check("a tracking parameter does not create a second record",
               len(on_disk()) == 3, str(len(on_disk())))
+
+        # Zaślepka zamiast opisu: następne pobranie wstawia treść, prawdziwego opisu nie rusza.
+        placeholder = "Oferta z JustJoinIT: Tytuł"
+        db.record_scrape([Job(title="Tytuł", company="Firma", link="https://a.pl/4",
+                              description=placeholder, source="test")])
+        db.record_scrape([Job(title="Tytuł", company="Firma", link="https://a.pl/4",
+                              description=placeholder, source="test")])
+        db.record_scrape([job("https://a.pl/4")])
+        db.record_scrape([Job(title="Tytuł", company="Firma", link="https://a.pl/4",
+                              description="Inny, późniejszy opis tej samej oferty.", source="test")])
+        rec = [r for r in on_disk() if r["link"] == "https://a.pl/4"][0]
+        check("a placeholder description is replaced once, a real one is kept",
+              rec["description"] == "Opis oferty wystarczająco długi, żeby przeszedł.", rec["description"])
+
+        import config
+        import utils.known_links as kl
+        db.record_scrape([Job(title="Tytuł", company="Firma", link="https://a.pl/5",
+                              description="Oferta z OLX (kategoria: sprzedaz)", source="test")])
+        real_path = config.JOBS_DATABASE_PATH
+        try:
+            config.JOBS_DATABASE_PATH = path
+            kl.reset_cache()
+            known = kl.known_links()
+        finally:
+            config.JOBS_DATABASE_PATH = real_path
+            kl.reset_cache()
+        check("offers with a placeholder are not known, so scrapers fetch them again",
+              "https://a.pl/5" not in known and "https://a.pl/4" in known, sorted(known))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1298,11 +1340,16 @@ def test_offer_api_contract():
                 "description": "Analiza danych w SQL i raporty dla zarządu, ponad 20 znaków", "source": "Test",
                 "scraped_at": scraped_at}
 
-    jobs = [job(1, "2026-09-20T18:00:00"), job(2, "2026-09-20T19:30:00"), job(3, "2026-09-20T19:40:00")]
+    jobs = [job(1, "2026-09-20T18:00:00"), job(2, "2026-09-20T19:30:00"), job(3, "2026-09-20T19:40:00"),
+            job(4, "2026-09-20T10:00:00"), job(5, "2026-09-20T10:00:00"), job(6, "2026-09-20T10:00:00"),
+            job(7, "2026-09-20T10:00:00")]
     matches = {
         jobs[0]["link"]: {"percent": 80},
         jobs[1]["link"]: {"percent": 70},
         jobs[2]["link"]: {"percent": 75},
+        jobs[3]["link"]: {"percent": 3},
+        jobs[4]["link"]: {"percent": 0},
+        jobs[5]["link"]: {"percent": None, "filtered": "miasto"},
     }
     decisions = {jobs[0]["link"]: "save", jobs[2]["link"]: "reject"}
     paths["JOBS_DATABASE_PATH"].write_text(json.dumps(jobs), encoding="utf-8")
@@ -1319,6 +1366,15 @@ def test_offer_api_contract():
         check("offers scraped after the last run start are new",
               new_links == [jobs[1]["link"], jobs[2]["link"]])
         check("fresh_count counts the whole list", all_offers.get("fresh_count") == 2)
+
+        matched = client.get("/api/offers?tab=Dopasowane").json()
+        check("Dopasowane: every undecided offer with a percent, low ones included, best first",
+              [row["link"] for row in matched["items"]] == [jobs[1]["link"], jobs[3]["link"], jobs[4]["link"]],
+              [row["link"] for row in matched["items"]])
+        stats = client.get("/api/stats").json()
+        check("stats split the base into scored, filtered and not yet seen",
+              (stats["scored_count"], stats["filtered_count"],
+               stats["pending_scoring_count"], stats["fresh_count"]) == (5, 1, 1, 2), stats)
 
         detail0 = client.get("/api/offers/detail", params={"link": jobs[0]["link"]}).json()
         check("detail exposes match percentage", detail0["match_percentage"] == 80)

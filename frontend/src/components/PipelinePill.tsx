@@ -6,6 +6,7 @@ import {
   PILL_STREAM_LOOP,
   calculateOverallPipelineProgress,
   formatDuration,
+  formatEpochStamp,
   formatStamp,
   pipelineStatus,
   scoringEtaSeconds,
@@ -17,6 +18,8 @@ import '../styles/pipeline.css';
 export interface PipelinePillProps {
   pipeline: PipelineState | null;
   activityRows: ActivityRow[];
+  /** Oferty nowe od startu ostatniego pobierania (`Stats.fresh_count`) — ta sama liczba co na liście. */
+  freshCount: number;
   onOpenSheet(): void;
   onOpenLaunchModal(): void;
   onStop(): void;
@@ -27,6 +30,7 @@ export interface PipelinePillProps {
 export const PipelinePill: React.FC<PipelinePillProps> = ({
   pipeline,
   activityRows,
+  freshCount,
   onOpenSheet,
   onOpenLaunchModal,
   onStop,
@@ -51,15 +55,13 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
   let stageMeta = '';
 
   const summary = summarizeActivity(activityRows);
-  // Nowe oferty zapisane przez scrapery w tym przebiegu (linie „saved N new offers”).
-  const freshCount = (pipeline?.telemetry?.sources ?? []).reduce((acc, s) => acc + (s.added ?? 0), 0);
+  const freshText = freshCount > 0 ? ` · +${freshCount.toLocaleString('pl-PL')} nowych` : '';
 
   if (isIdle) {
     stageTitle = 'Gotowy';
     const lastTime = summary.scoring?.time_str ?? summary.scrape?.time_str;
     if (lastTime) {
-      const stamp = formatStamp(lastTime);
-      stageMeta = freshCount > 0 ? `ostatnio ${stamp} · +${freshCount}` : `ostatnio ${stamp}`;
+      stageMeta = `ostatnio ${formatStamp(lastTime)}${freshText}`;
     } else {
       stageMeta = 'brak przebiegów';
     }
@@ -77,9 +79,7 @@ export const PipelinePill: React.FC<PipelinePillProps> = ({
     }
   } else if (isCompleted) {
     stageTitle = 'Gotowe';
-    const duration =
-      pipeline?.started_at && pipeline?.finished_at ? pipeline.finished_at - pipeline.started_at : null;
-    stageMeta = freshCount > 0 ? `+${freshCount} nowych · ${formatDuration(duration)}` : `ukończono · ${formatDuration(duration)}`;
+    stageMeta = pipeline?.finished_at ? `${formatEpochStamp(pipeline.finished_at)}${freshText}` : `ukończono${freshText}`;
   } else if (isRunning) {
     stageTitle = pipeline?.current_stage_title || 'W toku';
     const scoring = pipeline?.telemetry?.scoring;

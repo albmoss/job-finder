@@ -265,6 +265,10 @@ canvas { will-change: transform; }
 .modal.is-closing, .pp-modal.is-closing { animation: modal-out 180ms var(--ease-out) forwards; }
 @keyframes fade-out { to { opacity: 0; } }
 @keyframes modal-out { to { opacity: 0; transform: translateY(8px) scale(0.98); } }
+.modal.confirm-modal { width: 420px; gap: 16px; }
+.confirm-body { display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; line-height: 1.6; color: var(--ink-2); }
+.confirm-body b { font-weight: 600; color: var(--ink); }
+.confirm-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 
 /* ---------- suwak (skok o wiele stron listy) ---------- */
 .range-slider {
@@ -346,14 +350,19 @@ canvas { will-change: transform; }
   box-shadow: 0 0 0 2px var(--accent);
 }
 
+/* Etykieta stoi w miejscu swojej strony na suwaku (`--at` 0–1): lewa krawędź przy 0, prawa przy 1. */
 .range-ticks {
-  display: flex;
-  justify-content: space-between;
+  position: relative;
   width: 100%;
-  padding: 0 2px;
+  height: 14px;
 }
 
 .range-tick {
+  position: absolute;
+  top: 0;
+  left: calc(var(--at, 0) * 100%);
+  translate: calc(var(--at, 0) * -100%) 0;
+  white-space: nowrap;
   font-family: var(--mono);
   font-size: 10px;
   color: var(--ink-3);

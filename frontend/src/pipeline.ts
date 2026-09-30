@@ -158,6 +158,13 @@ export function formatStamp(timeStr: string): string {
   return `${isToday ? 'dziś' : `${d}.${mo}`}, ${h}:${mi}`;
 }
 
+/** Sekundy epoki → to samo co `formatStamp` („dziś, 04:13” albo „29.09, 04:13”). */
+export function formatEpochStamp(epochSec: number): string {
+  const d = new Date(epochSec * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return formatStamp(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`);
+}
+
 /** Tyka co sekundę tylko wtedy, gdy `active` — w spoczynku nie trzyma timera. */
 export function useNowSeconds(active: boolean): number {
   const [now, setNow] = useState(() => Date.now() / 1000);

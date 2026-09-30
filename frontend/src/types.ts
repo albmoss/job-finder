@@ -1,9 +1,14 @@
 export interface Stats {
   raw_count: number;
-  analyzed_count: number;
+  /** Oferty z procentem od Jev. */
+  scored_count: number;
+  /** Oferty odrzucone przez przesiew albo bez opisu — bez procentu. */
+  filtered_count: number;
+  /** Oferty, których przesiew i Jev jeszcze nie widziały. */
   pending_scoring_count: number;
+  /** Oferty w bazie zobaczone pierwszy raz od startu ostatniego pobierania. */
+  fresh_count: number;
   decisions_count: number;
-  funnel: Record<string, number>;
   /** Aplikacje (bez archiwum), które stoją na etapie co najmniej 14 dni. */
   applications_stale: number;
 }

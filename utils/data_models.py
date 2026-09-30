@@ -5,9 +5,19 @@ Modele danych: oferta, ocena dopasowania, baza ofert, stan scraperów.
 from dataclasses import dataclass, fields as dc_fields
 from typing import Optional
 import json
+import re
 import threading
 from utils.safe_io import save_json_atomic
 from utils.offer_fields import STRUCTURED_FIELDS
+
+# Zaślepka, którą scraper zapisuje, gdy portal nie oddał treści ogłoszenia:
+# „Oferta z JustJoinIT: Tytuł”, „Oferta z OLX (kategoria: …)”. Jedna linia, sam tytuł.
+_PLACEHOLDER_RE = re.compile(r"^Oferta z [^\n]{1,250}$")
+
+
+def is_placeholder_description(text: Optional[str]) -> bool:
+    """True, gdy opis to zaślepka scrapera, a nie treść ogłoszenia."""
+    return bool(_PLACEHOLDER_RE.match((text or "").strip()))
 
 
 @dataclass
@@ -91,27 +101,9 @@ _JOB_FIELDS = tuple(f.name for f in dc_fields(Job))
 
 @dataclass
 class JobMatch:
-    """Oferta razem z oceną dopasowania."""
+    """Oferta razem z procentem dopasowania (None = bez oceny)."""
     job: Job
     match_percentage: Optional[int] = None
-    user_decision: Optional[str] = None  # „apply”, „reject” albo None
-
-    def to_dict(self):
-        """Convert to dictionary for JSON serialization"""
-        return {
-            'job': self.job.to_dict(),
-            'match_percentage': self.match_percentage,
-            'user_decision': self.user_decision,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict):
-        job = Job.from_dict(data['job'])
-        return cls(
-            job=job,
-            match_percentage=data.get('match_percentage'),
-            user_decision=data.get('user_decision'),
-        )
 
 
 class JobDatabase:
@@ -207,7 +199,9 @@ class JobDatabase:
         źródeł, a i tak kończyły się tym samym stanem.
 
         Istniejące rekordy NIE są nadpisywane (od tego jest --refresh);
-        uzupełniamy tylko daty, których poprzedni przebieg nie znał. Linki
+        uzupełniamy tylko daty i cechy, których poprzedni przebieg nie znał,
+        oraz treść w miejsce zaślepki (`is_placeholder_description`) - takie
+        oferty `known_links` celowo podaje scraperom jako nowe. Linki
         nieznane bazie są ignorowane - nie tworzymy pustych rekordów.
         """
         from datetime import datetime
@@ -240,6 +234,9 @@ class JobDatabase:
                 known.posted_date = job.posted_date
             if job.valid_through and not known.valid_through:
                 known.valid_through = job.valid_through
+            if (is_placeholder_description(known.description) and (job.description or "").strip()
+                    and not is_placeholder_description(job.description)):
+                known.description = job.description
             for name in STRUCTURED_FIELDS:
                 value = getattr(job, name)
                 if value is not None and getattr(known, name) is None:
@@ -260,9 +257,12 @@ class JobDatabase:
         return len(added), touched
 
     def remove_job(self, link: str) -> bool:
-        """Usuwa ofertę po linku. Zwraca True, jeśli coś usunięto."""
+        """Usuwa ofertę po linku (także zapisaną w innej postaci tego samego adresu)."""
+        from utils.links import canonical_link
+
+        target = canonical_link(link)
         jobs = self.load_jobs()
-        kept = [job for job in jobs if job.link != link]
+        kept = [job for job in jobs if job.link != link and canonical_link(job.link) != target]
 
         if len(kept) == len(jobs):
             return False

@@ -17,7 +17,6 @@ import logging
 import os
 import sys
 from pathlib import Path
-import time
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.console import force_utf8

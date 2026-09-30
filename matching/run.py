@@ -58,6 +58,12 @@ def load_results() -> dict:
 
 
 def _has_content(job: Job) -> bool:
+    """Jest co oceniać: opis z ogłoszenia albo lista umiejętności przy krótkim opisie.
+
+    Oferta z zaślepką zamiast opisu, ale z listą umiejętności z portalu, idzie do oceny: tytuł
+    i umiejętności wystarczają Jev na sensowny wynik, a scraper dociągnie opis w kolejnym
+    przebiegu (utils/known_links.py) - wtedy zmienia się odcisk oferty i ocena zapada ponownie.
+    """
     return len((job.description or "").strip()) >= MIN_DESCRIPTION or bool(job.skills_required)
 
 

@@ -96,12 +96,16 @@ export const OverviewPanel: React.FC<OverviewPanelProps> = ({
             <span>ofert w bazie</span>
           </div>
           <div className="ov-stat">
-            <b>{(stats?.analyzed_count ?? 0).toLocaleString('pl-PL')}</b>
-            <span>ocenionych przez AI</span>
+            <b>{(stats?.scored_count ?? 0).toLocaleString('pl-PL')}</b>
+            <span>z oceną Jev</span>
+          </div>
+          <div className="ov-stat">
+            <b>{(stats?.filtered_count ?? 0).toLocaleString('pl-PL')}</b>
+            <span>odpadło w przesiewie</span>
           </div>
           <div className="ov-stat">
             <b>{(stats?.pending_scoring_count ?? 0).toLocaleString('pl-PL')}</b>
-            <span>czeka na ocenę AI</span>
+            <span>czeka na ocenę</span>
           </div>
           <div className="ov-stat">
             <b>{(stats?.decisions_count ?? 0).toLocaleString('pl-PL')}</b>

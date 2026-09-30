@@ -16,8 +16,9 @@ JOBS_DATABASE_PATH = BASE_DIR / "jobs_database.json"
 # ofert na liście: scraped_at >= started_at.
 LAST_SCRAPE_RUN_PATH = BASE_DIR / "last_scrape_run.json"
 
-# Dostawca modelu, kaskada modeli i pula kluczy do analizy ofert (LLM_PROVIDER
-# w .env; domyślnie Gemini) - patrz utils/llm.py i .env.example.
+# Model czytający CV (profil kandydata w utils/cv_profile.py): dostawca, modele i pula
+# kluczy (LLM_PROVIDER w .env; domyślnie Gemini) - patrz utils/llm.py i .env.example.
+# Oferty ocenia Jev (matching/jev.py, TYPESAFE_API_KEY), nie ten model.
 LLM = settings_from_env(os.environ)
 
 # === Klucze API zewnętrznych portali ===

@@ -25,7 +25,6 @@ from utils.safe_io import save_json_atomic, load_json_safe
 from utils.links import canonical_link
 from utils.candidate_scope import load_profile
 from utils.liveness import zdjete_z_portalu
-from utils.offer_fields import STRUCTURED_FIELDS
 import ui_theme
 
 logger = logging.getLogger(__name__)
@@ -72,9 +71,15 @@ def _parse_dt(raw: Optional[str]) -> Optional[datetime]:
 def format_description(text: str, drop_prefix: str = "") -> List[str]:
     text = strip_html(text or "")
     if drop_prefix and len(drop_prefix) > 8:
+        # Tytuł powtórzony jako nagłówek opisu („Junior Developer\n…”, „Stanowisko: …”) wycinamy
+        # razem z tym, co nad nim. Tytuł w środku zdania („poszukujemy Junior Developera z…”)
+        # to treść i zostaje.
         pos = text[:60 + len(drop_prefix)].casefold().find(drop_prefix.casefold())
+        end = pos + len(drop_prefix)
         if pos != -1:
-            text = text[pos + len(drop_prefix):].lstrip(" -–—:.\n")
+            before = text[:pos].rsplit("\n", 1)[-1].strip()
+            if (not before or before.endswith(":")) and not text[end:end + 1].isalnum():
+                text = text[end:].lstrip(" -–—:.\n")
 
     paragraphs = []
     for chunk in re.split(r"\n\s*\n", text):
@@ -134,6 +139,9 @@ class JobDataService:
         self._lock = threading.RLock()
         self.raw_jobs: List[Job] = []
         self.analyzed_matches: List[JobMatch] = []
+        # Oferty odrzucone przez przesiew i oferty bez wpisu w match_results (liczone przy wczytaniu).
+        self.filtered_count = 0
+        self.pending_count = 0
         self.match_results: Dict[str, dict] = {}
         self.job_lookup: Dict[str, Job] = {}
         self.match_lookup: Dict[str, JobMatch] = {}
@@ -217,6 +225,7 @@ class JobDataService:
                 lookup: Dict[str, Job] = {}
                 matches: Dict[str, JobMatch] = {}
                 scored_matches: List[JobMatch] = []
+                filtered_count = pending_count = 0
                 seen_links = set()
                 for j in self.raw_jobs:
                     c_link = canonical_link(j.link)
@@ -234,6 +243,10 @@ class JobDataService:
                                     pct = int(raw_pct)
                                 except (ValueError, TypeError):
                                     pct = None
+                            if pct is None and res.get("filtered"):
+                                filtered_count += 1
+                        else:
+                            pending_count += 1
                         m = JobMatch(job=j, match_percentage=pct)
                         matches[j.link] = m
                         matches[c_link] = m
@@ -247,6 +260,8 @@ class JobDataService:
                 self.job_lookup = lookup
                 self.match_lookup = matches
                 self.analyzed_matches = scored_matches
+                self.filtered_count = filtered_count
+                self.pending_count = pending_count
 
                 try:
                     self.zdjete = zdjete_z_portalu(self.raw_jobs)
@@ -277,12 +292,11 @@ class JobDataService:
         with self._lock:
             self.ensure_loaded()
             c_link = canonical_link(link)
-            if c_link in self.user_decisions:
-                old_val = self.user_decisions.pop(c_link)
-            elif link in self.user_decisions:
-                old_val = self.user_decisions.pop(link)
-            else:
-                old_val = {}
+            # Decyzja mogła zostać zapisana pod oboma postaciami linku - zdejmujemy obie,
+            # inaczej stara wersja zostaje obok nowej.
+            old_c = self.user_decisions.pop(c_link, None)
+            old_raw = self.user_decisions.pop(link, None) if link != c_link else None
+            old_val = old_c if old_c is not None else (old_raw if old_raw is not None else {})
 
             existing_stage = old_val.get("stage") if isinstance(old_val, dict) else None
             new_stage = stage if stage else (existing_stage or status)
@@ -400,40 +414,13 @@ class JobDataService:
             self.zdjete.discard(c_link)
             self._rev += 1
 
-    def get_funnel_stages(self) -> Dict[str, int]:
-        with self._lock:
-            self.ensure_loaded()
-            stages = {k: 0 for k in WS_STAGE_NAMES}
-            for link, ddata in self.user_decisions.items():
-                if isinstance(ddata, dict):
-                    status = ddata.get("status")
-                    stage = ddata.get("stage") or status
-                else:
-                    status = ddata
-                    stage = status
-                stage = WS_STAGE_LEGACY.get(stage, stage)
-                if status == "reject" or stage == "archive":
-                    continue
-                if stage in stages:
-                    stages[stage] += 1
-            return stages
-
     def get_stats(self) -> Dict[str, Any]:
         with self._lock:
             self.ensure_loaded()
-            valid_db_links = {
-                canonical_link(j.link)
-                for j in self.raw_jobs
-                if (getattr(j, "description", None) or "").strip()
-                and (getattr(j, "description", None) or "").strip() != "Brak opisu"
-                and len((getattr(j, "description", None) or "").strip()) > 20
-            }
-            scored_links = {
-                c_link for c_link, entry in self.match_results.items()
-                if isinstance(entry, dict)
-            }
-            decided_links = {canonical_link(l) for l in self.user_decisions}
-            pending = len((valid_db_links - scored_links) - decided_links)
+            fresh_since = self.fresh_since()
+            fresh_count = (
+                sum(1 for j in self.raw_jobs if (j.scraped_at or "") >= fresh_since) if fresh_since else 0
+            )
             today = datetime.now().date()
             stale_count = 0
             for link, ddata in self.user_decisions.items():
@@ -455,10 +442,11 @@ class JobDataService:
 
             return {
                 "raw_count": len(self.raw_jobs),
-                "analyzed_count": len(self.analyzed_matches),
-                "pending_scoring_count": pending,
+                "scored_count": len(self.analyzed_matches),
+                "filtered_count": self.filtered_count,
+                "pending_scoring_count": self.pending_count,
+                "fresh_count": fresh_count,
                 "decisions_count": len(self.user_decisions),
-                "funnel": self.get_funnel_stages(),
                 "applications_stale": stale_count,
             }
 
@@ -691,7 +679,7 @@ class JobDataService:
                 "time_str": mtime.strftime("%Y-%m-%d %H:%M:%S"),
                 "dt": mtime,
                 "op": "dopasowanie",
-                "what": "matching/run.py",
+                "what": "Jev",
                 "source_color": None,
                 "detail": f"{len(self.analyzed_matches)} ocen",
                 "bad": False,
@@ -1083,7 +1071,8 @@ def save_manual_job(data: Dict[str, Any]) -> Tuple[bool, str]:
 
     try:
         db = JobDatabase(str(JOBS_DATABASE_PATH))
-        jobs = [j for j in db.load_jobs() if j.link != job.link]
+        target = canonical_link(job.link)
+        jobs = [j for j in db.load_jobs() if j.link != job.link and canonical_link(j.link) != target]
         jobs.append(job)
         db.save_jobs(jobs)
 

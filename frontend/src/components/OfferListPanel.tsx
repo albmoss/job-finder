@@ -58,7 +58,7 @@ interface RowMetric {
   label: string;
 }
 
-// Liczba po prawej zależy od kategorii: w Dopasowanych i Wszystkich % dopasowania AI,
+// Liczba po prawej zależy od kategorii: w Dopasowanych i Wszystkich % dopasowania do CV (Jev),
 // w zakładkach decyzji ocena użytkownika (0–10).
 function rowMetric(item: OfferListItem, decisionTab: boolean): RowMetric {
   if (decisionTab) {
@@ -71,7 +71,7 @@ function rowMetric(item: OfferListItem, decisionTab: boolean): RowMetric {
     text: norm.displayText,
     level: norm.score ?? 0,
     tone: !norm.isAnalyzed ? 'muted' : norm.score! >= 88 ? 'hi' : 'normal',
-    label: norm.isAnalyzed ? `dopasowanie ${norm.score}%` : 'bez oceny AI',
+    label: norm.isAnalyzed ? `dopasowanie ${norm.score}%` : 'bez oceny',
   };
 }
 
@@ -96,7 +96,10 @@ interface OfferListPanelProps {
   onSelectOffer: (link: string) => void;
   activeTab: string;
   rawCount: number;
-  analyzedCount: number;
+  /** Oferty z procentem od Jev (`Stats.scored_count`). */
+  scoredCount: number;
+  /** Oferty, których przesiew i Jev jeszcze nie widziały. */
+  pendingCount: number;
   onOpenLaunchModal: () => void;
   loading: boolean;
   /** Oferta, której wiersz ma wyjechać z listy, gdy zniknie z `items` (decyzja myszą). */
@@ -136,7 +139,8 @@ export const OfferListPanel: React.FC<OfferListPanelProps> = ({
   onSelectOffer,
   activeTab,
   rawCount,
-  analyzedCount,
+  scoredCount,
+  pendingCount,
   onOpenLaunchModal,
   loading,
   exitingLink = null,
@@ -267,7 +271,7 @@ export const OfferListPanel: React.FC<OfferListPanelProps> = ({
   const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const to = Math.min(page * pageSize, total);
   const CatIcon = VIEW_ICON[activeTab] || Sparkles;
-  // Zakładki z decyzjami użytkownika: liczy się jego ocena i dzień decyzji, nie % AI.
+  // Zakładki z decyzjami użytkownika: liczy się jego ocena i dzień decyzji, nie % dopasowania.
   const decisionTab = isOfferTab(activeTab) && activeTab !== 'Dopasowane' && activeTab !== 'Wszystkie';
 
   const countText =
@@ -276,8 +280,10 @@ export const OfferListPanel: React.FC<OfferListPanelProps> = ({
       : `${total.toLocaleString('pl-PL')} ${plural(total, OFFERS)}${TAB_ORDER[activeTab] && total > 1 ? ` · ${TAB_ORDER[activeTab]}` : ''}`;
 
   // Skok o wiele stron: suwak po stronach, etykieta to wartość sortowania na początku strony
-  // („od 45%”). Większość ofert ma niskie dopasowanie, więc zakres 90→30% zajmuje ułamek suwaka —
-  // pod suwakiem są progi (80%, 70%…), każdy prowadzi do pierwszej strony z takim wynikiem.
+  // („od 45%”). Progi pod suwakiem stoją dokładnie tam, gdzie zaczyna się ich strona; progi,
+  // które nachodziłyby na siebie, odpadają, a skrajne to wartości pierwszej i ostatniej strony.
+  // Przy % dopasowania skala stron jest kwadratowa (pozycja = √udziału stron): większość ofert ma
+  // 0–10%, więc przy skali liniowej wszystko od 20% w górę mieściło się w pierwszych 5% suwaka.
   const canJump = totalPages > 2;
   const rated = activeTab === 'Ocenione';
   const markText = (p: number): string | null => {
@@ -286,24 +292,54 @@ export const OfferListPanel: React.FC<OfferListPanelProps> = ({
     if (v === null || v === undefined) return '—';
     return rated ? `${v}/10` : `${v}%`;
   };
+  const curve = pageMarks && !rated ? 2 : 1;
+  // Strona → pozycja 0–1 na suwaku i z powrotem.
+  const pageFrac = (p: number) => ((p - 1) / (totalPages - 1)) ** (1 / curve);
+  const fracPage = (x: number) => 1 + Math.round((totalPages - 1) * x ** curve);
+  const SLIDER_STEPS = 1000;
   const jumpTicks: { page: number; label: string }[] = [];
-  if (canJump && pageMarks) {
-    for (const threshold of rated ? [9, 7, 5, 3, 1] : [90, 80, 70, 60, 50, 40, 30, 20, 10]) {
-      const p = pageMarks.findIndex((v) => v !== null && v <= threshold) + 1;
-      if (p > 0 && p !== jumpTicks[jumpTicks.length - 1]?.page) {
-        jumpTicks.push({ page: p, label: rated ? `${threshold}/10` : `${threshold}%` });
+  if (canJump) {
+    const candidates: { page: number; label: string }[] = [];
+    if (pageMarks) {
+      candidates.push({ page: 1, label: markText(1)! });
+      for (const threshold of rated ? [9, 7, 5, 3, 1] : [90, 80, 70, 60, 50, 40, 30, 20, 10, 5, 1]) {
+        const p = pageMarks.findIndex((v) => v !== null && v <= threshold) + 1;
+        if (p > 1) candidates.push({ page: p, label: rated ? `${threshold}/10` : `${threshold}%` });
+      }
+      candidates.push({ page: totalPages, label: markText(totalPages)! });
+    } else {
+      for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+        const p = Math.round(1 + (totalPages - 1) * f);
+        candidates.push({ page: p, label: `${p}` });
       }
     }
-  } else if (canJump) {
-    for (const f of [0, 0.25, 0.5, 0.75, 1]) {
-      const p = Math.round(1 + (totalPages - 1) * f);
-      if (p !== jumpTicks[jumpTicks.length - 1]?.page) jumpTicks.push({ page: p, label: `${p}` });
+    // Najmniejszy odstęp między etykietami jako ułamek szerokości suwaka. Ostatnia strona wygrywa
+    // z poprzednim progiem, żeby koniec suwaka zawsze miał podpis.
+    const MIN_GAP = 0.11;
+    for (const c of candidates) {
+      const last = jumpTicks[jumpTicks.length - 1];
+      if (last && pageFrac(c.page) - pageFrac(last.page) < MIN_GAP) {
+        if (c.page !== totalPages || jumpTicks.length === 1) continue;
+        jumpTicks.pop();
+      }
+      jumpTicks.push(c);
     }
   }
   // Podświetlony próg: ostatni, do którego suwak już doszedł.
   const reachedTicks = jumpTicks.filter((t) => t.page <= jumpDraft);
   const activeTickPage = reachedTicks[reachedTicks.length - 1]?.page;
-  const jumpFill = canJump ? `${((jumpDraft - 1) / (totalPages - 1)) * 100}%` : '0%';
+  const jumpFill = canJump ? `${pageFrac(jumpDraft) * 100}%` : '0%';
+  // Klawisze przesuwają o stronę (PageUp/PageDown o 10): krok pozycji suwaka przy skali
+  // kwadratowej bywa mniejszy niż strona i strzałka stałaby w miejscu.
+  const keyStep = (key: string): number | null => {
+    if (key === 'ArrowRight' || key === 'ArrowDown') return jumpDraft + 1;
+    if (key === 'ArrowLeft' || key === 'ArrowUp') return jumpDraft - 1;
+    if (key === 'PageDown') return jumpDraft + 10;
+    if (key === 'PageUp') return jumpDraft - 10;
+    if (key === 'Home') return 1;
+    if (key === 'End') return totalPages;
+    return null;
+  };
   const commitJump = (target: number) => {
     if (target !== page) onPageChange(target);
   };
@@ -347,13 +383,17 @@ export const OfferListPanel: React.FC<OfferListPanelProps> = ({
         </div>
       );
     }
-    if (activeTab === 'Dopasowane' && analyzedCount === 0) {
+    if (activeTab === 'Dopasowane' && scoredCount === 0) {
       return (
         <div className="ol-empty">
           <div className="ol-empty-well"><Sparkles /></div>
           <div className="ol-empty-text">
-            <span className="ol-empty-title">{rawCount.toLocaleString('pl-PL')} ofert czeka na ocenę AI</span>
-            <span className="ol-empty-hint">Dopasowane pojawią się tu po ocenieniu ofert przez model.</span>
+            <span className="ol-empty-title">
+              {pendingCount > 0
+                ? `${pendingCount.toLocaleString('pl-PL')} ${plural(pendingCount, OFFERS)} czeka na ocenę`
+                : 'Żadna oferta nie ma jeszcze oceny'}
+            </span>
+            <span className="ol-empty-hint">Dopasowane pojawią się tu, gdy Jev oceni oferty względem Twojego CV.</span>
           </div>
           <button type="button" className="btn btn-primary press" onClick={onOpenLaunchModal}>
             <Sparkles size={16} /> Uruchom ocenianie
@@ -606,20 +646,24 @@ export const OfferListPanel: React.FC<OfferListPanelProps> = ({
             <input
               type="range"
               className="range-slider"
-              min={1}
-              max={totalPages}
+              min={0}
+              max={SLIDER_STEPS}
               step={1}
-              value={jumpDraft}
+              value={Math.round(pageFrac(jumpDraft) * SLIDER_STEPS)}
               style={{ '--fill-pct': jumpFill } as React.CSSProperties}
               aria-label="Przeskocz do strony"
               aria-valuetext={`Strona ${jumpDraft} z ${totalPages}${pageMarks ? `, od ${markText(jumpDraft)}` : ''}`}
-              onChange={(e) => setJumpDraft(Number(e.target.value))}
-              onPointerUp={(e) => commitJump(Number(e.currentTarget.value))}
+              onChange={(e) => setJumpDraft(fracPage(Number(e.target.value) / SLIDER_STEPS))}
+              onPointerUp={(e) => commitJump(fracPage(Number(e.currentTarget.value) / SLIDER_STEPS))}
               onKeyUp={(e) => {
-                if (SLIDER_KEYS[e.key]) commitJump(Number(e.currentTarget.value));
+                if (SLIDER_KEYS[e.key]) commitJump(jumpDraft);
               }}
               onKeyDown={(e) => {
-                if (SLIDER_KEYS[e.key]) e.stopPropagation();
+                if (!SLIDER_KEYS[e.key]) return;
+                e.stopPropagation();
+                e.preventDefault();
+                const next = keyStep(e.key);
+                if (next !== null) setJumpDraft(Math.min(totalPages, Math.max(1, next)));
               }}
             />
             <div className="range-ticks">
@@ -628,6 +672,7 @@ export const OfferListPanel: React.FC<OfferListPanelProps> = ({
                   key={t.page}
                   type="button"
                   className={`range-tick press ${t.page === activeTickPage ? 'is-active' : ''}`}
+                  style={{ '--at': pageFrac(t.page) } as React.CSSProperties}
                   onClick={() => {
                     setJumpDraft(t.page);
                     commitJump(t.page);

@@ -10,6 +10,10 @@ ma ~27 MB, a scrapery startują równolegle - każdy wczytywał go osobno. Snaps
 robimy raz na proces i celowo go NIE odświeżamy w trakcie przebiegu: gdyby
 scraper A dopisał ofertę, którą chwilę później zobaczy scraper B, chcemy żeby
 B i tak ją pobrał (cross-posting bywa jedynym źródłem pełnego opisu).
+
+Oferta z zaślepką zamiast opisu (portal nie oddał treści albo scraper doszedł do
+limitu stron szczegółów) NIE jest znana: scraper pobiera ją jak nową, a
+`record_scrape` wstawia treść w miejsce zaślepki. Inaczej zostałaby bez opisu na stałe.
 """
 
 import logging
@@ -24,7 +28,7 @@ _snapshot = None
 
 
 def known_links() -> set:
-    """Kanoniczne linki obecne w bazie. Liczone raz na proces."""
+    """Kanoniczne linki obecne w bazie z prawdziwym opisem. Liczone raz na proces."""
     global _snapshot
     with _lock:
         if _snapshot is not None:
@@ -33,11 +37,12 @@ def known_links() -> set:
         links = set()
         try:
             from config import JOBS_DATABASE_PATH
+            from utils.data_models import is_placeholder_description
             from utils.safe_io import load_json_safe
 
             for record in load_json_safe(str(JOBS_DATABASE_PATH), default=[]):
                 link = canonical_link(record.get("link", ""))
-                if link:
+                if link and not is_placeholder_description(record.get("description")):
                     links.add(link)
         except Exception as e:
             # Pusty zbiór = scrapery pobiorą wszystko. Wolniej, ale poprawnie.

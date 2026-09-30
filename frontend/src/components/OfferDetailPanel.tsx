@@ -6,7 +6,6 @@ import {
   ArrowUpRight,
   Copy,
   Trash2,
-  AlertTriangle,
   RotateCcw,
   X,
   MapPin,
@@ -20,6 +19,7 @@ import {
   Check,
 } from 'lucide-react';
 import { MatchCard } from './MatchCard';
+import { ConfirmModal } from './ConfirmModal';
 import { DecisionDock } from './DecisionDock';
 import { StageSwitch } from './StageSwitch';
 import { NextStepEditor } from './NextStepEditor';
@@ -102,6 +102,7 @@ export const OfferDetailPanel: React.FC<OfferDetailPanelProps> = ({
   const [rating, setRating] = useState<number>(offer.rating ?? 0);
   const [savedRating, setSavedRating] = useState<number>(offer.rating ?? 0);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const closeDeleteConfirm = useCallback(() => setConfirmDelete(false), []);
   const [copiedLink, setCopiedLink] = useState(false);
 
   useEffect(() => {
@@ -312,43 +313,16 @@ export const OfferDetailPanel: React.FC<OfferDetailPanelProps> = ({
             )}
 
             {!preview && (
-              <>
-                {!confirmDelete ? (
-                  <button
-                    type="button"
-                    className="iconbtn press"
-                    data-tip="Usuń z bazy"
-                    aria-label="Usuń z bazy"
-                    onClick={() => setConfirmDelete(true)}
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="iconbtn is-on press"
-                      data-tip="Na pewno usunąć?"
-                      aria-label="Potwierdź usunięcie z bazy"
-                      onClick={() => {
-                        setConfirmDelete(false);
-                        onDeleteOffer(offer.link);
-                      }}
-                    >
-                      <AlertTriangle size={16} />
-                    </button>
-                    <button
-                      type="button"
-                      className="iconbtn press"
-                      data-tip="Anuluj"
-                      aria-label="Anuluj usuwanie"
-                      onClick={() => setConfirmDelete(false)}
-                    >
-                      <X size={16} />
-                    </button>
-                  </>
-                )}
-              </>
+              <button
+                type="button"
+                className="iconbtn press"
+                data-tip="Usuń z bazy"
+                aria-label="Usuń z bazy"
+                aria-haspopup="dialog"
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Trash2 size={16} />
+              </button>
             )}
 
             <button
@@ -363,6 +337,25 @@ export const OfferDetailPanel: React.FC<OfferDetailPanelProps> = ({
             </button>
           </div>
         </div>
+        <ConfirmModal
+          isOpen={confirmDelete}
+          title="Usunąć ofertę z bazy?"
+          confirmLabel="Usuń z bazy"
+          onCancel={closeDeleteConfirm}
+          onConfirm={() => {
+            setConfirmDelete(false);
+            onDeleteOffer(offer.link);
+          }}
+        >
+          <p>
+            <b>{offer.title}</b> zniknie z bazy razem z procentem dopasowania i Twoją decyzją. Tego nie da
+            się cofnąć.
+          </p>
+          <p>
+            Jeśli portal nadal wystawia tę ofertę, następne pobieranie doda ją z powrotem jako nową. Żeby tylko
+            zdjąć ją z listy, użyj „Odrzuć” w doku albo klawisza X.
+          </p>
+        </ConfirmModal>
 
         {/* Tytuł i firma */}
         <h2 className="od-title">

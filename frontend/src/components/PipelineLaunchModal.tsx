@@ -172,7 +172,7 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
             </div>
           </div>
 
-          {/* Tylko ocena AI */}
+          {/* Tylko ocena */}
           <div
             className={`pp-mode-card ${mode === 'skip_scraping' ? 'is-active' : ''}`}
             onClick={() => setMode('skip_scraping')}
@@ -320,7 +320,7 @@ export const PipelineLaunchModal: React.FC<PipelineLaunchModalProps> = ({
                     {prerequisites?.playwright_msg || 'Chromium nie jest zainstalowane.'}
                   </p>
                   <p style={{ margin: 0, fontSize: 12, color: 'var(--ink-3)' }}>
-                    Zainstaluj Chromium poleceniem <code style={{ fontFamily: 'var(--mono)' }}>playwright install chromium</code> albo przełącz na tryb „Tylko ocena AI”.
+                    Zainstaluj Chromium poleceniem <code style={{ fontFamily: 'var(--mono)' }}>playwright install chromium</code> albo przełącz na tryb „Tylko ocena”.
                   </p>
                 </div>
               )}

@@ -20,7 +20,8 @@ const FILTER_REASONS: Record<NonNullable<OfferDetail['filtered']>, string> = {
   poziom: 'Oferta szuka kogoś o ponad jeden poziom wyżej, niż wynika z CV.',
   lata: 'Oferta wymaga o ponad dwa lata więcej doświadczenia, niż podaje CV.',
   jezyk: 'Oferta wymaga języka, którego nie ma w CV.',
-  brak_opisu: 'Ogłoszenie ma za krótki opis i nie wymienia umiejętności, więc nie było czego ocenić.',
+  brak_opisu:
+    'Ogłoszenie nie ma treści (portal jej nie oddał) albo opis jest za krótki i bez listy umiejętności, więc nie było czego ocenić. Brakującą treść kolejny przebieg spróbuje pobrać.',
 };
 
 /** Ruch odcisku: wolno i cicho, ale bez rytmu — pojedyncze fale co 3,5–11 s. */

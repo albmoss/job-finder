@@ -1172,14 +1172,14 @@
   gap: 28px;
 }
 
-/* Stats 4-columns row */
+/* Stats row: baza, ocenione, przesiew, czeka, decyzje */
 .ov-stats {
   border-top: 1px solid var(--stroke);
   border-bottom: 1px solid var(--stroke);
   padding: 22px 0;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 24px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 20px;
 }
 
 .ov-stat {
