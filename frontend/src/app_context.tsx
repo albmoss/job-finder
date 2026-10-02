@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import type { CVInfo, CvVersionSummary, OfferDetail, PipelineState, RunSummary, Stats } from './types';
+import type { CVInfo, CvVersionSummary, OfferDetail, PipelineState, RunSummary } from './types';
 
 export interface ToastOptions {
   /** Np. { label: 'Cofnij', run: undo }. */
@@ -29,13 +29,9 @@ export interface AppContextValue {
   runSummary: RunSummary | null;
   /** running albo stopping. */
   pipelineBusy: boolean;
-  refreshPipeline: () => Promise<void>;
   /** POST /api/pipeline/start {mode:'full'} i przejście na #/postep; false przy błędzie (toast). */
   startSearch: () => Promise<boolean>;
   stopSearch: () => Promise<void>;
-
-  stats: Stats | null;
-  refreshStats: () => Promise<void>;
 
   cv: CVInfo | null;
   refreshCv: () => Promise<CVInfo | null>;

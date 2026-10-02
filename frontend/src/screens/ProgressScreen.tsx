@@ -1,6 +1,7 @@
 import { ArrowLeft, Check, Sparkles, Square } from 'lucide-react';
 import { useApp } from '../app_context';
-import { DOWNLOADED, MATCHED, OFFERS, REMAINING, plural } from '../plural';
+import { countFormat } from '../format';
+import { COMPARED, DOWNLOADED, OFFERS, REMAINING, plural } from '../plural';
 import { navigate, paths } from '../router';
 import type { PipelineState, RunSummary } from '../types';
 import { locationLine } from './offer/offer_format';
@@ -54,23 +55,26 @@ function runPhase(pipeline: PipelineState, states: GroupState[]): Phase {
 
 function subtitle(phase: Phase, pipeline: PipelineState, summary: RunSummary | null): string {
   const downloaded = summary?.downloaded ?? null;
+  const n = (value: number) => countFormat.format(value);
   switch (phase) {
     case 'profile':
       return 'Odczytujemy z CV miasto, umiejętności i poziom doświadczenia.';
     case 'scraping':
       return downloaded != null
-        ? `Twój profil jest gotowy. Pobraliśmy już ${downloaded} ${plural(downloaded, OFFERS)}; szukamy dalej.`
+        ? `Twój profil jest gotowy. Pobraliśmy już ${n(downloaded)} ${plural(downloaded, OFFERS)}; szukamy dalej.`
         : 'Twój profil jest gotowy. Przeglądamy portale z ofertami.';
     case 'matching':
       return downloaded != null
-        ? `Twój profil jest gotowy. Pobraliśmy ${downloaded} ${plural(downloaded, OFFERS)}; teraz porównujemy ich wymagania z CV.`
+        ? `Twój profil jest gotowy. Pobraliśmy ${n(downloaded)} ${plural(downloaded, OFFERS)}; teraz porównujemy ich wymagania z CV.`
         : 'Twój profil jest gotowy. Teraz porównujemy wymagania ofert z CV.';
     case 'done':
     case 'stopped':
     case 'idle': {
       if (!summary) return '';
-      const matched = summary.matched_count;
-      return `Sprawdziliśmy ${summary.checked} ${plural(summary.checked, OFFERS)}, ${matched} ${plural(matched, MATCHED)} do Twojego CV.`;
+      const compared = `${n(summary.checked)} ${plural(summary.checked, OFFERS)} ${plural(summary.checked, COMPARED)} z Twoim CV.`;
+      return downloaded != null
+        ? `${n(downloaded)} ${plural(downloaded, OFFERS)} ${plural(downloaded, DOWNLOADED)}, ${compared}`
+        : compared;
     }
     case 'failed':
       return pipeline.error_message ?? 'Przebieg zakończył się błędem.';
@@ -85,9 +89,12 @@ function statusLine(index: number, state: GroupState, summary: RunSummary | null
   if (index === 0) return 'Profil odczytany';
   if (index === 1 && summary?.downloaded != null) {
     const n = summary.downloaded;
-    return `${n} ${plural(n, OFFERS)} ${plural(n, DOWNLOADED)}`;
+    return `${countFormat.format(n)} ${plural(n, OFFERS)} ${plural(n, DOWNLOADED)}`;
   }
-  if (index === 2 && summary) return `${summary.matched_count} ${plural(summary.matched_count, MATCHED)}`;
+  if (index === 2 && summary) {
+    const n = summary.checked;
+    return `${countFormat.format(n)} ${plural(n, OFFERS)} ${plural(n, COMPARED)}`;
+  }
   return 'Gotowe';
 }
 
@@ -136,13 +143,15 @@ export function ProgressScreen(_props: ScreenProps) {
         <div className="pg-count">
           <p className="pg-eyebrow pg-count-label">SPRAWDZONE OFERTY</p>
           <div className="pg-count-main">
-            <p className="pg-count-num">{summary?.checked ?? 0}</p>
-            {summary?.to_check != null && <p className="pg-count-of">ze {summary.to_check} pobranych</p>}
+            <p className="pg-count-num">{countFormat.format(summary?.checked ?? 0)}</p>
+            {summary?.to_check != null && (
+              <p className="pg-count-of">z {countFormat.format(summary.to_check)} do porównania</p>
+            )}
           </div>
           <div className="pg-count-rest">
             {left != null && (phase !== 'done' || left > 0) && (
               <p className="pg-count-left">
-                {plural(left, REMAINING)} {left} {plural(left, OFFERS)}
+                {plural(left, REMAINING)} {countFormat.format(left)} {plural(left, OFFERS)}
               </p>
             )}
             <p className="pg-count-copy">{restCopy(phase)}</p>
@@ -154,7 +163,7 @@ export function ProgressScreen(_props: ScreenProps) {
             <h2 className="pg-recent-title">Ostatnio dopasowane</h2>
             {summary && (
               <span className="pg-recent-total">
-                {summary.matched_count} {plural(summary.matched_count, OFFERS)}
+                {countFormat.format(summary.matched_count)} {plural(summary.matched_count, OFFERS)}
               </span>
             )}
           </div>

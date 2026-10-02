@@ -19,7 +19,7 @@ const FAILED_TITLE_PREFIX = 'Błąd pobierania';
 
 /** Okno „Dodaj z linku”: odczyt oferty z adresu, edycja pól, zapis z decyzją. */
 export function AddFromLinkModal({ status, onClose, onSaved }: AddFromLinkModalProps) {
-  const { toast, bumpData, refreshStats } = useApp();
+  const { toast, bumpData } = useApp();
   const [url, setUrl] = useState('');
   const [fetchedUrl, setFetchedUrl] = useState('');
   const [title, setTitle] = useState('');
@@ -70,7 +70,6 @@ export function AddFromLinkModal({ status, onClose, onSaved }: AddFromLinkModalP
         status,
       });
       bumpData();
-      refreshStats();
       toast(status === 'apply' ? 'Dodano aplikację.' : 'Zapisano ofertę.');
       onSaved(res.offer);
       onClose();

@@ -68,12 +68,6 @@
   flex: 1;
 }
 
-.screen-placeholder {
-  display: flex;
-  align-items: flex-start;
-  padding: 24px 30px;
-}
-
 .lm-issues {
   display: flex;
   flex-direction: column;

@@ -157,7 +157,7 @@
   flex: 1;
   flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
+  gap: 10px;
   padding: 28px;
   animation: fade-in 150ms var(--ease-out);
 }
@@ -223,7 +223,7 @@
 
 .sv-spacer {
   flex: 1 1 0;
-  min-height: 12px;
+  min-height: 0;
 }
 
 .sv-hint {

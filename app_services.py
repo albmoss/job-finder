@@ -653,19 +653,23 @@ def get_cv_info() -> Dict[str, Any]:
             logger.warning(f"Błąd ekstrakcji z {cv_pdf_path}: {e}")
 
     has_cv = bool(text and len(text.strip()) > 20)
-    chars = len(text)
-    words = len(text.split()) if text else 0
-    filename = "cv.pdf" if pdf_is_current() else ("final_cv_text.txt" if cv_txt_path.exists() else "Brak")
+    pdf_current = pdf_is_current()
+    pdf_pages = None
+    if pdf_current:
+        try:
+            from pypdf import PdfReader
+            pdf_pages = len(PdfReader(str(cv_pdf_path)).pages)
+        except Exception as e:
+            logger.warning(f"Nie udało się policzyć stron {cv_pdf_path}: {e}")
+    filename = "cv.pdf" if pdf_current else ("final_cv_text.txt" if cv_txt_path.exists() else "Brak")
 
     return {
         "ready": has_cv,
         "text": text,
-        "chars": chars,
-        "words": words,
+        "chars": len(text),
         "filename": filename,
-        "pdf_exists": cv_pdf_path.exists(),
-        "txt_exists": cv_txt_path.exists(),
-        "pdf_url": "/api/cv/file" if pdf_is_current() else None,
+        "pdf_url": "/api/cv/file" if pdf_current else None,
+        "pdf_pages": pdf_pages,
         "profile": _profile_summary(text),
     }
 

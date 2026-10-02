@@ -2,14 +2,13 @@
 export type PluralForms = readonly [one: string, few: string, many: string];
 
 export const OFFERS: PluralForms = ['oferta', 'oferty', 'ofert'];
-export const RESULTS: PluralForms = ['wynik', 'wyniki', 'wyników'];
 export const CHARS: PluralForms = ['znak', 'znaki', 'znaków'];
 export const NEW_ONES: PluralForms = ['nowa', 'nowe', 'nowych'];
 export const BACKUPS: PluralForms = ['zapasowy', 'zapasowe', 'zapasowych'];
-export const ERRORS: PluralForms = ['błąd', 'błędy', 'błędów'];
 export const DOWNLOADED: PluralForms = ['pobrana', 'pobrane', 'pobranych'];
-export const MATCHED: PluralForms = ['dopasowana', 'dopasowane', 'dopasowanych'];
+export const COMPARED: PluralForms = ['porównana', 'porównane', 'porównanych'];
 export const REMAINING: PluralForms = ['Pozostała', 'Pozostały', 'Pozostało'];
+export const PAGES: PluralForms = ['strona', 'strony', 'stron'];
 
 export function plural(n: number, [one, few, many]: PluralForms): string {
   const abs = Math.abs(n);

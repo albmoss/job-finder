@@ -1,6 +1,5 @@
 import type {
   ApplicationsResponse,
-  BootstrapData,
   CVInfo,
   CvVersionCreate,
   CvVersionDetail,
@@ -69,7 +68,6 @@ type PipelineAction = { ok: boolean; message: string; state: PipelineState };
 type LlmSaveResponse = { ok: boolean; message: string; api_info: EnvKeysResponse['api_info']; fields: EnvField[] };
 
 export const api = {
-  getBootstrap: () => request<BootstrapData>('/bootstrap'),
   getStats: () => request<Stats>('/stats'),
 
   getOffers: (params: { tab: OfferTab; search?: string; page?: number; pageSize?: number; sort?: OfferSort }) => {
@@ -91,7 +89,7 @@ export const api = {
 
   /** Zdejmuje decyzję: odkrycie, cofnięcie zapisu, „Cofnij oznaczenie”. */
   restoreDecision: (link: string) =>
-    post<{ ok: boolean; changed: boolean; stats: Stats; offer: OfferDetail }>('/offers/restore', { link }),
+    post<{ ok: boolean; changed: boolean; offer: OfferDetail }>('/offers/restore', { link }),
 
   /** 400, gdy oferta nie ma decyzji. */
   saveNote: (link: string, note: string) => post<{ ok: boolean; offer: OfferDetail }>('/offers/note', { link, note }),
@@ -105,19 +103,15 @@ export const api = {
   fetchLinkData: (url: string) => post<{ ok: boolean; data: Record<string, string> }>('/tools/fetch-link', { url }),
 
   saveManualJob: (job: ManualJob) =>
-    post<{ ok: boolean; message: string; stats: Stats; offer: OfferDetail }>('/tools/save-manual-job', job),
+    post<{ ok: boolean; message: string; offer: OfferDetail }>('/tools/save-manual-job', job),
 
   getPipelineState: () => request<PipelineState>('/pipeline/state'),
   getRunSummary: () => request<RunSummary>('/pipeline/run-summary'),
   getPipelinePrerequisites: () => request<PipelinePrerequisites>('/pipeline/prerequisites'),
   startPipeline: (mode: 'full' | 'skip_scraping' = 'full') => post<PipelineAction>('/pipeline/start', { mode }),
   stopPipeline: () => post<PipelineAction>('/pipeline/stop'),
-  forceStopPipeline: () => post<PipelineAction>('/pipeline/force-stop'),
-  resumePipeline: () => post<PipelineAction>('/pipeline/resume'),
-  reloadDatabase: () => post<{ ok: boolean; stats: Stats }>('/pipeline/reload-data'),
 
   getCV: () => request<CVInfo>('/cv'),
-  cvFileUrl: `${API_BASE}/cv/file`,
 
   uploadCVFile: (file: File) => {
     const formData = new FormData();

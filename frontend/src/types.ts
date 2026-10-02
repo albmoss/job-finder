@@ -27,7 +27,6 @@ export interface PipelineStage {
 
 export interface SourceTelemetry {
   name: string;
-  color: string;
   state: 'running' | 'done' | 'skipped' | 'failed';
   found: number | null;
   added: number | null;
@@ -36,8 +35,10 @@ export interface SourceTelemetry {
   details_total?: number | null;
 }
 
-/** Przesiew w kodzie (matching/prefilter.py): powód → liczba odrzuconych ofert. */
-export type PrefilterReasons = Partial<Record<'miasto' | 'poziom' | 'lata' | 'jezyk' | 'brak_opisu', number>>;
+/** Przesiew w kodzie (matching/prefilter.py) i wstępna ocena (matching/triage.py): powód → liczba odrzuconych ofert. */
+export type PrefilterReasons = Partial<
+  Record<'miasto' | 'poziom' | 'lata' | 'jezyk' | 'brak_opisu' | 'kierunek', number>
+>;
 
 /** Etap dopasowania na żywo, z linii „Prefilter: …” i „Scored X/Y (R/s)” matching/run.py. */
 export interface ScoringTelemetry {
@@ -99,11 +100,6 @@ export interface PipelineState {
   started_at?: number | null;
   finished_at?: number | null;
   telemetry?: PipelineTelemetry;
-}
-
-export interface BootstrapData {
-  stats: Stats;
-  pipeline: PipelineState;
 }
 
 export interface RunSummaryOffer {
@@ -316,7 +312,6 @@ export interface OfferDetail {
 
 export interface DecisionResponse {
   ok: boolean;
-  stats: Stats;
   offer: OfferDetail;
 }
 
@@ -346,12 +341,11 @@ export interface CVInfo {
   ready: boolean;
   text: string;
   chars: number;
-  words: number;
   filename: string;
-  pdf_exists: boolean;
-  txt_exists: boolean;
   /** "/api/cv/file", gdy jest cv.pdf. */
   pdf_url: string | null;
+  /** Liczba stron cv.pdf; null bez PDF albo przy błędzie odczytu. */
+  pdf_pages: number | null;
   /** Profil z CV (candidate_profile.json); null przed pierwszym przebiegiem. */
   profile: CVProfile | null;
 }

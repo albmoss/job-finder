@@ -52,7 +52,7 @@ function savedDay(value: string | null): string {
 
 export function SavedScreen({ route }: ScreenProps) {
   const app = useApp();
-  const { dataVersion, toast, bumpData, refreshStats, openMarkSent } = app;
+  const { dataVersion, toast, bumpData, openMarkSent } = app;
   const [items, setItems] = useState<OfferListItem[] | null>(null);
   const [loadError, setLoadError] = useState('');
   const [adding, setAdding] = useState(false);
@@ -97,7 +97,6 @@ export function SavedScreen({ route }: ScreenProps) {
     try {
       await api.restoreDecision(item.link);
       bumpData();
-      refreshStats();
       toast('Usunięto z zapisanych.', {
         icon: Bookmark,
         action: {
@@ -107,7 +106,6 @@ export function SavedScreen({ route }: ScreenProps) {
               await api.updateDecision(item.link, 'save');
               if (item.note) await api.saveNote(item.link, item.note);
               bumpData();
-              refreshStats();
               select(item.link);
             } catch (err) {
               toast(`Nie udało się cofnąć: ${errorMessage(err)}`);

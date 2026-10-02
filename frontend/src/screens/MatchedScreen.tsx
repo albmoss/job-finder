@@ -437,7 +437,7 @@ function OfferCard({ item, active, hidden, busy, onSelect, onRestore }: OfferCar
   };
   return (
     <div
-      className={`glass mo-card${active ? ' is-active' : ''}${item.is_gone ? ' is-gone' : ''}`}
+      className={`glass mo-card${active ? ' is-active' : ''}`}
       role="button"
       tabIndex={0}
       aria-pressed={active}

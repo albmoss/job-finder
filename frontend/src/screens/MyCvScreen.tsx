@@ -4,7 +4,7 @@ import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { navigate, paths } from '../router';
 import { Modal } from '../shell/Modal';
-import { plural, type PluralForms } from '../plural';
+import { PAGES, plural, type PluralForms } from '../plural';
 import type { CVProfile, CvVersionSummary } from '../types';
 import type { ScreenProps } from './types';
 import '../styles/my_cv.css';
@@ -173,7 +173,11 @@ export function MyCvScreen(_props: ScreenProps) {
             <span className="cv-file-name" title={cv?.filename}>
               {cv?.filename ?? ''}
             </span>
-            <span className="label">1 / 1</span>
+            {cv?.pdf_pages != null && (
+              <span className="label">
+                {cv.pdf_pages} {plural(cv.pdf_pages, PAGES)}
+              </span>
+            )}
           </div>
           <div className="cv-stage">
             <div className="cv-paper">

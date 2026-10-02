@@ -1,6 +1,6 @@
 """
 Pipeline Process Manager - zarządzanie procesem pipeline'u i narzędzi.
-Niezależny od bibliotek UI menedżer cyklu życia procesu, bezpiecznego zatrzymania i wznawiania.
+Niezależny od bibliotek UI menedżer cyklu życia procesu i bezpiecznego zatrzymania.
 """
 
 from collections import deque
@@ -14,16 +14,6 @@ import threading
 import time
 
 from utils.safe_io import load_json_safe, save_json_atomic
-try:
-    import ui_theme
-except ImportError:
-    try:
-        _scratch_dir = str(Path(__file__).parent)
-        if _scratch_dir not in sys.path:
-            sys.path.insert(0, _scratch_dir)
-        import ui_theme
-    except ImportError:
-        ui_theme = None
 
 logger = logging.getLogger(__name__)
 
@@ -181,8 +171,7 @@ class PipelineProcessManager:
     """
     Niezależny od UI menedżer procesu pipeline'u.
     Gwarantuje przetrwanie procesu, bezpieczny reattachment,
-    ochronę przed wielokrotnym uruchomieniem, bezpieczne zatrzymanie (stop)
-    oraz niezawodne wznawianie (resume) z checkpointów.
+    ochronę przed wielokrotnym uruchomieniem i bezpieczne zatrzymanie (stop).
     """
     _singleton_lock = threading.RLock()
     _instance = None
@@ -253,15 +242,8 @@ class PipelineProcessManager:
         for s in self._telemetry["sources"]:
             if s["name"] == name:
                 return s
-        color = "#8A8F98"
-        if ui_theme and hasattr(ui_theme, "source_color"):
-            try:
-                color = ui_theme.source_color(name)
-            except Exception:
-                pass
         entry = {
             "name": name,
-            "color": color,
             "state": default_state,
             "found": None,
             "added": None,
@@ -477,7 +459,7 @@ class PipelineProcessManager:
                     pass
             return False
 
-    def start_pipeline(self, mode="full", cmd=None, is_resume=False, echo=None, stage=None):
+    def start_pipeline(self, mode="full", cmd=None, echo=None, stage=None):
         """`echo`: funkcja dostająca każdą linię wyjścia procesu (np. druk w konsoli).
         `stage`: w trybie „standalone” identyfikator etapu, który ten krok wykonuje."""
         with self._lock:
@@ -493,10 +475,9 @@ class PipelineProcessManager:
             self._mode = mode
             self._cmd = cmd
             self._echo = echo
-            if not is_resume:
-                self._init_stages(mode, stage)
-                self._active_stage_idx = next(
-                    (i for i, s in enumerate(self._stages) if s["status"] == "running"), 0)
+            self._init_stages(mode, stage)
+            self._active_stage_idx = next(
+                (i for i, s in enumerate(self._stages) if s["status"] == "running"), 0)
             self._logs.clear()
             self._started_at = time.time()
             self._finished_at = None
@@ -545,8 +526,7 @@ class PipelineProcessManager:
 
             self._thread = threading.Thread(target=self._reader_loop, daemon=True)
             self._thread.start()
-            action_lbl = "Wznowiono" if is_resume else "Uruchomiono"
-            return True, f"{action_lbl} proces (PID: {self._process.pid})."
+            return True, f"Uruchomiono proces (PID: {self._process.pid})."
 
     def stop_pipeline(self, force=False):
         """
@@ -606,7 +586,9 @@ class PipelineProcessManager:
 
         if force:
             logger.info(f"Wymuszono natychmiastowe zatrzymanie procesu pipeline'u (PID: {pid}).")
-            forced_ok = _terminate_process_tree(pid, create_time)
+            proc = self._process
+            if not _terminate_process_tree(pid, create_time) and proc is not None and proc.poll() is None:
+                return False, "Nie udało się zakończyć procesu pipeline'u."
             try:
                 if STOP_FLAG_FILE.exists():
                     STOP_FLAG_FILE.unlink()
@@ -653,80 +635,6 @@ class PipelineProcessManager:
         while thread is not None and thread.is_alive():
             thread.join(0.5)
         return self._exit_code
-
-    def resume_pipeline(self):
-        """
-        Wznawia przerwany lub nieudany pipeline z zachowaniem trybu i checkpointów.
-        Zwraca (bool, str).
-        """
-        with self._lock:
-            if self.is_running():
-                return False, "Pipeline jest już uruchomiony."
-
-            state = self.get_state()
-            if not state.get("can_resume", False):
-                return False, "Brak przerwanego pipeline'u do wznowienia."
-
-            cp = load_json_safe(CHECKPOINT_FILE, default={}) or {}
-            completed_stages = set(cp.get("completed_stages", []))
-            # Etap 00 w torze to archiwizacja i profil z CV; bez profilu nie jest skończony.
-            if "phase0_5" not in completed_stages:
-                completed_stages.discard("phase0")
-            options = cp.get("options", {})
-
-            saved_cmd = self._cmd or state.get("cmd")
-            is_standalone = bool(saved_cmd and not any("run_final_pipeline" in str(arg) for arg in saved_cmd))
-
-            mode = self._mode or options.get("mode", "full")
-            if options.get("skip_scraping"):
-                mode = "skip_scraping"
-
-            standalone_stage = None
-            if is_standalone:
-                cmd = list(saved_cmd)
-                mode = "standalone"
-                action_desc = f"krok: {Path(cmd[-1]).name if len(cmd) > 2 else 'narzędzie standalone'}"
-                first_incomplete = action_desc
-                standalone_stage = next((s.get("id") for s in state.get("stages") or []
-                                         if isinstance(s, dict) and s.get("status") != "skipped"), None)
-            else:
-                disk_stages_by_id = {s["id"]: s for s in state.get("stages", []) if isinstance(s, dict) and "id" in s}
-                for s in self._stages:
-                    if s["id"] in completed_stages:
-                        s["status"] = "done"
-                        if s.get("started_at") is None and s["id"] in disk_stages_by_id:
-                            s["started_at"] = disk_stages_by_id[s["id"]].get("started_at")
-                        if s.get("finished_at") is None and s["id"] in disk_stages_by_id:
-                            s["finished_at"] = disk_stages_by_id[s["id"]].get("finished_at")
-                    elif s["status"] != "skipped":
-                        s["status"] = "pending"
-                        s["started_at"] = None
-                        s["finished_at"] = None
-                    else:
-                        s["started_at"] = None
-                        s["finished_at"] = None
-                first_incomplete = None
-                first_idx = 0
-                for idx, s in enumerate(self._stages):
-                    if s["status"] not in ("done", "skipped"):
-                        first_incomplete = s["title"]
-                        first_idx = idx
-                        break
-
-                cmd = [sys.executable, "-u", "run_final_pipeline.py", "--resume"]
-                if mode == "skip_scraping" or options.get("skip_scraping"):
-                    cmd.append("--skip-scraping")
-                if options.get("rescore_all"):
-                    cmd.append("--rescore-all")
-
-                self._active_stage_idx = first_idx
-
-        # Pojedynczy krok nie ma checkpointu: startuje od nowa na swoim etapie.
-        ok, msg = self.start_pipeline(mode=mode, cmd=cmd, is_resume=not is_standalone, stage=standalone_stage)
-        if ok:
-            stage_hint = f" od etapu: {first_incomplete}" if first_incomplete else ""
-            return True, f"Wznowiono pipeline{stage_hint}."
-        return False, msg
 
     def _sync_state_to_disk(self, force=False):
         now = time.time()

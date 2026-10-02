@@ -131,7 +131,7 @@ export function MatchedDetail({
             <span>{offer.company}</span>
             {place && (
               <>
-                <span className="mo-dot">·</span>
+                <span>·</span>
                 <span>{place}</span>
               </>
             )}

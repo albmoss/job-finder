@@ -8,8 +8,6 @@ Limit darmowego progu: 25 zapytań na minutę.
 import logging
 import time
 import os
-import sys
-from pathlib import Path
 from datetime import datetime
 from typing import List
 

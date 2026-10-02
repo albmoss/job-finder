@@ -14,6 +14,7 @@ import {
 import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { formatDayLong, formatRelativeDay } from '../format';
+import { navigate, paths } from '../router';
 import type { ApplicationItem, NextStep, Stage } from '../types';
 import { AddFromLinkModal } from './add/AddFromLinkModal';
 import type { ScreenProps } from './types';
@@ -84,8 +85,9 @@ function toInputValue(due: string | null | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function ApplicationsScreen(_props: ScreenProps) {
-  const { dataVersion, toast, bumpData, refreshStats } = useApp();
+export function ApplicationsScreen({ route }: ScreenProps) {
+  const queryLink = route.query.get('oferta') ?? '';
+  const { dataVersion, toast, bumpData } = useApp();
   const [items, setItems] = useState<ApplicationItem[] | null>(null);
   const [loadError, setLoadError] = useState('');
   const [adding, setAdding] = useState(false);
@@ -113,6 +115,13 @@ export function ApplicationsScreen(_props: ScreenProps) {
     };
   }, [dataVersion]);
 
+  const queriedLoaded = !!queryLink && !!items?.some((i) => i.link === queryLink);
+  useEffect(() => {
+    if (!queriedLoaded) return;
+    setFocused(queryLink);
+    document.querySelector(`[data-link="${CSS.escape(queryLink)}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [queryLink, queriedLoaded]);
+
   const patchItem = (link: string, patch: Partial<ApplicationItem>) =>
     setItems((prev) => prev?.map((i) => (i.link === link ? { ...i, ...patch } : i)) ?? prev);
 
@@ -125,7 +134,6 @@ export function ApplicationsScreen(_props: ScreenProps) {
       const res = await api.updateDecision(link, 'apply', stage);
       patchItem(link, { stage: res.offer.stage ?? stage, decided_at: res.offer.decided_at });
       bumpData();
-      refreshStats();
     } catch (err) {
       patchItem(link, { stage: previous });
       toast(`Nie udało się zmienić etapu: ${errorMessage(err)}`);
@@ -152,7 +160,6 @@ export function ApplicationsScreen(_props: ScreenProps) {
       await api.restoreDecision(item.link);
       setItems((prev) => prev?.filter((i) => i.link !== item.link) ?? prev);
       bumpData();
-      refreshStats();
       toast('Cofnięto wysłanie.', { icon: Undo2 });
     } catch (err) {
       toast(`Nie udało się cofnąć wysłania: ${errorMessage(err)}`);
@@ -311,7 +318,13 @@ export function ApplicationsScreen(_props: ScreenProps) {
 
       <p className="ap-foot">Etap zmienisz na karcie aplikacji lub przeciągając ją do innej kolumny.</p>
 
-      {adding && <AddFromLinkModal status="apply" onClose={() => setAdding(false)} onSaved={() => undefined} />}
+      {adding && (
+        <AddFromLinkModal
+          status="apply"
+          onClose={() => setAdding(false)}
+          onSaved={(offer) => navigate(paths.applications(offer.link), { replace: true })}
+        />
+      )}
     </div>
   );
 }

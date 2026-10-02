@@ -95,7 +95,7 @@ export function InstructionsScreen(_props: ScreenProps) {
       <aside className="in-intro">
         <button
           type="button"
-          className="btn in-back"
+          className="btn"
           onClick={() => (dirty ? setLeaveTarget(paths.cv) : navigate(paths.cv))}
         >
           <ArrowLeft />

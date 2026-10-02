@@ -941,7 +941,7 @@ def test_pipeline_stop_and_resume_lifecycle():
         mgr = PipelineProcessManager()
         # Child runs for 2.0s - deliberately exceeding the manager's 1.5s cooperative polling window!
         slow_cmd = [sys.executable, "-c", "import time; time.sleep(2.0)"]
-        started, _ = mgr.start_pipeline(mode="full", cmd=slow_cmd, is_resume=False)
+        started, _ = mgr.start_pipeline(mode="full", cmd=slow_cmd)
         check("manager started slow child process", started is True)
 
         # Issue cooperative stop: polling loop waits 1.5s, then returns while process is still running
@@ -964,7 +964,7 @@ def test_pipeline_stop_and_resume_lifecycle():
 
         # Next start_pipeline or resume MUST safely clear the stale flag and NOT stop immediately!
         quick_cmd = [sys.executable, "-c", "import sys; sys.exit(0)"]
-        next_started, _ = mgr.start_pipeline(mode="full", cmd=quick_cmd, is_resume=False)
+        next_started, _ = mgr.start_pipeline(mode="full", cmd=quick_cmd)
         check("new start_pipeline started successfully", next_started is True)
         check("stale stop flag cleared by start_pipeline", not t_stop_flag.exists())
 
@@ -976,7 +976,7 @@ def test_pipeline_stop_and_resume_lifecycle():
         # 4. Standalone tool exit semantics: code 0 = completed, code 1 = failed
         mgr_sa = PipelineProcessManager()
         sa_cmd = [sys.executable, "-c", "import sys; sys.exit(0)"]
-        ok_sa, _ = mgr_sa.start_pipeline(mode="standalone", cmd=sa_cmd, is_resume=False, stage="phase3")
+        ok_sa, _ = mgr_sa.start_pipeline(mode="standalone", cmd=sa_cmd, stage="phase3")
         running_ids = [s["id"] for s in mgr_sa._stages if s["status"] == "running"]
         check("standalone step runs as its own stage, the rest skipped",
               running_ids == ["phase3"] and mgr_sa._active_stage_idx == 5
@@ -991,7 +991,7 @@ def test_pipeline_stop_and_resume_lifecycle():
 
         mgr_fa = PipelineProcessManager()
         fa_cmd = [sys.executable, "-c", "import sys; sys.exit(1)"]
-        ok_fa, _ = mgr_fa.start_pipeline(mode="full", cmd=fa_cmd, is_resume=False)
+        ok_fa, _ = mgr_fa.start_pipeline(mode="full", cmd=fa_cmd)
         if mgr_fa._thread:
             mgr_fa._thread.join(timeout=3.0)
         fa_state = mgr_fa.get_state()
@@ -1019,9 +1019,6 @@ def test_http_security_and_dns_rebinding_protection():
     # 2. Foreign Host headers (DNS rebinding simulation) rejected across GET endpoints
     res_rebind_cv = client.get("/api/cv", headers={"host": "attacker.com:8501"})
     check("foreign host rejected on GET /api/cv with 400 Bad Request", res_rebind_cv.status_code == 400)
-
-    res_rebind_boot = client.get("/api/bootstrap", headers={"host": "malicious.site:8501"})
-    check("foreign host rejected on GET /api/bootstrap with 400 Bad Request", res_rebind_boot.status_code == 400)
 
     res_rebind_offers = client.get("/api/offers", headers={"host": "evil.org"})
     check("foreign host rejected on GET /api/offers with 400 Bad Request", res_rebind_offers.status_code == 400)

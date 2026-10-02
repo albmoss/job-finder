@@ -234,14 +234,6 @@
   transition-delay: 80ms;
 }
 
-.pg-row:nth-of-type(4) {
-  transition-delay: 120ms;
-}
-
-.pg-row:nth-of-type(5) {
-  transition-delay: 160ms;
-}
-
 .pg-row:hover .pg-row-title {
   color: var(--ink);
   text-decoration: underline;

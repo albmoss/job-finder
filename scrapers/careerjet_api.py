@@ -7,8 +7,6 @@ Dokumentacja i rejestracja: https://www.careerjet.com/partners/api/
 import logging
 import time
 import os
-import sys
-from pathlib import Path
 from datetime import datetime
 from typing import List
 from base64 import b64encode

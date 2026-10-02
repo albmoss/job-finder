@@ -256,8 +256,7 @@ p {
   transform: scale(var(--press-scale));
 }
 
-.btn:disabled,
-.btn.is-disabled {
+.btn:disabled {
   cursor: default;
   opacity: 0.4;
 }

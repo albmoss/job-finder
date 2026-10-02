@@ -94,21 +94,6 @@ async def origin_check_middleware(request: Request, call_next):
 
 # --- Endpointy API ---
 
-async def api_bootstrap(request: Request) -> JSONResponse:
-    """Zwraca status pipeline'u i statystyki bazy."""
-    job_data_service.ensure_loaded()
-    stats = job_data_service.get_stats()
-
-    mgr = PipelineProcessManager.get_instance()
-    p_state = mgr.get_state()
-    p_state["logs"] = sanitize_logs(p_state.get("logs", []))
-
-    return JSONResponse({
-        "stats": stats,
-        "pipeline": p_state,
-    })
-
-
 async def api_stats(request: Request) -> JSONResponse:
     job_data_service.ensure_loaded()
     return JSONResponse(job_data_service.get_stats())
@@ -192,11 +177,7 @@ async def api_decision_update(request: Request) -> JSONResponse:
     ok = job_data_service.update_decision(link, status, stage=stage, cv_version_id=cv_version_id)
     if not ok:
         return JSONResponse({"error": "Błąd zapisu decyzji do pliku"}, status_code=500)
-    return JSONResponse({
-        "ok": True,
-        "stats": job_data_service.get_stats(),
-        "offer": job_data_service.get_offer_detail(link),
-    })
+    return JSONResponse({"ok": True, "offer": job_data_service.get_offer_detail(link)})
 
 
 async def api_note_update(request: Request) -> JSONResponse:
@@ -226,12 +207,7 @@ async def api_decision_restore(request: Request) -> JSONResponse:
         return JSONResponse({"error": "Pole 'link' jest wymagane"}, status_code=400)
 
     changed = job_data_service.restore_decision(link)
-    return JSONResponse({
-        "ok": True,
-        "changed": changed,
-        "stats": job_data_service.get_stats(),
-        "offer": job_data_service.get_offer_detail(link),
-    })
+    return JSONResponse({"ok": True, "changed": changed, "offer": job_data_service.get_offer_detail(link)})
 
 
 async def api_next_step_update(request: Request) -> JSONResponse:
@@ -304,12 +280,7 @@ async def api_tool_save_manual_job(request: Request) -> JSONResponse:
     if status and not job_data_service.update_decision(link, status):
         return JSONResponse({"error": "Oferta zapisana, ale nie udało się zapisać decyzji"}, status_code=500)
 
-    return JSONResponse({
-        "ok": True,
-        "message": msg,
-        "stats": job_data_service.get_stats(),
-        "offer": job_data_service.get_offer_detail(link),
-    })
+    return JSONResponse({"ok": True, "message": msg, "offer": job_data_service.get_offer_detail(link)})
 
 
 # --- Pipeline & Narzędzia ---
@@ -353,32 +324,6 @@ async def api_pipeline_stop(request: Request) -> JSONResponse:
     state = mgr.get_state()
     state["logs"] = sanitize_logs(state.get("logs", []))
     return JSONResponse({"ok": ok, "message": msg, "state": state})
-
-
-async def api_pipeline_force_stop(request: Request) -> JSONResponse:
-    """Natychmiastowe, wymuszone zakończenie drzewa procesów pipeline'u."""
-    mgr = PipelineProcessManager.get_instance()
-    ok, msg = mgr.stop_pipeline(force=True)
-    state = mgr.get_state()
-    state["logs"] = sanitize_logs(state.get("logs", []))
-    return JSONResponse({"ok": ok, "message": msg, "state": state})
-
-
-async def api_pipeline_resume(request: Request) -> JSONResponse:
-    """Wznawia pipeline z zapisanego checkpointu."""
-    mgr = PipelineProcessManager.get_instance()
-    ok, msg = mgr.resume_pipeline()
-    state = mgr.get_state()
-    state["logs"] = sanitize_logs(state.get("logs", []))
-    if not ok:
-        return JSONResponse({"ok": False, "error": msg, "state": state}, status_code=400)
-    return JSONResponse({"ok": True, "message": msg, "state": state})
-
-
-async def api_pipeline_reload_data(request: Request) -> JSONResponse:
-    """Odświeża dane z dysku w pamięci podręcznej serwera."""
-    job_data_service.reload()
-    return JSONResponse({"ok": True, "stats": job_data_service.get_stats()})
 
 
 async def api_pipeline_run_summary(request: Request) -> JSONResponse:
@@ -535,7 +480,6 @@ async def spa_index_fallback(request: Request) -> Response:
 
 
 routes = [
-    Route("/api/bootstrap", api_bootstrap, methods=["GET"]),
     Route("/api/stats", api_stats, methods=["GET"]),
     Route("/api/offers", api_offers, methods=["GET"]),
     Route("/api/offers/detail", api_offer_detail, methods=["GET"]),
@@ -550,9 +494,6 @@ routes = [
     Route("/api/pipeline/prerequisites", api_pipeline_prerequisites, methods=["GET"]),
     Route("/api/pipeline/start", api_pipeline_start, methods=["POST"]),
     Route("/api/pipeline/stop", api_pipeline_stop, methods=["POST"]),
-    Route("/api/pipeline/force-stop", api_pipeline_force_stop, methods=["POST"]),
-    Route("/api/pipeline/resume", api_pipeline_resume, methods=["POST"]),
-    Route("/api/pipeline/reload-data", api_pipeline_reload_data, methods=["POST"]),
     Route("/api/pipeline/run-summary", api_pipeline_run_summary, methods=["GET"]),
     Route("/api/cv", api_cv_get, methods=["GET"]),
     Route("/api/cv/file", api_cv_file, methods=["GET"]),

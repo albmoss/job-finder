@@ -4,7 +4,6 @@ Wyciąganie tekstu z CV w formacie PDF i DOCX.
 
 import logging
 import re
-from pathlib import Path
 from typing import Optional
 
 try:
@@ -74,33 +73,6 @@ class CVParser:
             
         except Exception as e:
             logger.error(f"Error extracting DOCX {filepath}: {e}")
-            return None
-    
-    @staticmethod
-    def parse_cv(filepath: str) -> Optional[str]:
-        """
-        Auto-detect file type and extract text
-        
-        Args:
-            filepath: Path to CV file (PDF or DOCX)
-            
-        Returns:
-            Extracted text or None if extraction failed
-        """
-        path = Path(filepath)
-        
-        if not path.exists():
-            logger.error(f"File not found: {filepath}")
-            return None
-        
-        extension = path.suffix.lower()
-        
-        if extension == '.pdf':
-            return CVParser.extract_from_pdf(filepath)
-        elif extension in ['.docx', '.doc']:
-            return CVParser.extract_from_docx(filepath)
-        else:
-            logger.error(f"Unsupported file format: {extension}")
             return None
     
     @staticmethod

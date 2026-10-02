@@ -26,7 +26,6 @@ from __future__ import annotations
 import html
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -40,7 +39,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from scrapers.base_scraper import BaseScraper
 from utils.candidate_scope import scope_city
 from utils.data_models import Job
-from utils.links import canonical_link
 from utils.offer_fields import (
     _fold,
     make_salary,

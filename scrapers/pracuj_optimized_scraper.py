@@ -37,14 +37,12 @@ from utils.candidate_scope import city_slug, scope_city, scope_levels
 from utils.data_models import Job
 from utils.links import canonical_link, logo_url
 from utils.offer_fields import (
-    make_salary,
     norm_contracts,
     norm_schedules,
     norm_skills,
     norm_seniority,
     norm_work_modes,
     salary_from_text,
-    years_from_text,
 )
 
 logger = logging.getLogger(__name__)

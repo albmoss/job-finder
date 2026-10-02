@@ -10,7 +10,7 @@ import { MiniPipelineCard } from './shell/MiniPipelineCard';
 import { SettingsModal } from './shell/SettingsModal';
 import { Toasts, useToasts } from './shell/Toasts';
 import { TopBar } from './shell/TopBar';
-import type { CVInfo, DecisionStatus, OfferDetail, PipelineState, RunSummary, Stats } from './types';
+import type { CVInfo, DecisionStatus, OfferDetail, PipelineState, RunSummary } from './types';
 
 const POLL_BUSY_MS = 1200;
 const POLL_IDLE_MS = 4000;
@@ -25,7 +25,6 @@ export function App() {
 
   const [pipeline, setPipeline] = useState<PipelineState | null>(null);
   const [runSummary, setRunSummary] = useState<RunSummary | null>(null);
-  const [stats, setStats] = useState<Stats | null>(null);
   const [cv, setCv] = useState<CVInfo | null>(null);
   const [dataVersion, setDataVersion] = useState(0);
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -37,14 +36,6 @@ export function App() {
   routeRef.current = route;
 
   const bumpData = useCallback(() => setDataVersion((v) => v + 1), []);
-
-  const refreshStats = useCallback(async () => {
-    try {
-      setStats(await api.getStats());
-    } catch {
-      // Statystyki są pomocnicze; następne odświeżenie spróbuje ponownie.
-    }
-  }, []);
 
   const refreshCv = useCallback(async () => {
     try {
@@ -64,18 +55,9 @@ export function App() {
     }
   }, []);
 
-  const refreshPipeline = useCallback(async () => {
-    try {
-      setPipeline(await api.getPipelineState());
-    } catch {
-      // Serwer chwilowo niedostępny: zostaje ostatni znany stan.
-    }
-  }, []);
-
   useEffect(() => {
     refreshCv();
-    refreshStats();
-  }, [refreshCv, refreshStats]);
+  }, [refreshCv]);
 
   useEffect(() => {
     let timer = 0;
@@ -109,7 +91,6 @@ export function App() {
     const busy = isBusy(pipeline);
     if (wasBusy.current && !busy) {
       bumpData();
-      refreshStats();
       refreshCv();
       const onProgress = routeRef.current.name === 'postep';
       if (pipeline.status === 'completed') {
@@ -132,7 +113,7 @@ export function App() {
       }
     }
     wasBusy.current = busy;
-  }, [pipeline, bumpData, refreshStats, refreshCv, toast]);
+  }, [pipeline, bumpData, refreshCv, toast]);
 
   const cvMissing = cv !== null && !cv.ready;
   useEffect(() => {
@@ -184,7 +165,6 @@ export function App() {
         } else {
           const res = await api.updateDecision(offer.link, 'apply', 'apply', readyCv?.id);
           detail = res.offer;
-          setStats(res.stats);
           bumpData();
           opts.onChange?.(detail);
         }
@@ -201,11 +181,8 @@ export function App() {
       pipeline,
       runSummary,
       pipelineBusy,
-      refreshPipeline,
       startSearch,
       stopSearch,
-      stats,
-      refreshStats,
       cv,
       refreshCv,
       dataVersion,
@@ -219,11 +196,8 @@ export function App() {
       pipeline,
       runSummary,
       pipelineBusy,
-      refreshPipeline,
       startSearch,
       stopSearch,
-      stats,
-      refreshStats,
       cv,
       refreshCv,
       dataVersion,

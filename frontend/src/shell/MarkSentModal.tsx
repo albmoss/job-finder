@@ -21,7 +21,7 @@ export interface MarkSentState {
 }
 
 export function MarkSentModal({ state, onClose }: { state: MarkSentState; onClose: () => void }) {
-  const { toast, refreshStats, bumpData } = useApp();
+  const { toast, bumpData } = useApp();
   const { offer, previousStatus, cvVersionId, onChange } = state;
   const [stage, setStage] = useState<Stage>(offer.stage ?? 'apply');
   const [label, setLabel] = useState(offer.next_step?.label ?? '');
@@ -31,7 +31,6 @@ export function MarkSentModal({ state, onClose }: { state: MarkSentState; onClos
   const finish = (updated: OfferDetail, message: string) => {
     onChange?.(updated);
     bumpData();
-    refreshStats();
     toast(message);
     onClose();
   };
