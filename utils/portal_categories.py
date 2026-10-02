@@ -62,10 +62,7 @@ def _ask_jev(catalog: dict[str, str], profile: dict, cv: str | None) -> dict[str
         f"k{i}": {"type": "noul", "instructions": _INSTRUCTIONS.format(label=catalog[code])}
         for i, code in enumerate(codes)
     }
-    candidate = {k: v for k, v in profile.items() if not k.startswith("_")}
-    if cv:
-        candidate["cv"] = cv[:jev.CV_LIMIT]
-    reply = jev.ask({"kandydat": candidate}, key, questions=questions)
+    reply = jev.ask({"kandydat": jev.candidate_state(profile, cv)}, key, questions=questions)
     return {code: float(reply["answers"][f"k{i}"]["noul"]) for i, code in enumerate(codes)}
 
 

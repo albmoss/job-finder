@@ -98,11 +98,16 @@ def api_key() -> str | None:
     return key or None
 
 
-def build_state(job: Job, profile: dict, cv_text: str | None) -> dict:
-    """Stan dla Jev: kandydat (profil + CV) i oferta (pola + treść)."""
+def candidate_state(profile: dict, cv_text: str | None) -> dict:
     candidate = {k: v for k, v in profile.items() if not k.startswith("_")}
     if cv_text:
         candidate["cv"] = cv_text[:CV_LIMIT]
+    return candidate
+
+
+def build_state(job: Job, profile: dict, cv_text: str | None) -> dict:
+    """Stan dla Jev: kandydat (profil + CV) i oferta (pola + treść)."""
+    candidate = candidate_state(profile, cv_text)
     offer = {
         "stanowisko": job.title,
         "firma": job.company,

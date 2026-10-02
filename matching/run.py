@@ -8,7 +8,8 @@ Wynik trafia do `match_results.json`: słownik kanoniczny link -> wpis
 
 Oferta jest oceniana raz dla pary „treść oferty + profil z CV”. Kolejny
 przebieg pomija wpisy z tym samym `offer_fp` i `profile_fp`, więc ocenia tylko
-nowe albo zmienione oferty, a zmiana CV przelicza wszystko (to kosztuje grosze).
+nowe albo zmienione oferty. Przed pełną oceną idzie wstępna (matching/triage.py):
+oferty bez szansy dostają `filtered = "kierunek"` i nie kosztują pełnego zapytania.
 
 Uruchomienie ręczne: python -m matching.run [--limit N] [--rescore-all]
 """
@@ -25,7 +26,7 @@ from pathlib import Path
 
 import requests
 
-from matching import jev
+from matching import jev, triage
 from matching.prefilter import reject_reason
 from utils.cv_profile import cv_text, ensure_profile, profile_fingerprint
 from utils.data_models import Job, JobDatabase
@@ -65,6 +66,41 @@ def _has_content(job: Job) -> bool:
     przebiegu (utils/known_links.py) - wtedy zmienia się odcisk oferty i ocena zapada ponownie.
     """
     return len((job.description or "").strip()) >= MIN_DESCRIPTION or bool(job.skills_required)
+
+
+def _triage(todo, results, profile, cv, profile_fp, key, session, now):
+    known, ask = {}, []
+    for link, job, _ in todo:
+        cached = (results.get(link) or {}).get("triage") or {}
+        if cached.get("fp") == triage.triage_fp(job) and cached.get("profile_fp") == profile_fp:
+            known[link] = cached["p"]
+        else:
+            ask.append((link, job))
+    errors, stopped = 0, False
+    if ask:
+        fresh, tokens, errors, stopped = triage.triage(
+            ask, jev.candidate_state(profile, cv), key, session, STOP_FLAG_FILE.exists)
+        print(f"Triage: {len(fresh)}/{len(ask)} offers checked, {tokens} input tokens, "
+              f"{len(known)} cached")
+        known.update(fresh)
+
+    passed, rejected = [], 0
+    for link, job, fp in todo:
+        if link not in known:
+            continue
+        mark = {"p": round(known[link], 4), "fp": triage.triage_fp(job), "profile_fp": profile_fp}
+        if known[link] >= triage.THRESHOLD:
+            entry = results.setdefault(link, {"percent": None, "filtered": None, "answers": None,
+                                              "offer_fp": None, "profile_fp": None, "model": None,
+                                              "scored_at": None})
+            entry["triage"] = mark
+            passed.append((link, job, fp))
+        else:
+            rejected += 1
+            results[link] = {"percent": None, "filtered": "kierunek", "answers": None,
+                             "offer_fp": fp, "profile_fp": profile_fp, "model": None,
+                             "scored_at": now, "triage": mark}
+    return passed, rejected, errors, stopped
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -125,14 +161,21 @@ def main(argv: list[str] | None = None) -> int:
     for link in [l for l in results if l not in live_links]:
         del results[link]
 
+    session = requests.Session()
+    stopped = False
+    errors = 0
+    if limit != 0 and todo:
+        todo, rejected, errors, stopped = _triage(todo, results, profile, cv, profile_fp, key, session, now)
+        if rejected:
+            filtered["kierunek"] = rejected
+
     if limit is not None:
         todo = todo[:limit]
     total = len(todo)
     print(f"Prefilter: {sum(filtered.values())} rejected {filtered} | to score: {total}")
     save_json_atomic(str(RESULTS_PATH), results, backup=True)
 
-    session = requests.Session()
-    done = errors = 0
+    done = 0
     started = last_report = time.monotonic()
 
     def score(item):
@@ -143,7 +186,6 @@ def main(argv: list[str] | None = None) -> int:
     with cf.ThreadPoolExecutor(WORKERS) as pool:
         pending = set()
         queue = iter(todo)
-        stopped = False
         while True:
             while not stopped and len(pending) < WORKERS * 2:
                 item = next(queue, None)

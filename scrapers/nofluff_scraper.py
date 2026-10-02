@@ -140,15 +140,13 @@ class NoFluffScraper(BaseScraper):
 
     def _search(self, session: requests.Session, criteria: dict, label: str) -> list:
         """Pobierz wszystkie strony wyników dla jednego zestawu kryteriów."""
-        all_postings = []
+        postings_by_id = {}
         page = 1
-        page_size = 50
 
         while True:
-            payload = {"criteriaSearch": criteria, "pageFrom": page, "pageSize": page_size}
-
             try:
-                resp = session.post(SEARCH_URL, json=payload, headers=HEADERS, timeout=30)
+                resp = session.post(f"{SEARCH_URL}&page={page}", json={"criteriaSearch": criteria},
+                                    headers=HEADERS, timeout=30)
                 if resp.status_code == 403:
                     logger.warning("NFJ API: 403 Forbidden — API may have changed or is blocking")
                     break
@@ -159,20 +157,20 @@ class NoFluffScraper(BaseScraper):
                 break
 
             postings = data.get("postings", data.get("items", []))
-            if not postings:
-                break
+            before = len(postings_by_id)
+            for posting in postings:
+                postings_by_id.setdefault(posting.get("id") or posting.get("url"), posting)
+            total_pages = int(data.get("totalPages") or page)
+            logger.info(f"NFJ API [{label}]: page {page}/{total_pages} - {len(postings)} offers, "
+                        f"{len(postings_by_id) - before} new (total: {data.get('totalCount')})")
 
-            all_postings.extend(postings)
-            total = data.get("totalCount", data.get("total", 0))
-            logger.info(f"NFJ API [{label}]: page {page} - {len(postings)} offers (total: {total})")
-
-            if len(all_postings) >= total or len(postings) < page_size:
+            if not postings or len(postings_by_id) == before or page >= total_pages:
                 break
 
             page += 1
             time.sleep(0.5)
 
-        return all_postings
+        return list(postings_by_id.values())
 
     @staticmethod
     def _in_scope(posting: dict, target_city: str) -> bool:

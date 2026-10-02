@@ -111,6 +111,17 @@ ROCKETJOBS_CATEGORIES = {
     "zdrowie": "Zdrowie i uroda",
 }
 
+POLAND_BOUNDS = ((49.0, 54.9), (14.1, 24.2))
+
+
+def in_poland(place: dict) -> bool:
+    try:
+        lat, lon = float(place["latitude"]), float(place["longitude"])
+    except (KeyError, TypeError, ValueError):
+        return True
+    (lat_min, lat_max), (lon_min, lon_max) = POLAND_BOUNDS
+    return lat_min <= lat <= lat_max and lon_min <= lon <= lon_max
+
 
 class CandidateAPIScraper(BaseScraper):
     """Baza dla scraperów opartych o candidate-api. Nie używa przeglądarki."""
@@ -251,11 +262,12 @@ class CandidateAPIScraper(BaseScraper):
     def _matches_location(self, offer: dict, target_city: str) -> bool:
         """
         API zwraca ~10% ofert spoza wskazanego miasta (Gdańsk, Wrocław, Kraków).
-        Zostawiamy tylko oferty z docelowego miasta ORAZ wszystkie zdalne -
-        praca zdalna jest niezależna od lokalizacji i jest w preferencjach.
+        Zostawiamy tylko oferty z docelowego miasta ORAZ zdalne z firm w Polsce
+        (współrzędne w POLAND_BOUNDS) - zdalne z Los Angeles czy Lizbony odpadają.
         """
         if str(offer.get("workplaceType", "")).lower() == "remote":
-            return True
+            places = [offer, *(loc for loc in offer.get("locations") or [] if isinstance(loc, dict))]
+            return any(in_poland(place) for place in places)
 
         target = target_city.lower()
         if target in str(offer.get("city", "")).lower():

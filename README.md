@@ -111,15 +111,20 @@ contract, schedule, salary, required and nice-to-have skills, languages. Years o
 and language requirements are read from the description when a board has no field for them.
 
 Code drops only certain mismatches: a level two steps above the CV, far more years than the
-CV shows, a required language the CV lacks. Everything else goes to
+CV shows, a required language the CV lacks. The rest goes to
 [Jev](https://docs.typesafe.ai/), a model that returns typed answers with probabilities
-instead of text. It answers six narrow questions per offer (share of requirements met, how
-close the work is to the CV, level fit, hard blockers, interview chance, whether the offer
-follows the direction the CV points to). `matching/jev.py` turns them into a percentage with
-fixed weights, so the same offer and CV always get the same score.
+instead of text, in two passes. The first pass sends the CV once with up to 100 offers, each
+reduced to title, category, company and skills, and asks whether someone with this CV would
+apply. Offers under a 15% chance stop there. In a test on about 2,000 already scored offers
+this kept every offer that later scored 40% or more and dropped three in four of those under
+20%, for about 130 input tokens per offer. The second pass sends the CV with the full offer
+and asks six narrow questions (share of requirements met, how close the work is to the CV,
+level fit, hard blockers, interview chance, whether the offer follows the direction the CV
+points to). `matching/jev.py` turns them into a percentage with fixed weights, so the same
+offer and CV always get the same score.
 
-Scores are cached per offer text and CV. A run scores only new or changed offers; a new CV
-rescores everything.
+Both passes are cached per offer and CV. A run scores only new or changed offers; a new CV
+runs both passes again for every offer.
 
 ## CV per offer
 
