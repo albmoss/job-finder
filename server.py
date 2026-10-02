@@ -9,7 +9,6 @@ import math
 import os
 from pathlib import Path
 import re
-import sys
 from typing import List
 from urllib.parse import urlparse
 
@@ -25,21 +24,25 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from app_services import (
+    APP_STAGES,
+    CV_PDF_PATH,
+    DECISION_STATUSES,
+    OFFER_TABS,
     check_pipeline_prerequisites,
     fetch_job_from_link,
     get_api_keys_info,
     get_cv_info,
     get_env_fields_status,
     job_data_service,
-    open_local_cv_pdf,
+    pdf_is_current,
     save_env_keys,
     save_manual_job,
     save_pasted_cv_text,
     save_llm_settings,
     save_uploaded_cv,
 )
+from cv_tailor.routes import routes as cv_tailor_routes
 from pipeline_manager import PipelineProcessManager
-import ui_theme
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,7 +53,7 @@ logger = logging.getLogger("server")
 BASE_DIR = Path(__file__).parent
 FRONTEND_DIST_DIR = BASE_DIR / "frontend" / "dist"
 
-PAGE_SIZE = 25
+PAGE_SIZE = 5
 
 
 def sanitize_log_line(line: str) -> str:
@@ -112,9 +115,12 @@ async def api_stats(request: Request) -> JSONResponse:
 
 
 async def api_offers(request: Request) -> JSONResponse:
-    """Zwraca stronicowaną listę ofert dla aktywnej zakładki i zapytania wyszukiwania."""
+    """Zwraca stronicowaną listę ofert dla zakładki (Dopasowane, Ukryte, Zapisane)."""
     tab = request.query_params.get("tab", "Dopasowane")
+    if tab not in OFFER_TABS:
+        return JSONResponse({"error": f"Nieznana zakładka: {tab}"}, status_code=400)
     search = request.query_params.get("search", "").strip()
+    sort = "newest" if request.query_params.get("sort") == "newest" else "match"
     try:
         page = max(1, int(request.query_params.get("page", 1)))
     except ValueError:
@@ -124,61 +130,19 @@ async def api_offers(request: Request) -> JSONResponse:
     except ValueError:
         page_size = PAGE_SIZE
     job_data_service.ensure_loaded()
-    items = job_data_service.ws_collect(tab, search)
+    items = job_data_service.ws_collect(tab, search, sort)
     total = len(items)
     total_pages = max(1, math.ceil(total / page_size)) if total else 1
     page = min(page, total_pages)
-
     start = (page - 1) * page_size
-    slice_items = items[start : start + page_size]
-
-    # Wartość sortowania na początku każdej strony — UI podpisuje nią skok o wiele stron.
-    # Tylko tam, gdzie lista jest ułożona po tej wartości; reszta zakładek idzie od najnowszych.
-    if tab in ("Dopasowane", "Wszystkie"):
-        page_marks = [
-            int(m.match_percentage) if m and m.match_percentage is not None else None
-            for _, m, _, _ in items[::page_size]
-        ]
-    elif tab == "Ocenione":
-        page_marks = [r for _, _, _, r in items[::page_size]]
-    else:
-        page_marks = None
 
     # Nowe = pierwszy raz zobaczone od startu ostatniego pobierania. Oba znaczniki to
     # isoformat czasu lokalnego, więc porównanie napisów = porównanie chwil.
     fresh_since = job_data_service.fresh_since()
     fresh_count = (
-        sum(1 for job, _, _, _ in items if (job.scraped_at or "") >= fresh_since) if fresh_since else 0
+        sum(1 for job, _ in items if (job.scraped_at or "") >= fresh_since) if fresh_since else 0
     )
-
-    rows = []
-    for idx, (job, match, status, rating) in enumerate(slice_items, start=start):
-        pct = int(match.match_percentage) if match and match.match_percentage is not None else None
-        dot_color, dot_label = ui_theme.STATES.get(status, (None, None)) if status in ui_theme.STATES else (None, None)
-        if status in ("apply", "save", "aspirational", "reject", "rated"):
-            from app_services import DECISION_STYLE
-            dot_color, dot_label = DECISION_STYLE.get(status, (None, None))
-            if status == "rated" and rating:
-                dot_label = f"ocena {rating}/10"
-
-        decided_at = job_data_service.get_decision(job.link)[3] if status else None
-        rows.append({
-            "rank": idx + 1,
-            "link": job.link,
-            "title": job.title or "Bez tytułu",
-            "company": job.company or "—",
-            "location": job.location or "Warszawa",
-            "source": job.source or "—",
-            "source_color": ui_theme.source_color(job.source),
-            "is_gone": job.link in job_data_service.zdjete,
-            "is_new": bool(fresh_since) and (job.scraped_at or "") >= fresh_since,
-            "match_percentage": pct,
-            "status": status,
-            "rating": rating,
-            "decided_at": decided_at,
-            "dot_color": dot_color,
-            "dot_label": dot_label,
-        })
+    rows = [job_data_service.list_item(job, rec, fresh_since) for job, rec in items[start : start + page_size]]
 
     return JSONResponse({
         "items": rows,
@@ -186,9 +150,9 @@ async def api_offers(request: Request) -> JSONResponse:
         "page": page,
         "total_pages": total_pages,
         "page_size": page_size,
-        "page_marks": page_marks,
         "fresh_count": fresh_count,
         "fresh_since": fresh_since,
+        "hidden_count": job_data_service.hidden_count(),
     })
 
 
@@ -203,36 +167,51 @@ async def api_offer_detail(request: Request) -> JSONResponse:
     return JSONResponse(detail)
 
 
-async def api_decision_update(request: Request) -> JSONResponse:
-    """Zapisuje lub aktualizuje decyzję użytkownika dla danej oferty."""
+async def _json_body(request: Request):
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
+        return None
+    return body if isinstance(body, dict) else None
 
+
+async def api_decision_update(request: Request) -> JSONResponse:
+    """Zapisuje decyzję: zapisana na później, wysłana (z etapem lejka) albo ukryta."""
+    body = await _json_body(request)
+    if body is None:
+        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
     link = body.get("link")
     status = body.get("status")
-    rating = body.get("rating")
-    stage = body.get("stage")
+    stage = body.get("stage") or None
+    cv_version_id = body.get("cv_version_id") or None
+    if not link or status not in DECISION_STATUSES:
+        return JSONResponse({"error": "Pola 'link' i 'status' (save, apply, reject) są wymagane"}, status_code=400)
+    if stage is not None and stage not in APP_STAGES:
+        return JSONResponse({"error": f"Nieznany etap: {stage}"}, status_code=400)
 
-    if not link or not status:
-        return JSONResponse({"error": "Pola 'link' i 'status' są wymagane"}, status_code=400)
-
-    if rating is not None:
-        try:
-            rating = max(1, min(10, int(rating)))
-        except (ValueError, TypeError):
-            rating = 5
-
-    ok = job_data_service.update_decision(link, status, rating, stage=stage)
+    ok = job_data_service.update_decision(link, status, stage=stage, cv_version_id=cv_version_id)
     if not ok:
         return JSONResponse({"error": "Błąd zapisu decyzji do pliku"}, status_code=500)
-
     return JSONResponse({
         "ok": True,
         "stats": job_data_service.get_stats(),
         "offer": job_data_service.get_offer_detail(link),
     })
+
+
+async def api_note_update(request: Request) -> JSONResponse:
+    """Zapisuje notatkę do oferty z decyzją; pusta notatka ją usuwa."""
+    body = await _json_body(request)
+    if body is None:
+        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
+    link = body.get("link")
+    if not link:
+        return JSONResponse({"error": "Pole 'link' jest wymagane"}, status_code=400)
+    note = str(body.get("note") or "").strip()[:2000]
+    ok, msg = job_data_service.set_note(link, note)
+    if not ok:
+        return JSONResponse({"error": msg}, status_code=400)
+    return JSONResponse({"ok": True, "offer": job_data_service.get_offer_detail(link)})
 
 
 async def api_decision_restore(request: Request) -> JSONResponse:
@@ -284,35 +263,8 @@ async def api_next_step_update(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "offer": job_data_service.get_offer_detail(link)})
 
 
-async def api_offer_delete(request: Request) -> JSONResponse:
-    """Bezpowrotnie usuwa ofertę z bazy, ocen AI i decyzji użytkownika."""
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
-
-    link = body.get("link")
-    if not link:
-        return JSONResponse({"error": "Pole 'link' jest wymagane"}, status_code=400)
-
-    job_data_service.delete_job_permanent(link)
-    return JSONResponse({
-        "ok": True,
-        "stats": job_data_service.get_stats(),
-    })
-
-
-async def api_activity(request: Request) -> JSONResponse:
-    """Zwraca listę ostatnich operacji (scraping, AI, profil) oraz 7 ostatnich decyzji."""
-    job_data_service.ensure_loaded()
-    return JSONResponse({
-        "activity_rows": job_data_service.get_activity_rows(limit=6),
-        "recent_decisions": job_data_service.get_recent_decisions(limit=7),
-    })
-
-
 async def api_applications(request: Request) -> JSONResponse:
-    """Zwraca oferty w lejku rekrutacji z podziałem na etapy, statystykami i wiekiem na etapie."""
+    """Zwraca wysłane aplikacje z etapem lejka (wysłane, rozmowy, oferta pracy, zakończone)."""
     job_data_service.ensure_loaded()
     return JSONResponse(job_data_service.get_applications())
 
@@ -337,21 +289,26 @@ async def api_tool_fetch_link(request: Request) -> JSONResponse:
 
 
 async def api_tool_save_manual_job(request: Request) -> JSONResponse:
-    """Zapisuje ręcznie dodaną/poprawioną ofertę do bazy."""
-    try:
-        body = await request.json()
-    except Exception:
+    """Zapisuje ręcznie dodaną ofertę do bazy; ze `status` od razu zapisuje też decyzję."""
+    body = await _json_body(request)
+    if body is None:
         return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
+    status = body.get("status") or None
+    if status is not None and status not in ("save", "apply"):
+        return JSONResponse({"error": "Pole 'status' przyjmuje save albo apply"}, status_code=400)
 
     ok, msg = save_manual_job(body)
     if not ok:
         return JSONResponse({"error": msg}, status_code=400)
+    link = body.get("link", "")
+    if status and not job_data_service.update_decision(link, status):
+        return JSONResponse({"error": "Oferta zapisana, ale nie udało się zapisać decyzji"}, status_code=500)
 
     return JSONResponse({
         "ok": True,
         "message": msg,
         "stats": job_data_service.get_stats(),
-        "offer": job_data_service.get_offer_detail(body.get("link", "")),
+        "offer": job_data_service.get_offer_detail(link),
     })
 
 
@@ -424,40 +381,39 @@ async def api_pipeline_reload_data(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "stats": job_data_service.get_stats()})
 
 
-async def api_pipeline_run_step(request: Request) -> JSONResponse:
-    """Uruchamia pojedynczy krok zaawansowany."""
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
-
-    step = body.get("step")
-    mgr = PipelineProcessManager.get_instance()
-    if mgr.is_running():
-        return JSONResponse({"error": "Inny proces jest już w toku"}, status_code=400)
-
-    # Krok → polecenie i etap toru, na którym arkusz pokazuje jego postęp.
-    step_map = {
-        "scrapers": ([sys.executable, "-u", "main_scraper.py"], "phase1"),
-        "matching": ([sys.executable, "-u", "-m", "matching.run"], "phase3"),
-        "rescore_all": ([sys.executable, "-u", "-m", "matching.run", "--rescore-all"], "phase3"),
-    }
-    if step not in step_map:
-        return JSONResponse({"error": f"Nieznany krok: {step}"}, status_code=400)
-
-    cmd, stage = step_map[step]
-    ok, msg = mgr.start_pipeline(mode="standalone", cmd=cmd, is_resume=False, stage=stage)
-    state = mgr.get_state()
-    state["logs"] = sanitize_logs(state.get("logs", []))
-    if not ok:
-        return JSONResponse({"ok": False, "error": msg, "state": state}, status_code=400)
-    return JSONResponse({"ok": True, "message": msg, "state": state})
+async def api_pipeline_run_summary(request: Request) -> JSONResponse:
+    """Liczby i najlepsze dopasowania bieżącego (albo ostatniego) wyszukiwania dla ekranu postępu."""
+    state = PipelineProcessManager.get_instance().get_state()
+    started = state.get("started_at")
+    since = datetime.fromtimestamp(started).isoformat(timespec="seconds") if started else None
+    telemetry = state.get("telemetry") or {}
+    added = [s.get("added") for s in telemetry.get("sources") or [] if isinstance(s.get("added"), int)]
+    scoring = telemetry.get("scoring") or {}
+    to_check = scoring.get("to_score")
+    downloaded = sum(added) if added else None
+    if downloaded is None and isinstance(to_check, int):
+        downloaded = to_check + (scoring.get("prefilter_rejected") or 0)
+    return JSONResponse({
+        "started_at": since,
+        "downloaded": downloaded,
+        "checked": scoring.get("scored") or 0,
+        "to_check": to_check,
+        **job_data_service.run_summary(since),
+    })
 
 
 # --- CV & API Keys ---
 
 async def api_cv_get(request: Request) -> JSONResponse:
     return JSONResponse(get_cv_info())
+
+
+async def api_cv_file(request: Request) -> Response:
+    """Bieżące CV w PDF do podglądu w przeglądarce."""
+    if not pdf_is_current():
+        return JSONResponse({"error": "Brak pliku PDF z CV"}, status_code=404)
+    return FileResponse(CV_PDF_PATH, media_type="application/pdf",
+                        headers={"Content-Disposition": 'inline; filename="cv.pdf"', "Cache-Control": "no-store"})
 
 
 async def api_cv_upload(request: Request) -> JSONResponse:
@@ -511,13 +467,6 @@ async def api_cv_paste(request: Request) -> JSONResponse:
         return JSONResponse({"error": msg}, status_code=400)
 
     return JSONResponse({"ok": True, "message": msg, "cv_info": get_cv_info()})
-
-
-async def api_cv_open_local(request: Request) -> JSONResponse:
-    ok, msg = open_local_cv_pdf()
-    if not ok:
-        return JSONResponse({"error": msg}, status_code=400)
-    return JSONResponse({"ok": True, "message": msg})
 
 
 async def api_env_keys_get(request: Request) -> JSONResponse:
@@ -586,23 +535,17 @@ async def spa_index_fallback(request: Request) -> Response:
 
 
 routes = [
-    # Bootstrap & Stats
     Route("/api/bootstrap", api_bootstrap, methods=["GET"]),
     Route("/api/stats", api_stats, methods=["GET"]),
-    # Offers & Decisions
     Route("/api/offers", api_offers, methods=["GET"]),
     Route("/api/offers/detail", api_offer_detail, methods=["GET"]),
     Route("/api/offers/decision", api_decision_update, methods=["POST"]),
     Route("/api/offers/restore", api_decision_restore, methods=["POST"]),
-    Route("/api/offers/delete", api_offer_delete, methods=["POST"]),
+    Route("/api/offers/note", api_note_update, methods=["POST"]),
     Route("/api/offers/next-step", api_next_step_update, methods=["POST"]),
-    # Activity & Gaps
-    Route("/api/activity", api_activity, methods=["GET"]),
     Route("/api/applications", api_applications, methods=["GET"]),
-    # Tools
     Route("/api/tools/fetch-link", api_tool_fetch_link, methods=["POST"]),
     Route("/api/tools/save-manual-job", api_tool_save_manual_job, methods=["POST"]),
-    # Pipeline
     Route("/api/pipeline/state", api_pipeline_state, methods=["GET"]),
     Route("/api/pipeline/prerequisites", api_pipeline_prerequisites, methods=["GET"]),
     Route("/api/pipeline/start", api_pipeline_start, methods=["POST"]),
@@ -610,15 +553,15 @@ routes = [
     Route("/api/pipeline/force-stop", api_pipeline_force_stop, methods=["POST"]),
     Route("/api/pipeline/resume", api_pipeline_resume, methods=["POST"]),
     Route("/api/pipeline/reload-data", api_pipeline_reload_data, methods=["POST"]),
-    Route("/api/pipeline/run-step", api_pipeline_run_step, methods=["POST"]),
-    # CV & Keys
+    Route("/api/pipeline/run-summary", api_pipeline_run_summary, methods=["GET"]),
     Route("/api/cv", api_cv_get, methods=["GET"]),
+    Route("/api/cv/file", api_cv_file, methods=["GET"]),
     Route("/api/cv/upload", api_cv_upload, methods=["POST"]),
     Route("/api/cv/paste", api_cv_paste, methods=["POST"]),
-    Route("/api/cv/open-local", api_cv_open_local, methods=["POST"]),
     Route("/api/env-keys", api_env_keys_get, methods=["GET"]),
     Route("/api/env-keys", api_env_keys_save, methods=["POST"]),
     Route("/api/env-keys/llm", api_env_keys_llm, methods=["POST"]),
+    *cv_tailor_routes,
 ]
 
 # Static files mount

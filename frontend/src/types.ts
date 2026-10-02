@@ -106,24 +106,130 @@ export interface BootstrapData {
   pipeline: PipelineState;
 }
 
-export interface OfferListItem {
-  rank: number;
+export interface RunSummaryOffer {
   link: string;
   title: string;
   company: string;
   location: string;
+  work_mode: string;
+  match_percentage: number | null;
+}
+
+export interface RunSummary {
+  /** Start przebiegu (ISO). */
+  started_at: string | null;
+  /** Oferty pobrane w tym przebiegu; null, zanim wiadomo. */
+  downloaded: number | null;
+  checked: number;
+  to_check: number | null;
+  matched_count: number;
+  /** Trzy najlepsze dopasowania z tego przebiegu. */
+  recent: RunSummaryOffer[];
+}
+
+export type OfferTab = 'Dopasowane' | 'Ukryte' | 'Zapisane';
+export type OfferSort = 'match' | 'newest';
+export type Stage = 'apply' | 'interview' | 'offer' | 'archive';
+export type DecisionStatus = 'save' | 'apply' | 'reject';
+export type WorkMode = 'zdalnie' | 'hybrydowo' | 'stacjonarnie' | '';
+
+export interface CvVersionSummary {
+  id: string;
+  link: string;
+  company: string;
+  title: string;
+  /** 1, 2, … dla jednej oferty. */
+  version: number;
+  status: 'running' | 'failed' | 'draft' | 'ready';
+  /** Tylko w trakcie: 'base_cv' | 'tailoring'. */
+  phase: string | null;
+  language: 'pl' | 'en';
+  /** "YYYY-MM-DD HH:MM" */
+  created_at: string;
+  updated_at: string;
+  /** Np. "cv_forma_studio_v1.pdf" (tylko gotowe). */
+  file_name: string | null;
+  /** Liczby do sprawdzenia, wciąż 'pending'. */
+  pending_numbers: number;
+  /** Komunikat dla użytkownika (tylko nieudane). */
+  error: string | null;
+}
+
+export type CvChangeState = 'applied' | 'reverted' | 'edited';
+export type CvNumberState = 'pending' | 'confirmed' | 'edited' | 'removed';
+
+export interface CvChange {
+  idx: number;
+  path: string;
+  section: string;
+  before: string;
+  after: string;
+  reason: string;
+  state: CvChangeState;
+}
+
+export interface CvNumber {
+  idx: number;
+  path: string;
+  number: string;
+  question: string;
+  text: string;
+  state: CvNumberState;
+}
+
+export interface CvQuestion {
+  about: string;
+  question: string;
+  why: string;
+}
+
+export interface CvVersionDetail extends CvVersionSummary {
+  facts: string;
+  lock_contact: boolean;
+  keep_order: boolean;
+  changes: CvChange[];
+  numbers: CvNumber[];
+  questions: CvQuestion[];
+  /** Wymagania oferty bez pokrycia w CV. */
+  missing: string[];
+  match: { must_met: number; must_total: number; ratio: number; recommendation: string } | null;
+}
+
+export interface CvVersionCreate {
+  link: string;
+  language: 'pl' | 'en';
+  facts: string;
+  lock_contact: boolean;
+  keep_order: boolean;
+  consent: true;
+}
+
+export interface TailorInstructions {
+  text: string;
+  is_default: boolean;
+  file_name: string;
+}
+
+export interface OfferListItem {
+  link: string;
+  title: string;
+  company: string;
+  location: string;
+  work_mode: WorkMode;
   source: string;
-  source_color: string;
+  logo_url: string | null;
   is_gone: boolean;
   /** Pierwszy raz zobaczona od startu ostatniego pobierania (`fresh_since`). */
   is_new: boolean;
   match_percentage: number | null;
-  status: string | null;
-  rating: number | null;
-  /** Data ostatniej decyzji ("YYYY-MM-DD HH:MM"); null bez decyzji albo w dawnym formacie. */
+  /** Np. "6 000–9 000 zł"; null bez widełek. */
+  salary_text: string | null;
+  status: DecisionStatus | null;
+  /** Data ostatniej decyzji ("YYYY-MM-DD HH:MM"). */
   decided_at: string | null;
-  dot_color: string | null;
-  dot_label: string | null;
+  note: string;
+  /** Najnowsza wersja CV dla tej oferty. */
+  cv: CvVersionSummary | null;
 }
 
 export interface OffersResponse {
@@ -132,17 +238,13 @@ export interface OffersResponse {
   page: number;
   total_pages: number;
   page_size: number;
-  /**
-   * Wartość, po której lista jest ułożona, na początku każdej strony: % dopasowania
-   * (Dopasowane, Wszystkie) albo ocena użytkownika (Ocenione); null w zakładkach od najnowszych.
-   */
-  page_marks: (number | null)[] | null;
   /** Ile ofert całej listy (nie strony) jest nowych od `fresh_since`. */
   fresh_count: number;
   /** Start ostatniego pobierania (ISO, czas lokalny); null, gdy nigdy nie zapisany. */
   fresh_since: string | null;
+  /** Liczba ukrytych ofert (etykieta filtra „Ukryte”). */
+  hidden_count: number;
 }
-
 
 /** Następny krok aplikacji; `due` "YYYY-MM-DD HH:MM" albo sam dzień. */
 export interface NextStep {
@@ -155,7 +257,6 @@ export interface DescriptionBlock {
   text?: string;
   items?: string[];
 }
-
 
 export interface SalaryInfo {
   min: number | null;
@@ -191,48 +292,54 @@ export interface OfferDetail {
   company: string;
   location: string;
   source: string;
-  source_color: string;
+  logo_url: string | null;
   is_gone: boolean;
-  work_mode: string;
+  work_mode: WorkMode;
   match_percentage: number | null;
   /** Powód odrzucenia przez przesiew; oferta oceniona, ale bez procentu. */
-  filtered: keyof PrefilterReasons | null;
+  filtered: string | null;
   fields: OfferFields;
   description_blocks: DescriptionBlock[];
   raw_description: string;
-  status: string | null;
-  rating: number | null;
-  stage: string;
+  /** ISO; UI pokazuje „dodana dzisiaj / wczoraj / 28 września”. */
+  scraped_at: string | null;
+  salary_text: string | null;
+  status: DecisionStatus | null;
+  stage: Stage | null;
   decided_at: string | null;
   applied_at: string | null;
-  dot_color: string | null;
-  dot_label: string | null;
+  note: string;
   next_step: NextStep | null;
-}
-export interface ActivityRow {
-  timestamp: string;
-  time_str: string;
-  op: string;
-  what: string;
-  source_color: string | null;
-  detail: string;
-  bad: boolean;
+  /** Od najnowszej. */
+  cv_versions: CvVersionSummary[];
 }
 
-export interface RecentDecision {
-  link: string;
+export interface DecisionResponse {
+  ok: boolean;
+  stats: Stats;
+  offer: OfferDetail;
+}
+
+export interface ManualJob {
   title: string;
   company: string;
-  status: string;
-  rating: number | null;
-  label: string;
-  color: string;
-  stamp: string | null;
+  link: string;
+  description: string;
+  source: string;
+  location: string;
+  status?: 'save' | 'apply';
 }
 
-export interface ActivityResponse {
-  activity_rows: ActivityRow[];
-  recent_decisions: RecentDecision[];
+export interface CVProfile {
+  city: string | null;
+  remote: boolean;
+  seniority: string | null;
+  years: number | null;
+  roles: string[];
+  skills: string[];
+  languages: { name: string; level: string | null }[];
+  /** Policzony z bieżącego CV; false = pipeline przeliczy go na starcie. */
+  current: boolean;
 }
 
 export interface CVInfo {
@@ -243,17 +350,10 @@ export interface CVInfo {
   filename: string;
   pdf_exists: boolean;
   txt_exists: boolean;
+  /** "/api/cv/file", gdy jest cv.pdf. */
+  pdf_url: string | null;
   /** Profil z CV (candidate_profile.json); null przed pierwszym przebiegiem. */
-  profile: CandidateProfileSummary | null;
-}
-
-export interface CandidateProfileSummary {
-  city: string | null;
-  seniority: string | null;
-  years: number | null;
-  skills: number;
-  /** Policzony z bieżącego CV; false = pipeline przeliczy go na starcie. */
-  current: boolean;
+  profile: CVProfile | null;
 }
 
 export interface EnvField {
@@ -314,19 +414,17 @@ export interface ApplicationItem {
   company: string;
   location: string;
   match_percentage: number | null;
-  status: string;
-  rating: number | null;
-  stage: string;
+  stage: Stage;
   decided_at: string | null;
   applied_at: string | null;
-  /** Dni od ostatniej zmiany; null, gdy decyzja nie ma daty. */
-  age_days: number | null;
   next_step: NextStep | null;
+  note: string;
+  /** Wersja CV oznaczona jako wysłana; null = bazowe CV. */
+  cv: CvVersionSummary | null;
 }
 
 export interface ApplicationsResponse {
   items: ApplicationItem[];
-  counts: Record<string, number>;
+  counts: Record<Stage, number>;
   total: number;
-  stale_count: number;
 }

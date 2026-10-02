@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<title>{{title}}</title>
+<style>
+  @page { size: A4; margin: 0; }
+  :root { --s: 1; --ink: #18181B; --body: #3F3F46; --muted: #71717A; --rule: #E4E4E7; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #FFFFFF; }
+  body {
+    font-family: "Geist", "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: var(--body);
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .page {
+    width: 210mm;
+    height: 297mm;
+    overflow: hidden;
+    padding: calc(15mm * var(--s)) 16mm;
+    background: #FFFFFF;
+  }
+  .content { font-size: calc(9.6pt * var(--s)); line-height: 1.42; }
+  h1 {
+    margin: 0;
+    font-size: calc(25pt * var(--s));
+    line-height: 1.1;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+  }
+  .headline { margin-top: calc(6pt * var(--s)); font-size: calc(11.5pt * var(--s)); color: var(--body); }
+  .contact { margin-top: calc(5pt * var(--s)); font-size: calc(8.4pt * var(--s)); color: var(--muted); }
+  .contact span + span::before { content: "/"; margin: 0 0.55em; color: #A1A1AA; }
+  section { margin-top: calc(13pt * var(--s)); }
+  h2 {
+    margin: 0 0 calc(5pt * var(--s));
+    font-size: calc(11.5pt * var(--s));
+    font-weight: 500;
+    color: var(--ink);
+    padding-bottom: calc(3pt * var(--s));
+    border-bottom: 1px solid var(--rule);
+  }
+  p { margin: 0; }
+  .entry + .entry { margin-top: calc(7pt * var(--s)); }
+  .entry-head { display: flex; justify-content: space-between; gap: 12pt; align-items: baseline; }
+  .entry-title { font-weight: 500; color: var(--ink); }
+  .entry-meta { color: var(--muted); font-size: 0.92em; white-space: nowrap; }
+  .entry-sub { color: var(--muted); font-size: 0.92em; }
+  ul { margin: calc(2.5pt * var(--s)) 0 0; padding-left: 1.1em; }
+  li { margin: 0 0 calc(1.2pt * var(--s)); }
+  li::marker { color: #A1A1AA; }
+  .skills-row + .skills-row { margin-top: calc(2pt * var(--s)); }
+  .label { color: var(--ink); font-weight: 500; }
+  mark { color: inherit; background: none; padding: 0; }
+  mark.chg { background: rgba(120, 113, 108, 0.13); border-radius: 2px; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  mark.num { color: #8A5A0B; font-weight: 500; background: none; }
+</style>
+</head>
+<body>
+<div class="page"><div class="content" id="cv">
+{{body}}
+</div></div>
+<script>
+(function () {
+  var page = document.querySelector('.page');
+  var content = document.getElementById('cv');
+  var root = document.documentElement;
+  var s = 1;
+  function over() {
+    var box = page.getBoundingClientRect();
+    var pad = parseFloat(getComputedStyle(page).paddingBottom) || 0;
+    return content.getBoundingClientRect().bottom > box.bottom - pad + 0.5;
+  }
+  function fit() {
+    var guard = 0;
+    while (over() && s > 0.62 && guard++ < 60) {
+      s = Math.round((s - 0.02) * 100) / 100;
+      root.style.setProperty('--s', s);
+    }
+    document.body.setAttribute('data-fit', String(s));
+  }
+  if (document.fonts && document.fonts.ready) { document.fonts.ready.then(fit); } else { fit(); }
+})();
+</script>
+</body>
+</html>

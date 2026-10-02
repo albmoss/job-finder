@@ -12,11 +12,11 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5A70FF?style=flat-square&logo=typescript&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-5A70FF?style=flat-square&logo=vite&logoColor=white)
 
-[How it works](#how-it-works) · [Pipeline](#pipeline) · [Quick start](#quick-start) · [Matching](#matching) · [CV reader](#cv-reader) · [Design notes](#design-notes)
+[How it works](#how-it-works) · [Pipeline](#pipeline) · [Quick start](#quick-start) · [Matching](#matching) · [CV per offer](#cv-per-offer) · [CV reader](#cv-reader) · [Design notes](#design-notes)
 
 <br>
 
-<img src="docs/app.png" alt="Offer list and offer detail with match score and decision dock" width="920">
+<img src="docs/app.png" alt="Matched offers: ranked list with match scores and the offer detail" width="920">
 
 </div>
 
@@ -25,8 +25,9 @@
 ## How it works
 
 Job boards go in, one ranked list comes out. The CV is the only input: it sets the city and
-seniority the scrapers look for, and every offer gets a match percentage against it. I decide
-on each offer in one click. Violet comes from me, blue runs on its own.
+seniority the scrapers look for, and every offer gets a match percentage against it. I save an
+offer for later, hide it, or mark it as sent, and a sent offer moves along the applications
+board. Violet comes from me, blue runs on its own.
 
 ```mermaid
 flowchart LR
@@ -35,12 +36,13 @@ flowchart LR
     run --> match["Prefilter +<br/>Jev scoring"]
     profile --> match
     match --> list["Ranked<br/>list"]
-    list --> me(["Decide<br/>& rate"])
+    list --> me(["Save, hide<br/>or apply"])
+    me --> tailor["CV tailored<br/>to the offer"]
     me --> apps(["Applications<br/>board"])
 
     classDef step fill:#161a33,stroke:#5A70FF,stroke-width:1.5px,color:#ffffff
     classDef me fill:#241a3d,stroke:#8B5CFF,stroke-width:1.5px,color:#ffffff
-    class profile,run,match,list step
+    class profile,run,match,list,tailor step
     class cv,me,apps me
 ```
 
@@ -58,12 +60,12 @@ where it stopped.
 | 2 | `deduplicate_db` | one offer often sits on four boards at once |
 | 2.5 | `clean_db` | trims boilerplate from descriptions |
 | 3 | `matching/run` | drops certain mismatches in code, scores the rest with Jev |
-| 4 | `eval_ranking` | checks the ranking against ratings I entered by hand |
+| 4 | `eval_ranking` | checks the ranking against the offers I saved, sent or hid |
 
 <div align="center">
-<img src="docs/pipeline.png" alt="Pipeline sheet: stage counts and live log" width="640">
+<img src="docs/pipeline.png" alt="Search progress: stages, offers checked and the latest matches" width="640">
 <br>
-<sub>The pipeline sheet in the UI: per-stage counts, matching progress, live log.</sub>
+<sub>A search in the UI: stages, offers checked so far, best matches from this run.</sub>
 </div>
 
 ## Quick start
@@ -119,6 +121,16 @@ fixed weights, so the same offer and CV always get the same score.
 Scores are cached per offer text and CV. A run scores only new or changed offers; a new CV
 rescores everything.
 
+## CV per offer
+
+For an offer I want to apply to, the app writes a separate version of my CV. One LLM call
+turns the CV text into structured JSON once per CV change; a second call edits that JSON for
+the offer under the rules in `cv_tailor/default_instructions.md` (rules taken from the Rezi
+resume builder). Code keeps the CV's shape and puts back the name, contact data and dates if
+the model touched them. Every number the model estimated has to be confirmed, corrected or
+removed before the PDF can be downloaded. The base CV never changes. The rules can be edited
+in the UI.
+
 ## CV reader
 
 One LLM call turns the CV into the profile. Set `LLM_PROVIDER` in `.env` or switch it in
@@ -147,5 +159,5 @@ goes in `GEMINI_MODELS`, `OPENAI_MODELS` or `ANTHROPIC_MODELS`, comma-separated.
   are never redone.
 - **The database is JSON files** with atomic writes and backup rotation. Postgres is the
   obvious next step.
-- **Personal data stays local.** Keys live in `.env`; the CV, its profile, scores, ratings
-  and decisions are gitignored.
+- **Personal data stays local.** Keys live in `.env`; the CV, its profile, CV versions, scores,
+  ratings and decisions are gitignored.

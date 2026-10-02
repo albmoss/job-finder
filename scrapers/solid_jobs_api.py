@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.candidate_scope import scope_city, scope_levels
 from utils.portal_categories import pick_categories
 from utils.data_models import Job
+from utils.links import logo_url
 from utils.offer_fields import (
     norm_seniority,
     norm_work_modes,
@@ -307,6 +308,7 @@ class SolidJobsAPIScraper:
             skills_nice=skills_nice,
             languages=languages,
             category=category,
+            logo_url=logo_url(offer.get("companyLogoUrl")),
         )
     def run(self) -> List[Job]:
         """Pobierz oferty ze wszystkich działów i odfiltruj wg lokalizacji i poziomu."""

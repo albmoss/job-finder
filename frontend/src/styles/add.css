@@ -1,0 +1,55 @@
+.add-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.add-body > p {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.add-url {
+  display: flex;
+  gap: 10px;
+}
+
+.add-url .field {
+  flex: 1;
+}
+
+.add-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.add-error svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  stroke-width: 1.75;
+}
+
+.add-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.add-wide {
+  grid-column: 1 / -1;
+}
+
+.add-grid textarea.add-description {
+  min-height: 120px;
+  max-height: 260px;
+}
+
+.add-hint {
+  margin-left: auto;
+  font-size: 12px;
+}

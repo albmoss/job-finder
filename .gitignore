@@ -39,6 +39,10 @@ preference_profile.json
 candidate_profile.json
 match_results.json
 category_scope.json
+base_cv.json
+cv_versions.json
+cv_versions/
+cv_tailor_instructions.md
 
 # Kopie zapasowe plików danych (utils/safe_io.py)
 backups/

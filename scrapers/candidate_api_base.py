@@ -24,7 +24,7 @@ from scrapers.base_scraper import BaseScraper
 from utils.candidate_scope import scope_city, scope_levels
 from utils.portal_categories import pick_categories
 from utils.data_models import Job
-from utils.links import canonical_link
+from utils.links import canonical_link, logo_url
 from utils.offer_fields import (
     norm_seniority,
     norm_work_modes,
@@ -436,6 +436,7 @@ class CandidateAPIScraper(BaseScraper):
             skills_nice=skills_nice,
             languages=languages,
             category=category,
+            logo_url=logo_url(offer.get("companyLogoThumbUrl") or detail.get("companyLogoThumbUrl")),
         )
     def run(self) -> List[Job]:
         """Wejście - HTTP zamiast przeglądarki."""

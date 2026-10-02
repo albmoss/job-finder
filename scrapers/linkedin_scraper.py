@@ -26,7 +26,7 @@ from bs4 import BeautifulSoup
 from config import USER_AGENTS
 from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
-from utils.links import canonical_link
+from utils.links import canonical_link, logo_url
 from utils.known_links import known_links
 from utils.offer_fields import (
     _fold,
@@ -122,6 +122,14 @@ class LinkedInScraper:
         if m:
             return m.group(1)
         return None
+
+    @staticmethod
+    def _card_logo(card_soup) -> Optional[str]:
+        img = card_soup.select_one("img.artdeco-entity-image")
+        if not img:
+            return None
+        raw = img.get("data-delayed-url") or ""
+        return logo_url(raw) if raw != img.get("data-ghost-url") else None
 
     def _fetch_job_detail(self, job_id: str) -> dict:
         """Pobierz szczegóły oferty z endpointu gościa."""
@@ -259,6 +267,7 @@ class LinkedInScraper:
 
                     posted_date = time_el.get("datetime") if time_el else None
                     job_id = self._extract_job_id(raw_link, card)
+                    logo = self._card_logo(card)
 
                     # Wykryj tryb pracy z lokalizacji lub tytułu
                     work_modes = norm_work_modes(f"{loc} {title}")
@@ -276,6 +285,7 @@ class LinkedInScraper:
                             posted_date=posted_date,
                             work_modes=work_modes,
                             scraped_at=datetime.now().isoformat(),
+                            logo_url=logo,
                         )
                         jobs.append(job)
                         page_found += 1
@@ -303,6 +313,7 @@ class LinkedInScraper:
                         category=detail_data.get("category"),
                         work_modes=work_modes,
                         scraped_at=datetime.now().isoformat(),
+                        logo_url=logo,
                     )
                     jobs.append(job)
                     page_found += 1

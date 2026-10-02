@@ -25,7 +25,7 @@ from typing import List, Optional
 import requests
 
 from utils.data_models import Job
-from utils.links import canonical_link
+from utils.links import canonical_link, logo_url
 from utils.text_cleaner import strip_html
 from utils.offer_fields import (
     make_salary,
@@ -232,6 +232,14 @@ class LdJsonPortalScraper:
         return "Nieznana firma"
 
     @staticmethod
+    def _logo(posting: dict, link: str) -> Optional[str]:
+        org = posting.get("hiringOrganization")
+        return logo_url(org.get("logo"), base=link) if isinstance(org, dict) else None
+
+    def _logo_from_html(self, html: str, job: Job) -> Optional[str]:
+        return None
+
+    @staticmethod
     def _location(posting: dict) -> str:
         loc = posting.get("jobLocation")
         if isinstance(loc, list):
@@ -339,6 +347,7 @@ class LdJsonPortalScraper:
             skills_nice=None,
             category=category,
             years_required=years_required,
+            logo_url=self._logo(posting, link),
         )
 
     # --- filtry zakresu ------------------------------------------------------
@@ -421,6 +430,7 @@ class LdJsonPortalScraper:
         for posting in self._iter_jobpostings(html):
             job = self._build_job(posting, link)
             if job:
+                job.logo_url = job.logo_url or self._logo_from_html(html, job)
                 return job, posting
         return None
 

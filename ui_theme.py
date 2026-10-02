@@ -10,56 +10,27 @@ from pathlib import Path
 # Kolejność = kolejność w wygenerowanym pliku.
 TOKENS = {
     # powierzchnie
-    "bg": "#0D0D0E",
-    "surface": "rgba(24, 24, 26, 0.8)",
-    "surface-solid": "#232326",
-    "sheet": "rgba(22, 22, 24, 0.95)",
-    "scrim": "rgba(10, 10, 11, 0.65)",
-    "shadow": "rgba(0, 0, 0, 0.45)",
+    "bg": "#0E0E10",
+    "panel": "rgba(24, 24, 26, 0.92)",
+    "paper": "#F2F2F0",
+    "scrim": "rgba(8, 8, 9, 0.6)",
     # tusz
-    "ink": "#F2F1EE",
-    "ink-2": "#A3A29E",
-    "ink-3": "#6B6A67",
-    # wypełnienia i linie
-    "fill-faint": "rgba(255, 255, 255, 0.02)",
-    "fill": "rgba(242, 241, 238, 0.04)",
-    "fill-2": "rgba(255, 255, 255, 0.05)",
-    "fill-3": "rgba(255, 255, 255, 0.08)",
-    "fill-active": "rgba(255, 255, 255, 0.09)",
-    "stroke": "rgba(255, 255, 255, 0.07)",
-    "stroke-strong": "rgba(255, 255, 255, 0.12)",
-    "line": "rgba(255, 255, 255, 0.08)",
-    "track": "#2A2A2D",
-    "level": "rgba(237, 235, 230, 0.25)",
-    "rail": "rgba(237, 235, 230, 0.4)",
-    # akcent: kobalt w UI, kobalt -> fiolet tylko w strumieniu i odcisku dopasowania
-    "accent": "#5A70FF",
-    "accent-soft": "rgba(90, 112, 255, 0.65)",
-    "accent-faint": "rgba(90, 112, 255, 0.2)",
-    "accent-2": "#4B6BFF",
-    "stream-end": "#8B5CFF",
-    "accent-hot": "#F1ECFF",
-    # promienie
-    "r-panel": "28px",
-    "r-row": "18px",
-    "r-well": "11px",
-    "r-chip": "10px",
-    "r-cell": "7px",
+    "ink": "#F5F5F4",
+    "muted": "#A3A3A3",
+    "faint": "#6E6E72",
+    "accent": "#E7E5E4",
+    # linie
+    "line": "rgba(255, 255, 255, 0.09)",
+    "track": "#5E5E62",
+    # liczby do sprawdzenia, ikona błędu
+    "warn": "#E8C27A",
+    "warn-fill": "rgba(232, 194, 122, 0.08)",
+    "warn-line": "rgba(232, 194, 122, 0.35)",
     # pismo
     "font": "'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif",
-    "mono": "'Geist Mono', ui-monospace, 'Cascadia Mono', monospace",
-}
-
-# Barwy stanów decyzji są wspólne dla wszystkich schematów - to one budują
-# pamięć wzrokową ("zielone = wysłane") i nie powinny się zmieniać razem
-# z akcentem. Każdy akcent musi być od nich odsunięty na kole barw, inaczej
-# ikona decyzji zlewa się z metryką dopasowania.
-STATES = {
-    "moss": "#5EB065",   # wysłane (akcent hue 125deg)
-    "slate": "#5B8BA0",  # zapisane
-    "amber": "#D9A441",  # aspiruję
-    "clay": "#B4705C",   # odrzucone
-    "grey": "#98917F",   # ocenione
+    # ruch
+    "ease-out": "cubic-bezier(0.23, 1, 0.32, 1)",
+    "ease-in-out": "cubic-bezier(0.77, 0, 0.175, 1)",
 }
 
 
@@ -67,10 +38,7 @@ STATES = {
 # w wierszu oferty, w szczegółach, na karcie i w logu pobrań - dzięki temu
 # "skąd to jest" czyta się jednym rzutem oka, bez czytania nazwy.
 #
-# Dobór barw ma dwa ograniczenia. Po pierwsze: żadnego żółtego. Po drugie:
-# odcienie muszą trzymać się z dala od barw decyzji (STATES), bo obie rodziny
-# kropek bywają w jednym wierszu - dlatego portale dostają barwy jaśniejsze
-# i bardziej nasycone, a kulka portalu jest mniejsza od kropki decyzji.
+# Dobór barw: żadnego żółtego.
 SOURCES = {
     "pracuj.pl":    "#D9764A",   # pomarańcz
     "aplikuj.pl":   "#5CAE86",   # zieleń

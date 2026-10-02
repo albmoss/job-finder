@@ -58,6 +58,7 @@ class Job:
     languages: Optional[list] = None
     category: Optional[str] = None
     years_required: Optional[int] = None
+    logo_url: Optional[str] = None
     
     def __post_init__(self):
         from utils.text_cleaner import clean_job_description
@@ -234,6 +235,8 @@ class JobDatabase:
                 known.posted_date = job.posted_date
             if job.valid_through and not known.valid_through:
                 known.valid_through = job.valid_through
+            if job.logo_url and not known.logo_url:
+                known.logo_url = job.logo_url
             if (is_placeholder_description(known.description) and (job.description or "").strip()
                     and not is_placeholder_description(job.description)):
                 known.description = job.description
@@ -255,20 +258,6 @@ class JobDatabase:
             self._by_link = by_link
 
         return len(added), touched
-
-    def remove_job(self, link: str) -> bool:
-        """Usuwa ofertę po linku (także zapisaną w innej postaci tego samego adresu)."""
-        from utils.links import canonical_link
-
-        target = canonical_link(link)
-        jobs = self.load_jobs()
-        kept = [job for job in jobs if job.link != link and canonical_link(job.link) != target]
-
-        if len(kept) == len(jobs):
-            return False
-
-        self.save_jobs(kept)
-        return True
 
 
 class ScraperStatusManager:

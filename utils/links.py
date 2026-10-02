@@ -9,6 +9,9 @@ przez co ta sama oferta figurowała wielokrotnie).
 Każdy zapis linku powinien przechodzić przez canonical_link().
 """
 
+from typing import Optional
+from urllib.parse import urljoin
+
 # Parametry, które są częścią tożsamości oferty i NIE mogą zostać ucięte.
 # "jk=" to identyfikator oferty na Indeed (/viewjob?jk=...) - bez niego wszystkie
 # oferty z tego portalu sprowadzałyby się do jednego klucza ".../viewjob"
@@ -37,3 +40,18 @@ def canonical_link(link: str) -> str:
         link = base
 
     return link.rstrip("/")
+
+
+def logo_url(raw, base: str = "") -> Optional[str]:
+    if isinstance(raw, dict):
+        raw = raw.get("url") or raw.get("contentUrl")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    url = raw.strip()
+    if url.startswith("//"):
+        url = "https:" + url
+    elif base and not url.startswith(("http://", "https://")):
+        url = urljoin(base, url)
+    if url.startswith("http://"):
+        url = "https://" + url[len("http://"):]
+    return url if url.startswith("https://") else None

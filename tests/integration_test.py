@@ -258,6 +258,13 @@ def test_record_scrape():
         check("a placeholder description is replaced once, a real one is kept",
               rec["description"] == "Opis oferty wystarczająco długi, żeby przeszedł.", rec["description"])
 
+        db.record_scrape([job("https://a.pl/6")])
+        db.record_scrape([job("https://a.pl/6", logo_url="https://cdn.example.pl/logo-a.png")])
+        db.record_scrape([job("https://a.pl/6", logo_url="https://cdn.example.pl/logo-b.png")])
+        rec = [r for r in on_disk() if r["link"] == "https://a.pl/6"][0]
+        check("a missing logo is filled in on a known offer, an existing one is left alone",
+              rec["logo_url"] == "https://cdn.example.pl/logo-a.png", str(rec["logo_url"]))
+
         import config
         import utils.known_links as kl
         db.record_scrape([Job(title="Tytuł", company="Firma", link="https://a.pl/5",
@@ -1317,7 +1324,7 @@ def test_pipeline_stage_stats_and_eta():
           src["details_done"] == src["details_total"] == 3482, src)
 
 def test_offer_api_contract():
-    print("\n[24] Fresh offers, next step and decisions over HTTP")
+    print("\n[24] Fresh offers, tabs, notes, next step and decisions over HTTP")
     import tempfile, shutil, json
     from pathlib import Path
     from starlette.testclient import TestClient
@@ -1351,7 +1358,8 @@ def test_offer_api_contract():
         jobs[4]["link"]: {"percent": 0},
         jobs[5]["link"]: {"percent": None, "filtered": "miasto"},
     }
-    decisions = {jobs[0]["link"]: "save", jobs[2]["link"]: "reject"}
+    decisions = {jobs[0]["link"]: "save", jobs[2]["link"]: "reject",
+                 jobs[3]["link"]: {"status": "rated", "rating": 7}}
     paths["JOBS_DATABASE_PATH"].write_text(json.dumps(jobs), encoding="utf-8")
     paths["MATCH_RESULTS_PATH"].write_text(json.dumps(matches), encoding="utf-8")
     paths["USER_DECISIONS_PATH"].write_text(json.dumps(decisions), encoding="utf-8")
@@ -1361,16 +1369,27 @@ def test_offer_api_contract():
         app_services.job_data_service.reload()
         client = TestClient(server.app, base_url="http://127.0.0.1:8501")
 
-        all_offers = client.get("/api/offers?tab=Wszystkie").json()
-        new_links = sorted(row["link"] for row in all_offers["items"] if row["is_new"])
-        check("offers scraped after the last run start are new",
-              new_links == [jobs[1]["link"], jobs[2]["link"]])
-        check("fresh_count counts the whole list", all_offers.get("fresh_count") == 2)
-
         matched = client.get("/api/offers?tab=Dopasowane").json()
-        check("Dopasowane: every undecided offer with a percent, low ones included, best first",
+        check("Dopasowane: every undecided offer with a percent, rated ones included, best first",
               [row["link"] for row in matched["items"]] == [jobs[1]["link"], jobs[3]["link"], jobs[4]["link"]],
               [row["link"] for row in matched["items"]])
+        check("offers scraped after the last run start are new",
+              [row["link"] for row in matched["items"] if row["is_new"]] == [jobs[1]["link"]])
+        check("fresh_count counts the whole list", matched.get("fresh_count") == 1)
+        hidden = client.get("/api/offers?tab=Ukryte").json()
+        check("hidden offers: rejected ones, counted for the filter",
+              [row["link"] for row in hidden["items"]] == [jobs[2]["link"]] and matched["hidden_count"] == 1)
+        saved_tab = client.get("/api/offers?tab=Zapisane").json()
+        check("Zapisane holds saved offers", [row["link"] for row in saved_tab["items"]] == [jobs[0]["link"]])
+        check("unknown tab is rejected", client.get("/api/offers?tab=Wszystkie").status_code == 400)
+
+        client.post("/api/offers/decision", json={"link": jobs[3]["link"], "status": "save"})
+        noted = client.post("/api/offers/note", json={"link": jobs[3]["link"], "note": " Wysłać po portfolio "})
+        on_disk3 = json.loads(paths["USER_DECISIONS_PATH"].read_text(encoding="utf-8"))[jobs[3]["link"]]
+        check("saving keeps the stored rating and the note is trimmed",
+              on_disk3.get("rating") == 7 and noted.json()["offer"]["note"] == "Wysłać po portfolio", on_disk3)
+        check("note needs a decision",
+              client.post("/api/offers/note", json={"link": jobs[1]["link"], "note": "x"}).status_code == 400)
         stats = client.get("/api/stats").json()
         check("stats split the base into scored, filtered and not yet seen",
               (stats["scored_count"], stats["filtered_count"],
@@ -1394,11 +1413,15 @@ def test_offer_api_contract():
         check("legacy decision becomes an object that keeps its status",
               isinstance(on_disk, dict) and on_disk["status"] == "save")
 
-        client.post("/api/offers/decision", json={"link": jobs[0]["link"], "status": "apply", "rating": 8, "stage": "interview"})
+        client.post("/api/offers/decision", json={"link": jobs[0]["link"], "status": "apply", "stage": "interview"})
         board = client.get("/api/applications").json()
         card = next((i for i in board["items"] if i["link"] == jobs[0]["link"]), None)
         check("next step survives a stage change and reaches the board",
               card is not None and card["next_step"] == {"label": "Rozmowa z HR", "due": "2026-09-26 10:00"})
+        check("board column follows the stage", card is not None and card["stage"] == "interview"
+              and board["counts"]["interview"] == 1, board["counts"])
+        check("unknown stage is rejected", client.post(
+            "/api/offers/decision", json={"link": jobs[0]["link"], "status": "apply", "stage": "save"}).status_code == 400)
 
         cleared = client.post("/api/offers/next-step", json={"link": jobs[0]["link"], "label": "", "due": None})
         check("empty label removes the next step", cleared.status_code == 200 and cleared.json()["offer"]["next_step"] is None)
@@ -1485,6 +1508,139 @@ def test_foreign_run_visible_to_server():
             shutil.rmtree(temp_path, ignore_errors=True)
 
 
+def test_company_logos():
+    print("\n[26] Company logos from the data scrapers already download")
+    from bs4 import BeautifulSoup
+    from utils.data_models import Job
+    from utils.links import logo_url
+
+    check("protocol-relative logo becomes https", logo_url("//cdn.example.pl/l.png") == "https://cdn.example.pl/l.png")
+    check("http logo is upgraded to https", logo_url("http://cdn.example.pl/l.png") == "https://cdn.example.pl/l.png")
+    check("a non-http logo is rejected", logo_url("data:image/png;base64,AAAA") is None)
+    check("a relative logo without a base is rejected", logo_url("/media/l.png") is None)
+
+    from scrapers.justjoin_scraper import JustJoinScraper
+    jj = object.__new__(JustJoinScraper)
+    jj.config = {}
+    thumb = ("https://imgproxy.justjoinit.tech/Sig123/h:200/w:200/plain/"
+             "https://public.justjoin.it/companies/logos/original/fikcyjna.jpg")
+    offer = {"title": "Junior Tester", "companyName": "Fikcyjna Sp. z o.o.", "slug": "fikcyjna-junior-tester",
+             "city": "Warszawa", "companyLogoThumbUrl": thumb}
+    check("JustJoin/RocketJobs: logo from companyLogoThumbUrl",
+          jj._parse(offer, {}).logo_url == thumb, str(jj._parse(offer, {}).logo_url))
+    check("JustJoin/RocketJobs: no logo gives None",
+          jj._parse(dict(offer, companyLogoThumbUrl=None), {}).logo_url is None)
+
+    from scrapers.nofluff_scraper import NoFluffScraper
+    nfj = NoFluffScraper.__new__(NoFluffScraper)
+    posting = {"title": "Junior Analyst", "name": "Fikcyjna Analityka", "url": "junior-analyst-fikcyjna-warszawa",
+               "logo": {"original": "companies/logos/original/fikcyjna_20260101.png",
+                        "jobs_listing": "companies/logos/jobs_listing/fikcyjna_20260101.png",
+                        "jobs_details": "companies/logos/jobs_details/fikcyjna_20260101.png"}}
+    got = nfj._parse_posting(posting, {}).logo_url
+    check("NoFluffJobs: relative logo path gets the static host and the 100px variant",
+          got == "https://static.nofluffjobs.com/companies/logos/jobs_details/fikcyjna_20260101.png", str(got))
+    check("NoFluffJobs: no logo gives None",
+          nfj._parse_posting(dict(posting, logo=None), {}).logo_url is None)
+
+    from scrapers.pracuj_optimized_scraper import PracujOptimizedScraper
+    pracuj = object.__new__(PracujOptimizedScraper)
+    pracuj.city = "Warszawa"
+    grouped = [
+        {"jobTitle": "Asystent biura", "companyName": "Fikcyjne Biuro",
+         "companyLogoUri": "https://logos.gpcdn.pl/loga-firm/1/fikcyjne_280x280.png",
+         "offers": [{"offerAbsoluteUri": "https://www.pracuj.pl/praca/asystent-biura,oferta,1001"}]},
+        {"jobTitle": "Magazynier", "companyName": "Fikcyjny Magazyn", "companyLogoUri": None,
+         "offers": [{"offerAbsoluteUri": "https://www.pracuj.pl/praca/magazynier,oferta,1002"}]},
+    ]
+    next_data = {"props": {"pageProps": {"dehydratedState": {"queries": [
+        {"queryKey": ["jobOffers"], "state": {"data": {"groupedOffers": grouped}}}]}}}}
+    pracuj.fetch_page_html = lambda page: ('<html><script id="__NEXT_DATA__" type="application/json">'
+                                          + json.dumps(next_data) + "</script></html>")
+    items = pracuj.parse_listing_page(1)
+    check("Pracuj.pl: logo from companyLogoUri, None when the offer has none",
+          [i.get("logo_url") for i in items]
+          == ["https://logos.gpcdn.pl/loga-firm/1/fikcyjne_280x280.png", None], str(items))
+
+    from scrapers.gowork_scraper import GoWorkScraper
+    from scrapers.aplikuj_scraper import AplikujScraper
+
+    def ld_page(org, body=""):
+        posting = {"@type": "JobPosting", "title": "Pracownik biurowy", "description": "Opis oferty testowej.",
+                   "hiringOrganization": org}
+        return ('<html><script type="application/ld+json">' + json.dumps(posting)
+                + "</script>" + body + "</html>")
+
+    def detail(scraper_cls, page, link):
+        scraper = object.__new__(scraper_cls)
+        scraper._fetch = lambda url, attempts=2: page
+        return scraper._fetch_detail(link)[0].logo_url
+
+    gw_link = "https://www.gowork.pl/oferta/pracownik-biurowy,abc,warszawa"
+    got = detail(GoWorkScraper, ld_page({"@type": "Organization", "name": "Fikcyjna Firma",
+                                         "logo": "https://www.gowork.pl/media/cache/job_company_logo/f.png"}), gw_link)
+    check("ld+json: hiringOrganization.logo string", got == "https://www.gowork.pl/media/cache/job_company_logo/f.png", str(got))
+    got = detail(GoWorkScraper, ld_page({"name": "Fikcyjna Firma",
+                                         "logo": {"@type": "ImageObject", "url": "/media/logo/f.png"}}), gw_link)
+    check("ld+json: ImageObject with a relative url resolves against the offer page",
+          got == "https://www.gowork.pl/media/logo/f.png", str(got))
+    got = detail(GoWorkScraper, ld_page({"@type": "Organization", "name": "Fikcyjna Firma"}), gw_link)
+    check("ld+json: organization without a logo gives None", got is None, str(got))
+
+    ap_link = "https://www.aplikuj.pl/oferta/1001/pracownik-biurowy"
+    company = "Fikcyjna & Syn Sp. z o.o."
+    body = ('<img src="/build/logo/logo-blue.svg" alt="Aplikuj.pl">'
+            '<img loading="lazy" src="/media/offerTemplate/2026/baner.avif" alt="Pracownik biurowy">'
+            '<img class="inline-block" src="/media/SygnaturaFirmy&amp;x=1" alt="Fikcyjna &amp; Syn Sp. z o.o.">'
+            '<img class="offer-card-company-logo__img" src="/media/InnaFirma" alt="Inna Firma">')
+    got = detail(AplikujScraper, ld_page({"@type": "Organization", "name": company}, body), ap_link)
+    check("aplikuj.pl: logo is the page image captioned with the hiring company",
+          got == "https://www.aplikuj.pl/media/SygnaturaFirmy&x=1", str(got))
+    got = detail(AplikujScraper, ld_page({"@type": "Organization", "name": "Bez Logo SA"}, body), ap_link)
+    check("aplikuj.pl: no image of this company gives None", got is None, str(got))
+
+    from scrapers.solid_jobs_api import SolidJobsAPIScraper
+    solid = object.__new__(SolidJobsAPIScraper)
+    solid.config = {}
+    solid_offer = {"title": "Junior HR", "company": "Fikcyjne HR", "url": "https://solid.jobs/offer/1/junior-hr",
+                   "locations": ["Warszawa"],
+                   "companyLogoUrl": "https://cdn.solid.jobs/companies/logos/fikcyjne.png"}
+    check("SOLID.Jobs: logo from companyLogoUrl",
+          solid._parse_offer(solid_offer).logo_url == "https://cdn.solid.jobs/companies/logos/fikcyjne.png")
+    check("SOLID.Jobs: no logo gives None",
+          solid._parse_offer(dict(solid_offer, companyLogoUrl=None)).logo_url is None)
+
+    import scrapers.olx_scraper as olx
+    olx_scraper = object.__new__(olx.OLXScraper)
+    ad = {"url": "https://www.olx.pl/oferta/praca/kasjer-CID4-IDfik.html", "status": "active",
+          "description": "<p>Obsluga kasy w sklepie testowym.</p>",
+          "user": {"name": "Fikcyjny Sklep", "logo": None,
+                   "logo_ad_page": "https://img-resizer.example.olx.org/img-eu-olxpl-production/1_1_261x203.jpg"}}
+
+    def olx_logo(ad_):
+        job = Job(title="Kasjer", company="OLX", link=ad_["url"],
+                  description="Oferta z OLX (kategoria: sprzedaz)", source="OLX Praca")
+        olx_scraper._z_ogloszenia(job, ad_)
+        return job.logo_url
+
+    check("OLX: logo of the business account from the listing state",
+          olx_logo(ad) == "https://img-resizer.example.olx.org/img-eu-olxpl-production/1_1_261x203.jpg")
+    check("OLX: private account without a logo gives None",
+          olx_logo(dict(ad, user={"name": "Jan", "logo": None, "logo_ad_page": None})) is None)
+
+    from scrapers.linkedin_scraper import LinkedInScraper
+    card = BeautifulSoup(
+        '<li><img class="artdeco-entity-image artdeco-entity-image--square-4" '
+        'data-delayed-url="https://media.licdn.com/dms/image/v2/X/company-logo_100_100/0/1/fikcyjna_logo?e=2147483647&amp;v=beta" '
+        'data-ghost-url="https://static.licdn.com/aero-v1/sc/h/ghost" alt=""></li>', "html.parser")
+    check("LinkedIn: logo from the card's data-delayed-url",
+          LinkedInScraper._card_logo(card)
+          == "https://media.licdn.com/dms/image/v2/X/company-logo_100_100/0/1/fikcyjna_logo?e=2147483647&v=beta")
+    ghost = BeautifulSoup('<li><img class="artdeco-entity-image" '
+                          'data-ghost-url="https://static.licdn.com/aero-v1/sc/h/ghost" alt=""></li>', "html.parser")
+    check("LinkedIn: the ghost placeholder is not a logo", LinkedInScraper._card_logo(ghost) is None)
+
+
 def main():
     print("=" * 62)
     print("  INTEGRATION TESTS (no API calls)")
@@ -1504,7 +1660,8 @@ def main():
                  test_pipeline_skipped_stage_progress,
                  test_pipeline_stage_stats_and_eta,
                  test_offer_api_contract,
-                 test_foreign_run_visible_to_server):
+                 test_foreign_run_visible_to_server,
+                 test_company_logos):
         try:
             test()
         except Exception as e:

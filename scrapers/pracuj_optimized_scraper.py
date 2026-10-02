@@ -35,7 +35,7 @@ from bs4 import BeautifulSoup
 
 from utils.candidate_scope import city_slug, scope_city, scope_levels
 from utils.data_models import Job
-from utils.links import canonical_link
+from utils.links import canonical_link, logo_url
 from utils.offer_fields import (
     make_salary,
     norm_contracts,
@@ -403,6 +403,7 @@ class PracujOptimizedScraper:
                         'valid_through': valid_through,
                         'skills_required': skills_required,
                         'fallback_description': fallback_desc,
+                        'logo_url': logo_url(o.get('companyLogoUri')),
                     })
 
             logger.info(f"Pracuj.pl: Page {page_num}: {len(parsed_items)} offers found")
@@ -684,6 +685,7 @@ class PracujOptimizedScraper:
                     skills_required=skills_req,
                     skills_nice=skills_nice,
                     category=category,
+                    logo_url=item.get('logo_url'),
                 )
                 jobs.append(job)
 

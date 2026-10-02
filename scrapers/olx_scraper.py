@@ -22,6 +22,7 @@ from typing import List
 
 from scrapers.base_scraper import BaseScraper
 from utils.data_models import Job
+from utils.links import logo_url
 from utils.olx_details import fetch_offer_details, normalize_olx_link
 from utils.safe_io import save_json_atomic
 # Odstep miedzy podstronami ofert. Zmierzone na 15 ofertach kazde:
@@ -191,6 +192,10 @@ class OLXScraper(BaseScraper):
         data = ad.get("createdTime") or ad.get("lastRefreshTime")
         if data:
             job.posted_date = data
+        uzytkownik = ad.get("user") or {}
+        logo = logo_url(uzytkownik.get("logo") or uzytkownik.get("logo_ad_page"))
+        if logo:
+            job.logo_url = logo
 
         parsed = parse_olx_fields(ad)
         for k, v in parsed.items():

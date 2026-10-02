@@ -17,6 +17,7 @@ from scrapers.base_scraper import BaseScraper
 from utils.candidate_scope import scope_city, scope_levels
 from utils.portal_categories import pick_categories
 from utils.data_models import Job
+from utils.links import logo_url
 from utils.offer_fields import (
     norm_seniority,
     norm_work_modes,
@@ -29,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://nofluffjobs.com/api/search/posting?salaryCurrency=PLN&salaryPeriod=month&region=pl"
 DETAIL_URL = "https://nofluffjobs.com/api/posting"
+LOGO_HOST = "https://static.nofluffjobs.com/"
+LOGO_SIZES = ("jobs_details", "jobs_details_2x", "jobs_listing_2x", "original")
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -351,6 +354,9 @@ class NoFluffScraper(BaseScraper):
         default_city = (cfg.get("nofluffjobs", {}) or {}).get("location") or cfg.get("location", "Warszawa")
         location = location or scope_city(default_city)
 
+        logos = posting.get("logo") or {}
+        logo_raw = next((logos[k] for k in LOGO_SIZES if logos.get(k)), None) if isinstance(logos, dict) else None
+
         return Job(
             title=title,
             company=company,
@@ -369,6 +375,7 @@ class NoFluffScraper(BaseScraper):
             skills_nice=skills_nice,
             languages=languages,
             category=category,
+            logo_url=logo_url(logo_raw, base=LOGO_HOST),
         )
 
     def run(self) -> List[Job]:

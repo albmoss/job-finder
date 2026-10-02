@@ -17,14 +17,18 @@ Kategorie dobierane są przez utils.portal_categories.pick_categories do profilu
 import logging
 
 import re
+from html import unescape
 from typing import List, Optional
 
 import requests
 from bs4 import BeautifulSoup
 
-from utils.links import canonical_link
+from utils.links import canonical_link, logo_url
 
 logger = logging.getLogger(__name__)
+
+_IMG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_IMG_ATTR_RE = re.compile(r'(?<![\w-])(src|alt)="([^"]*)"')
 
 # Źródło: https://www.aplikuj.pl/zawody (kategorie zawodowe, sprawdzono: 2026-09-30)
 APLIKUJ_CATEGORIES: dict[str, str] = {
@@ -185,3 +189,11 @@ class AplikujScraper(LdJsonPortalScraper):
                     break
 
         return ordered[: self.max_offers]
+
+    def _logo_from_html(self, html: str, job) -> Optional[str]:
+        for tag in _IMG_RE.findall(html):
+            attrs = dict(_IMG_ATTR_RE.findall(tag))
+            src = unescape(attrs.get("src", ""))
+            if src.startswith("/media/") and unescape(attrs.get("alt", "")).strip() == job.company:
+                return logo_url(src, base="https://www.aplikuj.pl/")
+        return None

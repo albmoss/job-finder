@@ -19,39 +19,67 @@ from config import (
 )
 from utils.llm import PLACEHOLDERS, PROVIDERS, settings_from_env
 from utils.cv_parser import CVParser
-from utils.data_models import JobDatabase, Job, JobMatch
+from utils.data_models import JobDatabase, Job, JobMatch, is_placeholder_description
 from utils.text_cleaner import detect_work_mode, strip_html
 from utils.safe_io import save_json_atomic, load_json_safe
 from utils.links import canonical_link
 from utils.candidate_scope import load_profile
 from utils.liveness import zdjete_z_portalu
-import ui_theme
+from cv_tailor import store as cv_store
 
 logger = logging.getLogger(__name__)
 
 USER_DECISIONS_PATH = Path("user_decisions.json")
 MATCH_RESULTS_PATH = Path("match_results.json")
-SCRAPER_STATUS_PATH = Path("scraper_status.json")
 
-DECIDED_STATUSES = frozenset({"reject", "save", "apply", "rated", "aspirational"})
+OFFER_TABS = ("Dopasowane", "Ukryte", "Zapisane")
+SAVED_STATUSES = frozenset({"save", "aspirational"})
+HIDDEN_STATUSES = frozenset({"reject"})
+DECIDED_STATUSES = SAVED_STATUSES | HIDDEN_STATUSES | {"apply"}
+DECISION_STATUSES = ("save", "apply", "reject")
+APP_STAGES = ("apply", "interview", "offer", "archive")
+
+WORK_MODE_LABELS = {"remote": "zdalnie", "hybrid": "hybrydowo", "onsite": "stacjonarnie"}
+CURRENCY_LABELS = {"PLN": "zł", "EUR": "€", "USD": "$", "GBP": "£"}
+SALARY_PERIODS = {"hour": "/h", "day": "/dzień", "week": "/tydz.", "year": "/rok"}
 
 
-WS_STAGE_NAMES = {
-    "save": "Zapisane",
-    "apply": "Wysłane",
-    "interview": "Rozmowa",
-    "offer": "Oferta",
-    "archive": "Archiwum",
-}
-WS_STAGE_LEGACY = {"saved": "save", "reject": "archive", "rejected": "archive"}
+def app_stage(stage: Optional[str]) -> str:
+    return stage if stage in APP_STAGES else "apply"
 
-DECISION_STYLE = {
-    "apply": (ui_theme.STATES["moss"], "wysłane"),
-    "save": (ui_theme.STATES["slate"], "zapisane"),
-    "aspirational": (ui_theme.STATES["amber"], "aspiruję"),
-    "reject": (ui_theme.STATES["clay"], "odrzucone"),
-    "rated": (ui_theme.STATES["grey"], "ocenione"),
-}
+
+def _money(value: float) -> str:
+    return f"{int(round(value)):,}".replace(",", "\u00a0")
+
+
+def salary_text(salary: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(salary, dict):
+        return None
+    low, high = salary.get("min"), salary.get("max")
+    if low is None and high is None:
+        return None
+    if low is not None and high is not None and low != high:
+        amount = f"{_money(low)}–{_money(high)}"
+    elif low is not None and high is None:
+        amount = f"od {_money(low)}"
+    elif low is None:
+        amount = f"do {_money(high)}"
+    else:
+        amount = _money(low)
+    currency = str(salary.get("currency") or "PLN").upper()
+    suffix = SALARY_PERIODS.get(str(salary.get("period") or "month"), "")
+    return f"{amount} {CURRENCY_LABELS.get(currency, currency)}{suffix}"
+
+
+def work_mode_text(job: Job) -> str:
+    modes = [m for m in (getattr(job, "work_modes", None) or []) if m in WORK_MODE_LABELS]
+    if modes:
+        if "hybrid" in modes:
+            return WORK_MODE_LABELS["hybrid"]
+        return WORK_MODE_LABELS[modes[0]] if len(modes) == 1 else WORK_MODE_LABELS["hybrid"]
+    label = detect_work_mode(job.location or "", job.description or "", job.title or "")["label"]
+    return {"Hybrydowo": "hybrydowo", "100% Zdalnie": "zdalnie"}.get(label, "")
+
 
 def _parse_dt(raw: Optional[str]) -> Optional[datetime]:
     if not raw:
@@ -270,91 +298,105 @@ class JobDataService:
                     self.zdjete = set()
             self.data_loaded = True
             self._rev += 1
-    def get_decision(self, link: str) -> Tuple[Optional[str], Optional[int], Optional[str], Optional[str], Optional[str]]:
-        """Zwraca (status, rating, stage, decided_at, applied_at)."""
-        with self._lock:
-            val = self.user_decisions.get(link)
-            if val is None:
-                val = self.user_decisions.get(canonical_link(link))
-            if isinstance(val, dict):
-                return (
-                    val.get("status"),
-                    val.get("rating"),
-                    val.get("stage"),
-                    val.get("decided_at"),
-                    val.get("applied_at"),
-                )
-            elif isinstance(val, str):
-                return val, None, None, None, None
-            return None, None, None, None, None
+    def _raw_decision(self, link: str) -> Tuple[Optional[str], Any]:
+        for key in (link, canonical_link(link)):
+            if key in self.user_decisions:
+                return key, self.user_decisions[key]
+        return None, None
 
-    def update_decision(self, link: str, status: str, rating: Optional[int], stage: Optional[str] = None):
+    def decision(self, link: str) -> Dict[str, Any]:
+        """Decyzja w jednym kształcie, niezależnie od formatu zapisu (goły status albo obiekt)."""
+        with self._lock:
+            _, val = self._raw_decision(link)
+            if isinstance(val, str):
+                val = {"status": val}
+            if not isinstance(val, dict):
+                val = {}
+            step = val.get("next_step")
+            return {
+                "status": val.get("status"),
+                "rating": val.get("rating"),
+                "stage": val.get("stage"),
+                "decided_at": val.get("decided_at"),
+                "applied_at": val.get("applied_at"),
+                "note": val.get("note") or "",
+                "next_step": step if isinstance(step, dict) and step.get("label") else None,
+                "cv_version_id": val.get("cv_version_id"),
+            }
+
+    def _save_decisions(self) -> bool:
+        ok = save_json_atomic(USER_DECISIONS_PATH, self.user_decisions, backup=True, keep=20)
+        if not ok:
+            logger.error("Nie udało się zapisać decyzji użytkownika do pliku!")
+        self._rev += 1
+        return ok
+
+    def update_decision(self, link: str, status: str, stage: Optional[str] = None,
+                        cv_version_id: Optional[str] = None) -> bool:
         with self._lock:
             self.ensure_loaded()
             c_link = canonical_link(link)
+            old = self.decision(link)
             # Decyzja mogła zostać zapisana pod oboma postaciami linku - zdejmujemy obie,
             # inaczej stara wersja zostaje obok nowej.
-            old_c = self.user_decisions.pop(c_link, None)
-            old_raw = self.user_decisions.pop(link, None) if link != c_link else None
-            old_val = old_c if old_c is not None else (old_raw if old_raw is not None else {})
+            self.user_decisions.pop(c_link, None)
+            self.user_decisions.pop(link, None)
 
-            existing_stage = old_val.get("stage") if isinstance(old_val, dict) else None
-            new_stage = stage if stage else (existing_stage or status)
-
-            decision_data = {
+            now = datetime.now()
+            data: Dict[str, Any] = {
                 "status": status,
-                "rating": rating,
-                "stage": new_stage,
-                "decided_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "rating": old["rating"],
+                "decided_at": now.strftime("%Y-%m-%d %H:%M"),
             }
-            if status == "apply" or new_stage == "apply":
-                decision_data["applied_at"] = (
-                    old_val.get("applied_at")
-                    if isinstance(old_val, dict) and old_val.get("applied_at")
-                    else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                )
-            # Następny krok przeżywa zmianę etapu i ponowną decyzję.
-            if isinstance(old_val, dict) and old_val.get("next_step"):
-                decision_data["next_step"] = old_val["next_step"]
+            if status == "apply":
+                data["stage"] = app_stage(stage or old["stage"])
+                data["applied_at"] = old["applied_at"] or now.strftime("%Y-%m-%d %H:%M:%S")
+                version_id = cv_version_id or old["cv_version_id"]
+                if version_id:
+                    data["cv_version_id"] = version_id
+            # Notatka i następny krok przeżywają zmianę etapu i ponowną decyzję.
+            if old["note"]:
+                data["note"] = old["note"]
+            if old["next_step"]:
+                data["next_step"] = old["next_step"]
 
-            self.user_decisions[c_link] = decision_data
-            ok = save_json_atomic(USER_DECISIONS_PATH, self.user_decisions, backup=True, keep=20)
-            if not ok:
-                logger.error("Nie udało się zapisać decyzji użytkownika do pliku!")
-            self._rev += 1
-            return ok
+            self.user_decisions[c_link] = data
+            return self._save_decisions()
 
-    def get_next_step(self, link: str) -> Optional[Dict[str, Any]]:
-        """`{"label", "due"}` z decyzji w nowym formacie; stary format (string) go nie ma."""
+    def set_note(self, link: str, note: str) -> Tuple[bool, str]:
         with self._lock:
-            val = self.user_decisions.get(link)
+            self.ensure_loaded()
+            key, val = self._raw_decision(link)
             if val is None:
-                val = self.user_decisions.get(canonical_link(link))
-            step = val.get("next_step") if isinstance(val, dict) else None
-            return step if isinstance(step, dict) and step.get("label") else None
+                return False, "Oferta nie ma decyzji — najpierw ją zapisz."
+            if isinstance(val, str):
+                val = {"status": val, "rating": None}
+            if note:
+                val["note"] = note
+            else:
+                val.pop("note", None)
+            self.user_decisions[key] = val
+            if not self._save_decisions():
+                return False, "Błąd zapisu decyzji do pliku"
+            return True, ""
 
     def set_next_step(self, link: str, label: str, due: Optional[str]) -> Tuple[bool, str]:
         """Zapisuje następny krok aplikacji; pusty `label` go usuwa. Wymaga istniejącej decyzji."""
         with self._lock:
             self.ensure_loaded()
-            key = link if link in self.user_decisions else canonical_link(link)
-            val = self.user_decisions.get(key)
+            key, val = self._raw_decision(link)
             if val is None:
                 return False, "Oferta nie ma decyzji — najpierw ją zapisz albo wyślij."
-            # Stary format (goły status) zamienia się w obiekt, który czytniki już obsługują.
             if isinstance(val, str):
-                val = {"status": val, "rating": None, "stage": val}
+                val = {"status": val, "rating": None}
             if label:
                 val["next_step"] = {"label": label, "due": due}
             else:
                 val.pop("next_step", None)
             # Na miejscu, bez przestawiania klucza: kolejność to historia decyzji.
             self.user_decisions[key] = val
-            ok = save_json_atomic(USER_DECISIONS_PATH, self.user_decisions, backup=True, keep=20)
-            if not ok:
-                logger.error("Nie udało się zapisać następnego kroku do pliku!")
+            if not self._save_decisions():
                 return False, "Błąd zapisu decyzji do pliku"
-            self._rev += 1
             return True, ""
 
     def restore_decision(self, link: str):
@@ -373,47 +415,6 @@ class JobDataService:
                 self._rev += 1
             return changed
 
-    def delete_job_permanent(self, link: str):
-        with self._lock:
-            self.ensure_loaded()
-            # 1. DB
-            try:
-                db = JobDatabase(str(JOBS_DATABASE_PATH))
-                db.remove_job(link)
-            except Exception as e:
-                logger.error(f"Błąd usuwania z JobDatabase: {e}")
-
-            # 2. Match results
-            try:
-                if MATCH_RESULTS_PATH.exists():
-                    data = load_json_safe(MATCH_RESULTS_PATH, default={}) or {}
-                    c_link = canonical_link(link)
-                    if link in data or c_link in data:
-                        data.pop(link, None)
-                        data.pop(c_link, None)
-                        save_json_atomic(MATCH_RESULTS_PATH, data, backup=True, keep=5)
-            except Exception as e:
-                logger.error(f"Błąd usuwania z match_results.json: {e}")
-
-            # 3. Decision
-            self.restore_decision(link)
-
-            # In-memory purge
-            c_link = canonical_link(link)
-            self.job_lookup.pop(link, None)
-            self.job_lookup.pop(c_link, None)
-            self.match_lookup.pop(link, None)
-            self.match_lookup.pop(c_link, None)
-            self.match_results.pop(link, None)
-            self.match_results.pop(c_link, None)
-            self.raw_jobs = [j for j in self.raw_jobs if j.link != link and canonical_link(j.link) != c_link]
-            self.analyzed_matches = [
-                m for m in self.analyzed_matches if m.job.link != link and canonical_link(m.job.link) != c_link
-            ]
-            self.zdjete.discard(link)
-            self.zdjete.discard(c_link)
-            self._rev += 1
-
     def get_stats(self) -> Dict[str, Any]:
         with self._lock:
             self.ensure_loaded()
@@ -421,25 +422,6 @@ class JobDataService:
             fresh_count = (
                 sum(1 for j in self.raw_jobs if (j.scraped_at or "") >= fresh_since) if fresh_since else 0
             )
-            today = datetime.now().date()
-            stale_count = 0
-            for link, ddata in self.user_decisions.items():
-                if isinstance(ddata, dict):
-                    status = ddata.get("status")
-                    stage = ddata.get("stage") or status
-                    decided_at = ddata.get("decided_at")
-                else:
-                    status = ddata
-                    stage = status
-                    decided_at = None
-                stage_norm = WS_STAGE_LEGACY.get(stage, stage)
-                if status == "reject" or stage_norm == "archive":
-                    continue
-                if stage_norm in WS_STAGE_NAMES and decided_at:
-                    dt = _parse_dt(decided_at)
-                    if dt and (today - dt.date()).days >= 14:
-                        stale_count += 1
-
             return {
                 "raw_count": len(self.raw_jobs),
                 "scored_count": len(self.analyzed_matches),
@@ -447,177 +429,135 @@ class JobDataService:
                 "pending_scoring_count": self.pending_count,
                 "fresh_count": fresh_count,
                 "decisions_count": len(self.user_decisions),
-                "applications_stale": stale_count,
             }
+
+    def _job(self, link: str) -> Optional[Job]:
+        return self.job_lookup.get(link) or self.job_lookup.get(canonical_link(link))
+
+    def _percent(self, job: Job) -> Optional[int]:
+        match = self.match_lookup.get(job.link) or self.match_lookup.get(canonical_link(job.link))
+        return int(match.match_percentage) if match and match.match_percentage is not None else None
 
     def get_applications(self) -> Dict[str, Any]:
         with self._lock:
             self.ensure_loaded()
-            counts = {k: 0 for k in WS_STAGE_NAMES}
+            counts = {k: 0 for k in APP_STAGES}
             items = []
-            today = datetime.now().date()
-            stale_count = 0
-
-            for link, ddata in reversed(list(self.user_decisions.items())):
-                if isinstance(ddata, dict):
-                    status = ddata.get("status")
-                    stage = ddata.get("stage") or status
-                    rating = ddata.get("rating")
-                    decided_at = ddata.get("decided_at")
-                    applied_at = ddata.get("applied_at")
-                else:
-                    status = ddata
-                    stage = status
-                    rating = None
-                    decided_at = None
-                    applied_at = None
-
-                stage_norm = WS_STAGE_LEGACY.get(stage, stage)
-                if status == "reject":
+            for link in reversed(list(self.user_decisions.keys())):
+                rec = self.decision(link)
+                if rec["status"] != "apply":
                     continue
-                if stage_norm not in WS_STAGE_NAMES:
-                    continue
-
-                dt = _parse_dt(decided_at)
-                age_days = max(0, (today - dt.date()).days) if dt else None
-
-                if stage_norm != "archive" and age_days is not None and age_days >= 14:
-                    stale_count += 1
-
-                counts[stage_norm] += 1
-
-                job = self.job_lookup.get(link) or self.job_lookup.get(canonical_link(link))
-                match = self.match_lookup.get(link) or (self.match_lookup.get(job.link) if job else None)
-                title = (job.title if job else None) or "Bez tytułu"
-                company = (job.company if job else None) or "—"
-                location = (job.location if job else None) or ""
-                pct = int(match.match_percentage) if match and match.match_percentage is not None else None
-
+                stage = app_stage(rec["stage"])
+                counts[stage] += 1
+                job = self._job(link)
+                version_id = rec["cv_version_id"]
                 items.append({
-                    "link": link,
-                    "title": title,
-                    "company": company,
-                    "location": location,
-                    "match_percentage": pct,
-                    "status": status or stage_norm,
-                    "rating": rating,
-                    "stage": stage_norm,
-                    "decided_at": decided_at,
-                    "applied_at": applied_at,
-                    "age_days": age_days,
-                    "next_step": self.get_next_step(link),
+                    "link": job.link if job else link,
+                    "title": (job.title if job else None) or "Bez tytułu",
+                    "company": (job.company if job else None) or "—",
+                    "location": (job.location if job else None) or "",
+                    "match_percentage": self._percent(job) if job else None,
+                    "stage": stage,
+                    "decided_at": rec["decided_at"],
+                    "applied_at": rec["applied_at"],
+                    "next_step": rec["next_step"],
+                    "note": rec["note"],
+                    "cv": cv_store.summary(version_id) if version_id else None,
                 })
+            return {"items": items, "counts": counts, "total": len(items)}
 
-            return {
-                "items": items,
-                "counts": counts,
-                "total": len(items),
-                "stale_count": stale_count,
-            }
-
-    def ws_collect(
-        self, tab: str, search: str = ""
-    ) -> List[Tuple[Job, Optional[JobMatch], Optional[str], Optional[int]]]:
+    def ws_collect(self, tab: str, search: str = "", sort: str = "match") -> List[Tuple[Job, Dict[str, Any]]]:
         with self._lock:
             self.ensure_loaded()
-            matches_by_link = self.match_lookup
-            out = []
+            out: List[Tuple[Job, Dict[str, Any]]] = []
 
             if tab == "Dopasowane":
                 for m in self.analyzed_matches:
-                    status, rating, _, _, _ = self.get_decision(m.job.link)
-                    if status in DECIDED_STATUSES:
+                    rec = self.decision(m.job.link)
+                    if rec["status"] in DECIDED_STATUSES:
                         continue
-                    out.append((m.job, m, status, rating))
-                zdjete = self.zdjete
-                out.sort(
-                    key=lambda t: (
-                        t[0].link not in zdjete,
-                        t[1].match_percentage if t[1] and t[1].match_percentage is not None else -1,
-                    ),
-                    reverse=True,
-                )
-
-            elif tab == "Wszystkie":
-                for j in self.raw_jobs:
-                    status, rating, _, _, _ = self.get_decision(j.link)
-                    out.append((j, matches_by_link.get(canonical_link(j.link)) or matches_by_link.get(j.link), status, rating))
-                zdjete = self.zdjete
-                out.sort(
-                    key=lambda t: (
-                        t[0].link not in zdjete,
-                        t[1].match_percentage if t[1] and t[1].match_percentage is not None else -1,
-                        getattr(t[0], "scraped_at", "") or "",
-                    ),
-                    reverse=True,
-                )
-
+                    out.append((m.job, rec))
+                if sort == "newest":
+                    out.sort(key=lambda t: t[0].scraped_at or "", reverse=True)
+                else:
+                    zdjete = self.zdjete
+                    out.sort(
+                        key=lambda t: (t[0].link not in zdjete, self._percent(t[0]) or -1),
+                        reverse=True,
+                    )
             else:
-                wanted = {
-                    "Ocenione": ("rated",),
-                    "Zapisane": ("save", "apply"),
-                    "Aspiracyjne": ("aspirational",),
-                    "Odrzucone": ("reject",),
-                }.get(tab, ())
-
+                wanted = SAVED_STATUSES if tab == "Zapisane" else HIDDEN_STATUSES
+                seen: Set[str] = set()
                 for link in reversed(list(self.user_decisions.keys())):
-                    status, rating, _, _, _ = self.get_decision(link)
-                    if status not in wanted:
+                    rec = self.decision(link)
+                    if rec["status"] not in wanted:
                         continue
-                    job = self.job_lookup.get(link) or self.job_lookup.get(canonical_link(link))
-                    if job is None:
+                    job = self._job(link)
+                    if job is None or job.link in seen:
                         continue
-                    out.append((job, matches_by_link.get(link) or matches_by_link.get(job.link) or matches_by_link.get(canonical_link(job.link)), status, rating))
-
-                if tab == "Ocenione":
-                    out.sort(key=lambda t: t[3] if isinstance(t[3], (int, float)) else -1, reverse=True)
+                    seen.add(job.link)
+                    out.append((job, rec))
 
             if search:
                 q = search.lower()
                 out = [
-                    t
-                    for t in out
+                    t for t in out
                     if q in (t[0].title or "").lower() or q in (t[0].company or "").lower()
                 ]
-
             return out
+
+    def hidden_count(self) -> int:
+        with self._lock:
+            self.ensure_loaded()
+            return len(self.ws_collect("Ukryte"))
+
+    def list_item(self, job: Job, rec: Dict[str, Any], fresh_since: Optional[str]) -> Dict[str, Any]:
+        status = rec["status"]
+        return {
+            "link": job.link,
+            "title": job.title or "Bez tytułu",
+            "company": job.company or "—",
+            "location": job.location or "",
+            "work_mode": work_mode_text(job),
+            "source": job.source or "—",
+            "logo_url": job.logo_url,
+            "is_gone": job.link in self.zdjete,
+            "is_new": bool(fresh_since) and (job.scraped_at or "") >= fresh_since,
+            "match_percentage": self._percent(job),
+            "salary_text": salary_text(getattr(job, "salary", None)),
+            "status": "save" if status in SAVED_STATUSES else status if status in DECISION_STATUSES else None,
+            "decided_at": rec["decided_at"],
+            "note": rec["note"],
+            "cv": cv_store.latest_for(job.link),
+        }
+
     def get_offer_detail(self, link: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             self.ensure_loaded()
-            job = self.job_lookup.get(link) or self.job_lookup.get(canonical_link(link))
+            job = self._job(link)
             if not job:
                 return None
-
-            match = self.match_lookup.get(job.link) or self.match_lookup.get(link) or self.match_lookup.get(canonical_link(job.link))
-            status, rating, stage, decided_at, applied_at = self.get_decision(job.link)
-
-            pct = int(match.match_percentage) if match and match.match_percentage is not None else None
+            rec = self.decision(job.link)
+            if rec["status"] is None and job.link != link:
+                rec = self.decision(link)
+            status = rec["status"]
+            pct = self._percent(job)
             # Powód odrzucenia przez przesiew (matching/prefilter.py) - oferta oceniona,
             # tylko bez procentu; karta nie może wtedy mówić, że czeka na ocenę.
             result = self.match_results.get(canonical_link(job.link)) or self.match_results.get(job.link)
             filtered = result.get("filtered") if isinstance(result, dict) and pct is None else None
-
-            stage_norm = WS_STAGE_LEGACY.get(stage, stage)
-            if stage_norm not in WS_STAGE_NAMES:
-                stage_norm = status if status in WS_STAGE_NAMES else "save"
-
-            work_mode = detect_work_mode(job.location or "", job.description or "", job.title or "")
-            paragraphs = format_description(job.description or "", drop_prefix=job.title or "")
-            blocks = format_description_blocks(paragraphs)
-
-            dot_color, dot_label = DECISION_STYLE.get(status, (None, None))
-            if status == "rated" and rating:
-                dot_label = f"ocena {rating}/10"
+            description = "" if is_placeholder_description(job.description) else job.description or ""
+            paragraphs = format_description(description, drop_prefix=job.title or "")
 
             return {
                 "link": job.link,
                 "title": job.title or "Bez tytułu",
                 "company": job.company or "—",
-                "location": job.location or "Warszawa",
+                "location": job.location or "",
                 "source": job.source or "—",
-                "source_color": ui_theme.source_color(job.source),
+                "logo_url": job.logo_url,
                 "is_gone": job.link in self.zdjete,
-                "work_mode": work_mode["label"],
+                "work_mode": work_mode_text(job),
                 "match_percentage": pct,
                 "filtered": filtered,
                 "fields": {
@@ -632,91 +572,52 @@ class JobDataService:
                     "skills_nice": getattr(job, "skills_nice", None),
                     "category": getattr(job, "category", None),
                 },
-                "description_blocks": blocks,
-                "raw_description": job.description or "",
-                "status": status,
-                "rating": rating,
-                "stage": stage_norm,
-                "decided_at": decided_at,
-                "applied_at": applied_at,
-                "dot_color": dot_color,
-                "dot_label": dot_label,
-                "next_step": self.get_next_step(job.link) or self.get_next_step(link),
+                "description_blocks": format_description_blocks(paragraphs),
+                "raw_description": description,
+                "scraped_at": job.scraped_at or None,
+                "salary_text": salary_text(getattr(job, "salary", None)),
+                "status": "save" if status in SAVED_STATUSES else status if status in DECISION_STATUSES else None,
+                "stage": app_stage(rec["stage"]) if status == "apply" else None,
+                "decided_at": rec["decided_at"],
+                "applied_at": rec["applied_at"],
+                "note": rec["note"],
+                "next_step": rec["next_step"],
+                "cv_versions": cv_store.list_versions(job.link),
             }
 
-    def get_activity_rows(self, limit: int = 6) -> List[Dict[str, Any]]:
-        rows = []
-        # 1. Scraper status
-        if SCRAPER_STATUS_PATH.exists():
-            runs = load_json_safe(SCRAPER_STATUS_PATH, default={}) or {}
-            for source, info in runs.items():
-                if not isinstance(info, dict):
-                    continue
-                raw = info.get("timestamp") or info.get("last_run_date") or ""
-                try:
-                    when = datetime.fromisoformat(str(raw))
-                except ValueError:
-                    continue
-                count = info.get("jobs_count")
-                ok = info.get("status") == "success"
-                detail = f"{count} ofert" if isinstance(count, int) else str(info.get("status", ""))
-                rows.append({
-                    "timestamp": when.isoformat(),
-                    "time_str": when.strftime("%Y-%m-%d %H:%M:%S"),
-                    "dt": when,
-                    "op": "pobieranie",
-                    "what": source,
-                    "source_color": ui_theme.source_color(source),
-                    "detail": detail,
-                    "bad": not ok,
-                })
-
-        # 2. Matching evaluation
-        if MATCH_RESULTS_PATH.exists():
-            mtime = datetime.fromtimestamp(MATCH_RESULTS_PATH.stat().st_mtime)
-            rows.append({
-                "timestamp": mtime.isoformat(),
-                "time_str": mtime.strftime("%Y-%m-%d %H:%M:%S"),
-                "dt": mtime,
-                "op": "dopasowanie",
-                "what": "Jev",
-                "source_color": None,
-                "detail": f"{len(self.analyzed_matches)} ocen",
-                "bad": False,
-            })
-        rows.sort(key=lambda r: r["dt"], reverse=True)
-        for r in rows:
-            r.pop("dt", None)
-        return rows[:limit]
-
-    def get_recent_decisions(self, limit: int = 7) -> List[Dict[str, Any]]:
+    def run_summary(self, since: Optional[str], limit: int = 3) -> Dict[str, Any]:
+        """Oferty z procentem ocenione od `since` (ISO, czas lokalny) - wyniki bieżącego wyszukiwania."""
         with self._lock:
             self.ensure_loaded()
-            out = []
-            for link in reversed(list(self.user_decisions.keys())):
-                if len(out) >= limit:
-                    break
-                status, rating, stage, decided_at, applied_at = self.get_decision(link)
-                dot_color, label = DECISION_STYLE.get(status, (None, None))
-                if not dot_color:
+            if not since:
+                return {"matched_count": 0, "recent": []}
+            found: List[Tuple[int, Job]] = []
+            seen: Set[str] = set()
+            for link, res in self.match_results.items():
+                if not isinstance(res, dict) or res.get("percent") is None:
                     continue
-                job = self.job_lookup.get(link) or self.job_lookup.get(canonical_link(link))
-                if not job:
+                if (res.get("scored_at") or "") < since:
                     continue
-                if status == "rated" and rating:
-                    label = f"ocena {rating}/10"
-
-                out.append({
-                    "link": job.link,
-                    "title": job.title or "Bez tytułu",
-                    "company": job.company or "",
-                    "status": status,
-                    "rating": rating,
-                    "label": label,
-                    "color": dot_color,
-                    "stamp": decided_at or applied_at,
-                })
-            return out
+                job = self._job(link)
+                if job is None or job.link in seen:
+                    continue
+                seen.add(job.link)
+                found.append((int(res["percent"]), job))
+            found.sort(key=lambda t: t[0], reverse=True)
+            return {
+                "matched_count": len(found),
+                "recent": [
+                    {
+                        "link": job.link,
+                        "title": job.title or "Bez tytułu",
+                        "company": job.company or "—",
+                        "location": job.location or "",
+                        "work_mode": work_mode_text(job),
+                        "match_percentage": pct,
+                    }
+                    for pct, job in found[:limit]
+                ],
+            }
 
 
 # Singleton instancja
@@ -754,7 +655,7 @@ def get_cv_info() -> Dict[str, Any]:
     has_cv = bool(text and len(text.strip()) > 20)
     chars = len(text)
     words = len(text.split()) if text else 0
-    filename = "final_cv_text.txt" if cv_txt_path.exists() else ("cv.pdf" if cv_pdf_path.exists() else "Brak")
+    filename = "cv.pdf" if pdf_is_current() else ("final_cv_text.txt" if cv_txt_path.exists() else "Brak")
 
     return {
         "ready": has_cv,
@@ -764,23 +665,39 @@ def get_cv_info() -> Dict[str, Any]:
         "filename": filename,
         "pdf_exists": cv_pdf_path.exists(),
         "txt_exists": cv_txt_path.exists(),
+        "pdf_url": "/api/cv/file" if pdf_is_current() else None,
         "profile": _profile_summary(text),
     }
 
 
+def pdf_is_current() -> bool:
+    """cv.pdf to bieżące CV, dopóki tekst nie został później wklejony ręcznie."""
+    if not CV_PDF_PATH.exists():
+        return False
+    if not CV_TXT_PATH.exists():
+        return True
+    return CV_PDF_PATH.stat().st_mtime >= CV_TXT_PATH.stat().st_mtime - 60
+
+
 def _profile_summary(cv: str) -> Optional[Dict[str, Any]]:
-    """Profil kandydata z CV (utils/cv_profile.py) w skrócie dla okna uruchomienia:
-    wyznacza zakres scrapowania i przesiew. `current` = policzony z bieżącego CV;
-    inaczej pipeline przeliczy go na starcie."""
+    """Profil kandydata z CV (utils/cv_profile.py): wyznacza zakres scrapowania i przesiew.
+    `current` = policzony z bieżącego CV; inaczej pipeline przeliczy go na starcie.
+    Zakres to zawsze miasto z CV plus praca zdalna (utils/candidate_scope.py)."""
     profile = load_profile()
     if not profile:
         return None
     sha = (profile.get("_metadata") or {}).get("cv_sha256")
     return {
         "city": profile.get("city"),
+        "remote": True,
         "seniority": profile.get("seniority"),
         "years": profile.get("years_experience"),
-        "skills": len(profile.get("skills") or []),
+        "roles": [str(r) for r in profile.get("roles") or []],
+        "skills": [str(s) for s in profile.get("skills") or []],
+        "languages": [
+            {"name": str(lang.get("name") or ""), "level": lang.get("level")}
+            for lang in profile.get("languages") or [] if isinstance(lang, dict)
+        ],
         "current": bool(cv) and sha == hashlib.sha256(cv.encode("utf-8")).hexdigest(),
     }
 
@@ -828,17 +745,6 @@ def save_pasted_cv_text(raw_text: str) -> Tuple[bool, str]:
     except Exception as e:
         logger.error(f"Błąd zapisu tekstu CV: {e}")
         return False, f"Błąd zapisu tekstu CV: {e}"
-
-
-def open_local_cv_pdf() -> Tuple[bool, str]:
-    cv_pdf_file = CV_PDF_PATH
-    if not cv_pdf_file.exists():
-        return False, "Plik cv.pdf nie istnieje na dysku."
-    try:
-        os.startfile(str(cv_pdf_file))
-        return True, "Otwarto plik CV."
-    except Exception as e:
-        return False, f"Nie udało się otworzyć pliku: {e}"
 
 
 ENV_PATH = Path(__file__).parent / ".env"

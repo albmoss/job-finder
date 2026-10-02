@@ -1,0 +1,147 @@
+.st0 {
+  display: flex;
+  align-items: center;
+  gap: 64px;
+  padding: 40px 80px;
+}
+
+.st0-intro {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+
+.st0-heading {
+  font-size: 44px;
+  font-weight: 600;
+  line-height: 62px;
+}
+
+.st0-lead {
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 25px;
+}
+
+.st0-step {
+  display: flex;
+  gap: 16px;
+}
+
+.st0-step > svg {
+  flex: none;
+  width: 23px;
+  height: 23px;
+  color: var(--accent);
+  stroke-width: 1.5;
+}
+
+.st0-step-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.st0-step-title {
+  font-size: 16px;
+  line-height: 22px;
+}
+
+.st0-step-text {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.st0-card {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 22px;
+  width: 500px;
+  min-height: 490px;
+  padding: 32px;
+  transition: background-color 0.15s ease;
+}
+
+.st0-card.is-dragging {
+  outline: 1.5px dashed rgba(255, 255, 255, 0.35);
+  outline-offset: -12px;
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.st0-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  text-align: center;
+}
+
+.st0-icon {
+  width: 42px;
+  height: 42px;
+  color: var(--accent);
+  stroke-width: 1.5;
+}
+
+.st0-title {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 39px;
+}
+
+.st0-hint {
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 22px;
+}
+
+.st0-or {
+  margin: 4px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.st0-meta {
+  margin-top: -12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.st0-issues {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.st0-consent {
+  text-align: left;
+}
+
+.st0-paste {
+  align-items: stretch;
+}
+
+.st0-paste textarea.st0-textarea {
+  height: 240px;
+  resize: none;
+}
+
+.st0-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.st0-note {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 18px;
+}
