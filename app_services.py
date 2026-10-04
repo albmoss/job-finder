@@ -19,7 +19,7 @@ from config import (
 )
 from utils.llm import PLACEHOLDERS, PROVIDERS, settings_from_env
 from utils.cv_parser import CVParser
-from utils.data_models import JobDatabase, Job, JobMatch, is_placeholder_description
+from utils.data_models import JobDatabase, Job, JobMatch, ScraperStatusManager, is_placeholder_description
 from utils.text_cleaner import detect_work_mode, strip_html
 from utils.safe_io import save_json_atomic, load_json_safe
 from utils.links import canonical_link
@@ -292,7 +292,7 @@ class JobDataService:
                 self.pending_count = pending_count
 
                 try:
-                    self.zdjete = zdjete_z_portalu(self.raw_jobs)
+                    self.zdjete = zdjete_z_portalu(self.raw_jobs, ScraperStatusManager().load_status())
                 except Exception as e:
                     logger.warning(f"Błąd wykrywania ofert zdjętych: {e}")
                     self.zdjete = set()
@@ -590,7 +590,7 @@ class JobDataService:
         with self._lock:
             self.ensure_loaded()
             if not since:
-                return {"matched_count": 0, "recent": []}
+                return {"matched_count": 0, "recent": [], "new_offers": 0}
             found: List[Tuple[int, Job]] = []
             seen: Set[str] = set()
             for link, res in self.match_results.items():
@@ -599,13 +599,14 @@ class JobDataService:
                 if (res.get("scored_at") or "") < since:
                     continue
                 job = self._job(link)
-                if job is None or job.link in seen:
+                if job is None or job.link in seen or self.decision(job.link)["status"] in DECIDED_STATUSES:
                     continue
                 seen.add(job.link)
                 found.append((int(res["percent"]), job))
             found.sort(key=lambda t: t[0], reverse=True)
             return {
                 "matched_count": len(found),
+                "new_offers": sum(1 for j in self.raw_jobs if (j.scraped_at or "") >= since),
                 "recent": [
                     {
                         "link": job.link,

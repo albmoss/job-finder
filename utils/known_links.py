@@ -25,38 +25,50 @@ logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _snapshot = None
+_stored = None
+
+
+def _load():
+    global _snapshot, _stored
+    described, stored = set(), set()
+    try:
+        from config import JOBS_DATABASE_PATH
+        from utils.data_models import is_placeholder_description
+        from utils.safe_io import load_json_safe
+
+        for record in load_json_safe(str(JOBS_DATABASE_PATH), default=[]):
+            link = canonical_link(record.get("link", ""))
+            if not link:
+                continue
+            stored.add(link)
+            if not is_placeholder_description(record.get("description")):
+                described.add(link)
+    except Exception as e:
+        # Pusty zbiór = scrapery pobiorą wszystko. Wolniej, ale poprawnie.
+        logger.warning(f"Could not read the known links ({e}) - fetching every offer")
+    _snapshot, _stored = described, stored
 
 
 def known_links() -> set:
     """Kanoniczne linki obecne w bazie z prawdziwym opisem. Liczone raz na proces."""
-    global _snapshot
     with _lock:
-        if _snapshot is not None:
-            return _snapshot
-
-        links = set()
-        try:
-            from config import JOBS_DATABASE_PATH
-            from utils.data_models import is_placeholder_description
-            from utils.safe_io import load_json_safe
-
-            for record in load_json_safe(str(JOBS_DATABASE_PATH), default=[]):
-                link = canonical_link(record.get("link", ""))
-                if link and not is_placeholder_description(record.get("description")):
-                    links.add(link)
-        except Exception as e:
-            # Pusty zbiór = scrapery pobiorą wszystko. Wolniej, ale poprawnie.
-            logger.warning(f"Could not read the known links ({e}) - fetching every offer")
-
-        _snapshot = links
+        if _snapshot is None:
+            _load()
         return _snapshot
+
+
+def stored_links() -> set:
+    with _lock:
+        if _stored is None:
+            _load()
+        return _stored
 
 
 def reset_cache():
     """Wymuś ponowne wczytanie - używane w testach i po --refresh."""
-    global _snapshot
+    global _snapshot, _stored
     with _lock:
-        _snapshot = None
+        _snapshot = _stored = None
 
 
 def split_known(links):

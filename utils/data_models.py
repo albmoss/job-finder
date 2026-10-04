@@ -16,8 +16,9 @@ _PLACEHOLDER_RE = re.compile(r"^Oferta z [^\n]{1,250}$")
 
 
 def is_placeholder_description(text: Optional[str]) -> bool:
-    """True, gdy opis to zaślepka scrapera, a nie treść ogłoszenia."""
-    return bool(_PLACEHOLDER_RE.match((text or "").strip()))
+    """True, gdy opisu brak albo to zaślepka scrapera, a nie treść ogłoszenia."""
+    stripped = (text or "").strip()
+    return not stripped or bool(_PLACEHOLDER_RE.match(stripped))
 
 
 @dataclass
@@ -237,7 +238,7 @@ class JobDatabase:
                 known.valid_through = job.valid_through
             if job.logo_url and not known.logo_url:
                 known.logo_url = job.logo_url
-            if (is_placeholder_description(known.description) and (job.description or "").strip()
+            if (is_placeholder_description(known.description)
                     and not is_placeholder_description(job.description)):
                 known.description = job.description
             for name in STRUCTURED_FIELDS:
@@ -324,6 +325,22 @@ class ScraperStatusManager:
             history = entry.get('history') or []
             history.append({'date': now.date().isoformat(), 'count': jobs_count})
             entry['history'] = history[-HISTORY_LEN:]
+            self._write(data)
+
+    def record_liveness_scope(self, source_name: str, scope: Optional[str]):
+        """Zakres pełnego listingu źródła (utils/liveness.py); None = listing nie jest pełny."""
+        from datetime import datetime
+
+        with self._lock:
+            data = self._read()
+            entry = data.setdefault(source_name, {})
+            if scope is None:
+                if entry.pop('liveness', None) is None:
+                    return
+            elif (entry.get('liveness') or {}).get('scope') != scope:
+                entry['liveness'] = {'scope': scope, 'since': datetime.now().date().isoformat()}
+            else:
+                return
             self._write(data)
 
     def get_history(self, source_name: str) -> list:

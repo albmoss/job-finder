@@ -59,6 +59,7 @@ KARTY = 3
 # przechodzacego przez CDP, wiec paczka wiekszej mocy nie przyspiesza,
 # a zjada pamiec. Przy okazji wyznacza takt meldunkow o postepie.
 PACZKA = 25
+ODNOWIENIA_LIMIT = 3
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,21 @@ class OLXScraper(BaseScraper):
         # Linki ofert, które dostały opis prosto z listingu - te nie mają po co
         # wchodzić na własną stronę.
         self.opisy_ze_stanu = set()
+        self.listing_failures = []
+
+    def _odnow_strone(self):
+        try:
+            if self.page and not self.page.is_closed():
+                self.page.close()
+        except Exception:
+            pass
+        try:
+            self.page = self.context.new_page()
+            self.page.set_default_timeout(self.timeout)
+        except Exception as e:
+            logger.warning(f"{self.get_source_name()}: nowa karta niemozliwa ({e}) - restart przegladarki")
+            self.close_browser()
+            self.setup_browser()
 
     def _wejdz_i_wez_html(self, url: str):
         """
@@ -139,12 +155,18 @@ class OLXScraper(BaseScraper):
                             f"(attempt {proba}/{self.max_retries})")
                 resp = self.page.goto(url, wait_until="domcontentloaded",
                                       timeout=self.timeout)
+                if resp and resp.status == 404:
+                    logger.error(f"{self.get_source_name()}: 404 - nie ma takiej strony: {url}")
+                    return None
                 # Treść czytamy od razu - dopiero potem przerwa na dorysowanie listy.
                 html = resp.text() if resp else ""
                 time.sleep(self.delay)
                 return html
             except Exception as e:
                 logger.warning(f"{self.get_source_name()}: Navigation attempt {proba} failed: {e}")
+                komunikat = str(e).lower()
+                if "crash" in komunikat or "closed" in komunikat:
+                    self._odnow_strone()
                 if proba < self.max_retries:
                     time.sleep(self.delay * proba)
         logger.error(f"{self.get_source_name()}: All navigation attempts failed")
@@ -226,25 +248,29 @@ class OLXScraper(BaseScraper):
         jobs = []
         seen_links = set()
         
-        # Kategorie OLX Praca (slug w adresie -> nazwa na portalu), olx.pl/praca, 30.09.2026.
+        # Kategorie OLX Praca (slug w adresie -> nazwa na portalu), olx.pl/praca, 04.10.2026.
         all_categories = {
-            "administracja-biurowa": "Administracja biurowa", "badania-i-rozwoj": "Badania i rozwój",
+            "administracja-biurowa": "Administracja biurowa", "badania-rozwoj": "Badania i rozwój",
             "bankowosc": "Bankowość", "bhp-ochrona-srodowiska": "BHP i ochrona środowiska",
             "budowa-remonty": "Budowa i remonty", "dostawca-kurier-miejski": "Dostawca, kurier miejski",
             "e-commerce-handel-internetowy": "E-commerce i handel internetowy", "edukacja": "Edukacja",
+            "energetyka": "Energetyka",
             "finanse-ksiegowosc": "Finanse i księgowość", "franczyza-wlasna-firma": "Franczyza i własna firma",
             "fryzjerstwo-kosmetyka": "Fryzjerstwo i kosmetyka", "gastronomia": "Gastronomia", "hr": "HR",
             "hostessa-roznoszenie-ulotek": "Hostessa, roznoszenie ulotek", "hotelarstwo": "Hotelarstwo",
-            "inzynieria": "Inżynieria", "it-telekomunikacja": "IT i telekomunikacja", "kierowca": "Kierowca",
+            "informatyka": "Informatyka", "inzynieria": "Inżynieria",
+            "kadra-kierownicza": "Kadra kierownicza", "kierowca": "Kierowca",
             "logistyka-zakupy-spedycja": "Logistyka, zakupy i spedycja", "marketing-pr": "Marketing i PR",
             "mechanika-lakiernictwo": "Mechanika i lakiernictwo", "montaz-serwis": "Montaż i serwis",
+            "nieruchomosci": "Nieruchomości",
             "obsluga-klienta-call-center": "Obsługa klienta i call center", "ochrona": "Ochrona",
-            "opieka": "Opieka", "organizacja-obsluga-imprez": "Organizacja i obsługa imprez",
-            "praca-magazynowe": "Prace magazynowe", "pracownik-sklepu": "Pracownik sklepu",
-            "produkcja": "Produkcja", "rolnictwo-ogrodnictwo": "Rolnictwo i ogrodnictwo",
+            "opieka": "Opieka", "organizacja-obsluga-impres": "Organizacja i obsługa imprez",
+            "prace-magazynowe": "Prace magazynowe", "pracownik-sklepu": "Pracownik sklepu",
+            "prawo": "Prawo", "produkcja": "Produkcja", "rolnictwo-i-ogrodnictwo": "Rolnictwo i ogrodnictwo",
+            "sluzby-mundurowe": "Służby mundurowe",
             "sprzatanie": "Sprzątanie", "sprzedaz": "Sprzedaż", "ubezpieczenia": "Ubezpieczenia",
             "wykladanie-ekspozycja-towaru": "Wykładanie i ekspozycja towaru", "zdrowie": "Zdrowie",
-            "praktyki-staze": "Praktyki i staże", "pozostale-oferty-pracy": "Pozostałe oferty pracy",
+            "praktyki-staze": "Praktyki i staże", "inne-oferty-pracy": "Pozostałe oferty pracy",
         }
         from utils.portal_categories import pick_categories
         picked = pick_categories("olx", all_categories)
@@ -297,6 +323,7 @@ class OLXScraper(BaseScraper):
             html_strony = self._wejdz_i_wez_html(search_url)
             if html_strony is None:
                 logger.error(f"{self.get_source_name()}: Failed to navigate to {category}")
+                self.listing_failures.append(category)
                 continue
                 
             # Zgoda na ciasteczka przy pierwszym wejściu - bez długiego czekania
@@ -319,6 +346,7 @@ class OLXScraper(BaseScraper):
                 
             page_num = 1
             max_pages = 5 # Reduced to 5 as requested to focus on most recent offers
+            urwana = False
             
             while page_num <= max_pages:
                 logger.info(f"{self.get_source_name()} | {category}: Scraping page {page_num}")
@@ -391,11 +419,15 @@ class OLXScraper(BaseScraper):
                     page_num += 1
                     html_strony = self._wejdz_i_wez_html(f"{search_url}&page={page_num}")
                     if html_strony is None:
+                        logger.error(f"{self.get_source_name()}: {category} urwana na stronie {page_num}")
+                        self.listing_failures.append(f"{category} (od strony {page_num})")
+                        urwana = True
                         break
                 except Exception:
                     break
-                    
-            # Kategoria przerobiona do końca
+
+            if urwana:
+                continue
             completed_categories.append(category)
             logger.info(f"Completed category {category}. Total cumulative jobs: {len(jobs)}")
             
@@ -488,6 +520,7 @@ class OLXScraper(BaseScraper):
         pozostale = jobs
         if hasattr(page, "evaluate"):
             enriched, pozostale = self._opisy_przez_fetch(page, jobs, stats)
+            page = self.page
         if pozostale:
             try:
                 if (not page or page.is_closed()) and self.context:
@@ -573,11 +606,14 @@ class OLXScraper(BaseScraper):
         """
         from utils.olx_details import parse_offer_html
 
+        def wejdz_na_olx(strona):
+            if not (strona.url or "").startswith("https://www.olx.pl"):
+                strona.goto(f"{self.BASE_URL}/praca/", wait_until="domcontentloaded",
+                            timeout=self.timeout)
+
         # fetch musi wyjsc z origin olx.pl, inaczej przegladarka utnie go na CORS
         try:
-            if not (page.url or "").startswith("https://www.olx.pl"):
-                page.goto(f"{self.BASE_URL}/praca/", wait_until="domcontentloaded",
-                          timeout=self.timeout)
+            wejdz_na_olx(page)
         except Exception as e:
             logger.warning(f"OLX: nie wchodze na strone do fetchowania ({e}) - wracam do goto")
             return [], jobs
@@ -585,19 +621,34 @@ class OLXScraper(BaseScraper):
         enriched = []
         przerwa = OPIS_PRZERWA
         blokady_z_rzedu = 0
+        odnowienia = 0
         start = time.monotonic()
-        for poczatek in range(0, len(jobs), PACZKA):
+        poczatek = 0
+        while poczatek < len(jobs):
             paczka = jobs[poczatek:poczatek + PACZKA]
             try:
                 wyniki = page.evaluate(
                     JS_OPISY, [[j.link for j in paczka], KARTY, int(przerwa * 1000)]
                 ) or []
             except Exception as e:
+                komunikat = str(e).lower()
+                if ("crash" in komunikat or "closed" in komunikat) and odnowienia < ODNOWIENIA_LIMIT:
+                    odnowienia += 1
+                    logger.warning(f"OLX: karta padla przy fetchu po {poczatek} ofertach - "
+                                   f"nowa karta ({odnowienia}/{ODNOWIENIA_LIMIT})")
+                    try:
+                        self._odnow_strone()
+                        page = self.page
+                        wejdz_na_olx(page)
+                        continue
+                    except Exception as e2:
+                        e = e2
                 logger.warning(
                     f"OLX: fetch w stronie padl po {poczatek} ofertach "
                     f"({type(e).__name__}: {e}) - reszta idzie przez goto"
                 )
                 return enriched, jobs[poczatek:]
+            poczatek += len(paczka)
 
             blokady_w_paczce = 0
             for job, wynik in zip(paczka, wyniki):
@@ -625,11 +676,11 @@ class OLXScraper(BaseScraper):
             # zmierzonej granicy, gdy przestal.
             przerwa = (min(przerwa * BLOKADA_MNOZNIK, BLOKADA_SUFIT)
                        if blokady_w_paczce else OPIS_PRZERWA)
-            self._melduj(min(poczatek + PACZKA, len(jobs)), len(jobs), stats, start)
+            self._melduj(poczatek, len(jobs), stats, start)
             if blokady_z_rzedu >= BLOKADY_LIMIT:
                 logger.warning(
                     f"OLX: {blokady_z_rzedu} blokad z rzedu - przerywam dociaganie "
-                    f"opisow po {poczatek + len(paczka)} z {len(jobs)} ofert"
+                    f"opisow po {poczatek} z {len(jobs)} ofert"
                 )
                 break
         return enriched, []

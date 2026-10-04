@@ -15,9 +15,8 @@ Co zostało sprawdzone empirycznie (sierpień 2026):
    ALE kliknięcie karty na liście ładuje pełny opis w panelu bocznym
    (#jobDescriptionText, ~1300 znaków) bez nowej nawigacji - i to przechodzi.
    Stąd zbieranie opisów klikaniem, a nie wchodzeniem na podstrony.
-5. Sam snippet z listingu ma 133-171 znaków, czyli ociera się o próg 150,
-   poniżej którego matching/run.py pomija ofertę jako `brak_opisu`.
-   Bez opisu z panelu te oferty byłyby bezużyteczne.
+5. Sam snippet z listingu ma 133-171 znaków. Bez opisu z panelu Jev ocenia
+   ofertę po tytule i tych kilku zdaniach.
 
 Wniosek: to źródło jest z założenia niskonakładowe i wolne - kilkadziesiąt ofert
 z pełnym opisem na przebieg. Podnoszenie `keywords` albo skracanie przerw

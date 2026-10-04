@@ -37,7 +37,7 @@ export interface SourceTelemetry {
 
 /** Przesiew w kodzie (matching/prefilter.py) i wstępna ocena (matching/triage.py): powód → liczba odrzuconych ofert. */
 export type PrefilterReasons = Partial<
-  Record<'miasto' | 'poziom' | 'lata' | 'jezyk' | 'brak_opisu' | 'kierunek', number>
+  Record<'miasto' | 'poziom' | 'lata' | 'jezyk' | 'kierunek', number>
 >;
 
 /** Etap dopasowania na żywo, z linii „Prefilter: …” i „Scored X/Y (R/s)” matching/run.py. */

@@ -1,6 +1,7 @@
 import { Bookmark, FileUser, RefreshCw, Send, Settings2, Sparkles, type LucideIcon } from 'lucide-react';
 import { useApp } from '../app_context';
 import { paths, useRoute, type RouteName } from '../router';
+import { RunPill } from './RunPill';
 
 export function LogoMark({ size = 28 }: { size?: number }) {
   return (
@@ -31,8 +32,8 @@ const NAV: { label: string; icon: LucideIcon; path: string; match: RouteName[] }
   { label: 'Moje CV', icon: FileUser, path: paths.cv, match: ['cv', 'cv-instrukcje', 'cv-nowa', 'cv-wersja'] },
 ];
 
-/** `minimal`: tylko logo i Ustawienia (ekrany 07 i 10). */
-export function TopBar({ minimal }: { minimal: boolean }) {
+/** `minimal`: tylko logo i Ustawienia (ekrany 07 i 10). `running`: stan wyszukiwania zamiast przycisku. */
+export function TopBar({ minimal, running }: { minimal: boolean; running: boolean }) {
   const route = useRoute();
   const { openLaunch, openSettings } = useApp();
 
@@ -61,7 +62,8 @@ export function TopBar({ minimal }: { minimal: boolean }) {
         </nav>
       )}
       <div className="tb-spacer" />
-      {!minimal && (
+      {!minimal && running && <RunPill />}
+      {!minimal && !running && (
         <button type="button" className="btn" onClick={openLaunch}>
           <RefreshCw />
           Szukaj nowych ofert

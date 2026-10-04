@@ -189,7 +189,7 @@ def enrich_verdict(enrich) -> str | None:
 
 
 def check(source_name: str, count: int, jobs=(), history=(), error=None,
-          domain=None, enrich=None) -> dict | None:
+          domain=None, enrich=None, failed_parts=()) -> dict | None:
     """Jeden werdykt dla jednego źródła. None = zdrowe, czyli milczymy."""
     if error:
         verdict, detail = error_verdict(error)
@@ -198,6 +198,10 @@ def check(source_name: str, count: int, jobs=(), history=(), error=None,
     brak_opisow = enrich_verdict(enrich)
     if brak_opisow:
         return {"source": source_name, "verdict": "broken", "detail": brak_opisow}
+
+    if failed_parts:
+        return {"source": source_name, "verdict": "degraded",
+                "detail": f"nie pobrano listingu: {', '.join(failed_parts)}"}
 
     verdict, detail = yield_verdict(count, list(history))
     symptoms = scan_records(jobs, domain)

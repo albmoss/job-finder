@@ -74,19 +74,20 @@ class BaseScraper(ABC):
             raise
     
     def close_browser(self):
-        try:
-            if self.page:
-                self.page.close()
-            if self.context:
-                self.context.close()
-            if self.browser:
-                self.browser.close()
-            if hasattr(self, 'playwright'):
+        for nazwa in ("page", "context", "browser"):
+            obiekt = getattr(self, nazwa, None)
+            if not obiekt:
+                continue
+            try:
+                obiekt.close()
+            except Exception as e:
+                logger.warning(f"{self.get_source_name()}: closing {nazwa} failed: {e}")
+        if getattr(self, "playwright", None):
+            try:
                 self.playwright.stop()
-            
-            logger.info(f"{self.get_source_name()}: Browser closed")
-        except Exception as e:
-            logger.error(f"{self.get_source_name()}: Error closing browser: {e}")
+            except Exception as e:
+                logger.error(f"{self.get_source_name()}: Error closing browser: {e}")
+        logger.info(f"{self.get_source_name()}: Browser closed")
     
     def navigate_with_retry(self, url: str) -> bool:
         """

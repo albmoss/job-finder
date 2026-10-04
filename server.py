@@ -335,15 +335,21 @@ async def api_pipeline_run_summary(request: Request) -> JSONResponse:
     added = [s.get("added") for s in telemetry.get("sources") or [] if isinstance(s.get("added"), int)]
     scoring = telemetry.get("scoring") or {}
     to_check = scoring.get("to_score")
-    downloaded = sum(added) if added else None
-    if downloaded is None and isinstance(to_check, int):
-        downloaded = to_check + (scoring.get("prefilter_rejected") or 0)
+    summary = job_data_service.run_summary(since)
+    new_offers = summary.pop("new_offers")
+    stage_status = {s.get("id"): s.get("status") for s in state.get("stages") or []}
+    if stage_status.get("phase1") == "skipped":
+        downloaded = None
+    elif stage_status.get("phase2") == "done":
+        downloaded = new_offers
+    else:
+        downloaded = sum(added) if added else None
     return JSONResponse({
         "started_at": since,
         "downloaded": downloaded,
         "checked": scoring.get("scored") or 0,
         "to_check": to_check,
-        **job_data_service.run_summary(since),
+        **summary,
     })
 
 

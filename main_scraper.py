@@ -248,6 +248,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
             
             # Za sukces uznajemy dopiero sensowną liczbę ofert, nie sam brak wyjątku
             MIN_JOBS_THRESHOLD = 5
+            listed = len(jobs) + len(getattr(scraper, "seen_again_links", None) or ())
             
             # Normę tego źródła czytamy PRZED dopisaniem dzisiejszego wyniku -
             # inaczej chudy przebieg sam sobie obniża medianę, z którą go
@@ -255,13 +256,14 @@ def run_all_scrapers(only=None, force=False, refresh=False):
             history_before = status_manager.get_history(source_name)
             # Historia idzie do pliku ZAWSZE, także przy zerze - to właśnie zero
             # jest wpisem, którego szuka później diagnoza (utils/scraper_health.py).
-            status_manager.record_yield(source_name, len(jobs))
+            status_manager.record_yield(source_name, listed)
 
-            if len(jobs) >= MIN_JOBS_THRESHOLD:
-                status_manager.mark_as_completed(source_name, len(jobs))
+            if listed >= MIN_JOBS_THRESHOLD:
+                status_manager.mark_as_completed(source_name, listed)
+                status_manager.record_liveness_scope(source_name, getattr(scraper, "liveness_scope", None))
                 logger.info(f"✓ {source_name}: Scrape COMPLETE (Threshold {MIN_JOBS_THRESHOLD} met)")
             else:
-                logger.warning(f"{source_name}: Only {len(jobs)} jobs found (Threshold: {MIN_JOBS_THRESHOLD}) - NOT marking as completed")
+                logger.warning(f"{source_name}: Only {listed} jobs found (Threshold: {MIN_JOBS_THRESHOLD}) - NOT marking as completed")
             
             logger.info(f"✓ {source_name}: Successfully scraped {len(jobs)} jobs")
             
@@ -336,6 +338,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 # tresci. Tak przez tydzien wchodzilo do bazy 1272 ofert
                 # z zaslepka zamiast opisu.
                 scraper_results[source]['enrich'] = getattr(scraper, "enrich_stats", None)
+                scraper_results[source]['failed_parts'] = list(getattr(scraper, "listing_failures", None) or ())
                 if new_jobs or seen_again:
                     added, touched = db.record_scrape(new_jobs, seen_again)
                     logger.info(f"{source}: saved {added} new offers, "
@@ -416,9 +419,7 @@ def _report_health(scraper_results, db, skipped_no_key, disabled):
         if not result.get('success'):
             finding = scraper_health.check(source, 0, error=result.get('error', ''))
         else:
-            count = result.get('jobs_count', 0)
-            if count == 0 and result.get('also_seen'):
-                continue  # portal odpowiedział, tyle że samymi znanymi ofertami
+            count = result.get('jobs_count', 0) + result.get('also_seen', 0)
             finding = scraper_health.check(
                 source,
                 count,
@@ -426,6 +427,7 @@ def _report_health(scraper_results, db, skipped_no_key, disabled):
                 history=result.get('history_before', ()),
                 domain=scraper_health.expected_domain(known_jobs, source),
                 enrich=result.get('enrich'),
+                failed_parts=result.get('failed_parts', ()),
             )
 
         if finding:

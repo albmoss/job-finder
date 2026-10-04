@@ -10,6 +10,7 @@ Wcześniej każdy z tych scraperów miał własną implementację (RocketJobs do
 sniffował ruch przez Playwright i zwracał 0 ofert). Tutaj jest jedna logika.
 """
 
+import json
 import logging
 import random
 import threading
@@ -152,6 +153,7 @@ class CandidateAPIScraper(BaseScraper):
         self._cooldown_until = 0.0
         self._detail_failures = 0
         self._throttled = 0
+        self.liveness_scope = None
 
     @property
     def api_url(self) -> str:
@@ -220,6 +222,7 @@ class CandidateAPIScraper(BaseScraper):
             ("remote", [("isRemote", "true")] + [("experienceLevels", lv) for lv in levels] + cat_params),
         ]
 
+        complete = True
         offers_by_slug = {}
         for q_label, base_params in queries:
             cursor = 0
@@ -233,6 +236,7 @@ class CandidateAPIScraper(BaseScraper):
                     data = resp.json()
                 except Exception as e:
                     logger.error(f"{self.SOURCE_NAME}: listing failed ({q_label}) at cursor {cursor}: {e}")
+                    complete = False
                     break
 
                 page = data.get("data", [])
@@ -257,6 +261,8 @@ class CandidateAPIScraper(BaseScraper):
                 time.sleep(0.3 + random.random() * 0.3)
 
         logger.info(f"{self.SOURCE_NAME}: fetched {len(offers_by_slug)} unique offers from the listing")
+        if complete:
+            self.liveness_scope = json.dumps([city, levels, sorted(picked_categories or [])], ensure_ascii=False)
         return list(offers_by_slug.values())
 
     def _matches_location(self, offer: dict, target_city: str) -> bool:

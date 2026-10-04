@@ -43,7 +43,6 @@ WORKERS = 8
 SAVE_EVERY = 200
 # Linia postępu co tyle sekund (i na końcu): arkusz pipeline'u liczy z niej postęp i ETA.
 PROGRESS_EVERY_S = 2.0
-MIN_DESCRIPTION = 150
 
 
 def offer_fingerprint(job: Job) -> str:
@@ -56,16 +55,6 @@ def offer_fingerprint(job: Job) -> str:
 def load_results() -> dict:
     data = load_json_safe(str(RESULTS_PATH), default={})
     return data if isinstance(data, dict) else {}
-
-
-def _has_content(job: Job) -> bool:
-    """Jest co oceniać: opis z ogłoszenia albo lista umiejętności przy krótkim opisie.
-
-    Oferta z zaślepką zamiast opisu, ale z listą umiejętności z portalu, idzie do oceny: tytuł
-    i umiejętności wystarczają Jev na sensowny wynik, a scraper dociągnie opis w kolejnym
-    przebiegu (utils/known_links.py) - wtedy zmienia się odcisk oferty i ocena zapada ponownie.
-    """
-    return len((job.description or "").strip()) >= MIN_DESCRIPTION or bool(job.skills_required)
 
 
 def _triage(todo, results, profile, cv, profile_fp, key, session, now):
@@ -144,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         fp = offer_fingerprint(job)
         # Przesiew idzie po każdej ofercie, także ocenionej: jest darmowy, a nowa
         # reguła ma zdjąć z listy także oferty ocenione przed jej dodaniem.
-        reason = reject_reason(job, profile) if _has_content(job) else "brak_opisu"
+        reason = reject_reason(job, profile)
         if reason:
             filtered[reason] = filtered.get(reason, 0) + 1
             results[link] = {"percent": None, "filtered": reason, "answers": None,

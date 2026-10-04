@@ -1,24 +1,12 @@
 """
 Które oferty zniknęły już z portalu.
 
-Baza nie kasuje oferty w chwili, gdy portal ją zdejmuje - `purge_stale_offers`
-patrzy wyłącznie na wiek (`scraped_at` starsze niż 14 dni). Oferta zdjęta trzy
-dni po zescrapowaniu zostaje więc w bazie razem ze swoją oceną i potrafi stać
-wysoko w rankingu: 1 września 2026 połowa pierwszej dziesiątki „Dopasowanych"
-była martwa.
-
-Sygnałem jest `last_seen`. Każdy udany przebieg stempluje nim oferty, które
-w listingu faktycznie były, więc jeśli źródło zwróciło cokolwiek PO tej dacie,
-a tej oferty wśród tego nie było - portal jej już nie wystawia.
-
-Dni scrapowania czytamy z samych danych, nie z `scraper_status.json`: pole
-`history` dokłada się bez uzupełniania wstecz i dla większości źródeł ma dziś
-jeden wpis. Zbiór dat z `last_seen` jest kompletny z definicji.
-
-Sprawdzone 1 września 2026 na dwóch portalach, po 10 i 8 ofert w każdą stronę:
-**18 z 18 ofert pominiętych przez ostatni przebieg było zdjętych** („Oferta
-archiwalna" na RocketJobs, strona wygaszona na JustJoin), a **18 z 18 ofert
-widzianych tego dnia było żywych**. Rozdzielenie bez ani jednego wyjątku.
+Sygnałem jest `last_seen`: udany przebieg stempluje nim oferty, które w listingu
+faktycznie były. Brak oferty w nowszym przebiegu znaczy „zdjęta" tylko wtedy, gdy
+listing tego źródła obejmuje wszystko w swoim zakresie, a oferta była widziana
+już przy obecnym zakresie. Oba warunki zapisuje main_scraper w `scraper_status.json`
+(pole `liveness`: `scope` i `since`, dzień pierwszego przebiegu z tym zakresem);
+źródło bez tego pola nie oznacza ofert jako zdjętych.
 """
 
 from collections import defaultdict
@@ -46,29 +34,28 @@ def dni_scrapowania(jobs):
     return dni
 
 
-def zdjete_z_portalu(jobs):
+def zdjete_z_portalu(jobs, status: dict):
     """
     Zbiór linków ofert, których portal już nie wystawia.
 
-    Oferta jest zdjęta, gdy jej źródło zwróciło coś w dniu późniejszym niż jej
-    własne `last_seen`. Brak `last_seen` przy istniejącej historii źródła też
-    się liczy - to zapisy sprzed wprowadzenia tego pola, czyli sprzed miesięcy.
+    `status` to zawartość `scraper_status.json`. Oferta jest zdjęta, gdy jej źródło
+    ma wpis `liveness`, oferta była widziana w dniu `since` albo później, a źródło
+    zwróciło coś w dniu późniejszym niż jej `last_seen`.
 
     Świadomie NIE kasujemy takich ofert z bazy: gdyby reguła kiedyś się myliła,
-    ukrycie da się cofnąć, a skasowanie kosztowałoby ponowne płatne ocenianie.
+    plakietkę da się cofnąć, a skasowanie kosztowałoby ponowne płatne ocenianie.
     """
-    dni = dni_scrapowania(jobs)
-    ostatni = {zrodlo: max(d) for zrodlo, d in dni.items() if d}
+    ostatni = {zrodlo: max(d) for zrodlo, d in dni_scrapowania(jobs).items() if d}
 
     zdjete = set()
     for job in jobs:
         zrodlo = _pole(job, "source")
+        wpis = (status.get(zrodlo) or {}).get("liveness") or {}
         koniec = ostatni.get(zrodlo)
-        if not koniec:
-            # Źródło nie ma ani jednego stempla - nie ma jak orzec
-            continue
         znacznik = _pole(job, "last_seen")
-        if not znacznik or znacznik[:10] < koniec:
+        if not wpis.get("since") or not koniec or not znacznik:
+            continue
+        if wpis["since"] <= znacznik[:10] < koniec:
             link = _pole(job, "link")
             if link:
                 zdjete.add(link)

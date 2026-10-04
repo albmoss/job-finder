@@ -6,7 +6,6 @@ import { navigate, paths, useRoute } from './router';
 import { SCREENS } from './screens';
 import { LaunchModal } from './shell/LaunchModal';
 import { MarkSentModal, type MarkSentState } from './shell/MarkSentModal';
-import { MiniPipelineCard } from './shell/MiniPipelineCard';
 import { SettingsModal } from './shell/SettingsModal';
 import { Toasts, useToasts } from './shell/Toasts';
 import { TopBar } from './shell/TopBar';
@@ -211,18 +210,16 @@ export function App() {
 
   const Screen = SCREENS[route.name];
   const minimal = route.name === 'start' || route.name === 'postep';
-  const showMiniCard = pipelineBusy && !minimal;
   const blockedByGate = cvMissing && route.name !== 'start' && route.name !== 'postep';
 
   return (
     <AppContext.Provider value={context}>
       <div className="app">
-        <TopBar minimal={minimal} />
+        <TopBar minimal={minimal} running={pipelineBusy} />
         <main className="workspace">{!blockedByGate && <Screen key={route.path} route={route} />}</main>
       </div>
       <div className="dock">
         <Toasts toasts={toasts} dismiss={dismiss} />
-        {showMiniCard && <MiniPipelineCard />}
       </div>
       {launchOpen && <LaunchModal onClose={() => setLaunchOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}

@@ -95,7 +95,7 @@ NOFLUFF_CATEGORIES = {
 
 class NoFluffScraper(BaseScraper):
     """Scraper NoFluffJobs na wewnętrznym API - bez przeglądarki."""
-    DEFAULT_MAX_DETAILS = 500
+    DEFAULT_MAX_DETAILS = 1500
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -103,6 +103,7 @@ class NoFluffScraper(BaseScraper):
         self.skip_known_details = portal_cfg.get("skip_known_details", True)
         self.max_details = portal_cfg.get("max_details", self.DEFAULT_MAX_DETAILS)
         self.seen_again_links = []
+        self.liveness_scope = None
 
 
     def get_source_name(self) -> str:
@@ -138,10 +139,11 @@ class NoFluffScraper(BaseScraper):
             logger.debug(f"NFJ API: nie udało się pobrać kategorii z HTML ({e}), używam słownika zapasowego")
         return dict(NOFLUFF_CATEGORIES)
 
-    def _search(self, session: requests.Session, criteria: dict, label: str) -> list:
-        """Pobierz wszystkie strony wyników dla jednego zestawu kryteriów."""
+    def _search(self, session: requests.Session, criteria: dict, label: str) -> tuple[list, bool]:
+        """Pobierz wszystkie strony wyników dla jednego zestawu kryteriów; drugi element: bez błędu."""
         postings_by_id = {}
         page = 1
+        complete = True
 
         while True:
             try:
@@ -149,11 +151,13 @@ class NoFluffScraper(BaseScraper):
                                     headers=HEADERS, timeout=30)
                 if resp.status_code == 403:
                     logger.warning("NFJ API: 403 Forbidden — API may have changed or is blocking")
+                    complete = False
                     break
                 resp.raise_for_status()
                 data = resp.json()
             except requests.RequestException as e:
                 logger.error(f"NFJ API: Search request failed ({label}): {e}")
+                complete = False
                 break
 
             postings = data.get("postings", data.get("items", []))
@@ -170,28 +174,60 @@ class NoFluffScraper(BaseScraper):
             page += 1
             time.sleep(0.5)
 
-        return list(postings_by_id.values())
+        return list(postings_by_id.values()), complete
 
     @staticmethod
-    def _in_scope(posting: dict, target_city: str) -> bool:
-        """Oferta z docelowego miasta albo w pełni zdalna."""
-        if posting.get("fullyRemote"):
-            return True
+    def _places(data: dict) -> list:
+        location = (data or {}).get("location") or {}
+        if not isinstance(location, dict):
+            return []
+        return [p for p in (location.get("places") or []) if isinstance(p, dict)]
 
-        target = target_city.lower()
-        location = posting.get("location") or {}
-        if isinstance(location, dict):
-            if location.get("fullyRemote"):
+    @staticmethod
+    def _is_remote_place(place: dict) -> bool:
+        return str(place.get("city") or "").strip().lower() == "remote" or bool(place.get("remote"))
+
+    @classmethod
+    def _remote_possible(cls, posting: dict, detail: dict | None = None) -> bool:
+        for data in (posting, detail or {}):
+            location = data.get("location") or {}
+            if data.get("fullyRemote") or (isinstance(location, dict) and location.get("fullyRemote")):
                 return True
-            for place in (location.get("places") or []):
-                if isinstance(place, dict):
-                    city = str(place.get("city", "")).lower()
-                    if target in city or "remote" in city or place.get("remote"):
-                        return True
-            city = str(location.get("city", "")).lower()
-            if target in city or "remote" in city:
+            if any(cls._is_remote_place(p) for p in cls._places(data)):
                 return True
         return False
+
+    @classmethod
+    def _in_scope(cls, posting: dict, target_city: str) -> bool:
+        """Oferta z docelowego miasta albo z możliwością pracy zdalnej."""
+        if cls._remote_possible(posting):
+            return True
+        target = target_city.lower()
+        location = posting.get("location") or {}
+        cities = [str(p.get("city") or "") for p in cls._places(posting)]
+        if isinstance(location, dict):
+            cities.append(str(location.get("city") or ""))
+        return any(target in city.lower() for city in cities)
+
+    @classmethod
+    def _variant_slugs(cls, posting: dict) -> list:
+        own = posting.get("url") or posting.get("slug") or posting.get("id") or ""
+        slugs = [own] + [p.get("url") for p in cls._places(posting) if p.get("url")]
+        return [s for s in dict.fromkeys(slugs) if s]
+
+    @classmethod
+    def _pick_variant(cls, group: list, target_city: str) -> dict:
+        target = target_city.lower()
+
+        def own_place(posting):
+            url = posting.get("url")
+            return next((p for p in cls._places(posting) if p.get("url") == url), {})
+
+        for wanted in (lambda p: target in str(p.get("city") or "").lower(), cls._is_remote_place):
+            for posting in group:
+                if wanted(own_place(posting)):
+                    return posting
+        return group[0]
 
     def _fetch_listings(self, session: requests.Session) -> list:
         """
@@ -212,23 +248,30 @@ class NoFluffScraper(BaseScraper):
             criteria["category"] = picked_categories
 
         label_cats = f" [{len(picked_categories)} cats]" if picked_categories else ""
-        postings = self._search(
+        postings, complete = self._search(
             session,
             criteria,
             f"PL {','.join(seniority)}{label_cats}",
         )
+        if complete:
+            self.liveness_scope = "|".join([target_city, ",".join(seniority), ",".join(sorted(picked_categories or []))])
 
-        unique = {}
+        groups = {}
+        in_scope = 0
         for posting in postings:
-            key = posting.get("url") or posting.get("id")
-            if key and key not in unique and self._in_scope(posting, target_city):
-                unique[key] = posting
+            if not self._in_scope(posting, target_city):
+                continue
+            in_scope += 1
+            key = posting.get("reference") or posting.get("url") or posting.get("id")
+            if key:
+                groups.setdefault(key, []).append(posting)
+        unique = [self._pick_variant(group, target_city) for group in groups.values()]
 
         logger.info(
-            f"NFJ API: {len(postings)} offers in PL -> {len(unique)} matching "
-            f"({target_city} lub zdalne)"
+            f"NFJ API: {len(postings)} offers in PL -> {in_scope} matching "
+            f"({target_city} lub zdalne) -> {len(unique)} unique offers"
         )
-        return list(unique.values())
+        return unique
 
     def _fetch_detail(self, session: requests.Session, slug: str) -> dict:
         url = f"{DETAIL_URL}/{slug}"
@@ -280,14 +323,16 @@ class NoFluffScraper(BaseScraper):
 
         # Tryb pracy
         modes = []
-        if posting.get("fullyRemote") or (detail.get("location") or {}).get("fullyRemote"):
+        if self._remote_possible(posting, detail):
             modes.append("remote")
         loc_data = detail.get("location") or posting.get("location") or {}
-        if isinstance(loc_data, dict):
-            if loc_data.get("hybridDesc"):
-                modes.append("hybrid")
-            elif not modes and loc_data.get("places"):
-                modes.append("onsite")
+        places = self._places(detail) or self._places(posting)
+        cities = [str(p.get("city")).strip() for p in places
+                  if p.get("city") and not self._is_remote_place(p)]
+        if isinstance(loc_data, dict) and loc_data.get("hybridDesc"):
+            modes.append("hybrid")
+        elif not modes and cities:
+            modes.append("onsite")
         work_modes = norm_work_modes(modes)
 
         # Umiejętności: wymagane i mile widziane
@@ -340,17 +385,12 @@ class NoFluffScraper(BaseScraper):
         valid_through = detail.get("expiresAt") or None
 
         # Lokalizacja
-        location_data = posting.get("location", {})
-        location = None
-        if isinstance(location_data, dict):
-            places = location_data.get("places", [])
-            if places and isinstance(places[0], dict):
-                location = places[0].get("city")
-            if not location:
-                location = location_data.get("city")
         cfg = getattr(self, "config", {})
         default_city = (cfg.get("nofluffjobs", {}) or {}).get("location") or cfg.get("location", "Warszawa")
-        location = location or scope_city(default_city)
+        target = scope_city(default_city).lower()
+        location = next((c for c in cities if target in c.lower()), None) or (cities[0] if cities else None)
+        if not location and "remote" in (work_modes or ()):
+            location = "Polska"
 
         logos = posting.get("logo") or {}
         logo_raw = next((logos[k] for k in LOGO_SIZES if logos.get(k)), None) if isinstance(logos, dict) else None
@@ -388,16 +428,19 @@ class NoFluffScraper(BaseScraper):
             logger.info(f"NFJ API: Fetched {len(postings)} listing summaries")
 
             if getattr(self, "skip_known_details", True):
-                from utils.known_links import known_links
-                known = known_links()
+                from utils.known_links import known_links, stored_links
+                known, stored = known_links(), stored_links()
                 fresh = []
                 for posting in postings:
-                    slug = posting.get("url", posting.get("slug", posting.get("id", "")))
-                    link = f"https://nofluffjobs.com/pl/job/{slug}"
-                    if link in known:
-                        self.seen_again_links.append(link)
-                    else:
-                        fresh.append(posting)
+                    links = [f"https://nofluffjobs.com/pl/job/{s}" for s in self._variant_slugs(posting)]
+                    seen = [link for link in links if link in known]
+                    if seen:
+                        self.seen_again_links.extend(seen)
+                        continue
+                    placeholder = next((link for link in links if link in stored), None)
+                    if placeholder:
+                        posting = dict(posting, url=placeholder.rsplit("/", 1)[-1])
+                    fresh.append(posting)
                 logger.info(
                     f"NFJ API: {len(fresh)} new offers, "
                     f"{len(self.seen_again_links)} already in the database (skipped)"
@@ -405,6 +448,12 @@ class NoFluffScraper(BaseScraper):
                 postings = fresh
 
             max_details = getattr(self, "max_details", self.DEFAULT_MAX_DETAILS)
+            if len(postings) > max_details:
+                logger.warning(
+                    f"NoFluffJobs: {len(postings) - max_details} offers over the {max_details} "
+                    f"detail limit saved without a description - the next run fetches them"
+                )
+            fetched = 0
             for i, posting in enumerate(postings):
                 slug = posting.get("url", posting.get("slug", posting.get("id", "")))
                 if not slug:
@@ -413,7 +462,10 @@ class NoFluffScraper(BaseScraper):
                 detail = {}
                 if i < max_details:
                     detail = self._fetch_detail(session, slug)
+                    fetched += bool(detail)
                     time.sleep(0.5)
+                    if (i + 1) % 100 == 0:
+                        logger.info(f"NoFluffJobs: {i + 1}/{min(len(postings), max_details)} descriptions")
 
                 try:
                     job = self._parse_posting(posting, detail)
@@ -421,6 +473,7 @@ class NoFluffScraper(BaseScraper):
                 except Exception as e:
                     logger.warning(f"NFJ API: Failed to parse posting {slug}: {e}")
 
+            logger.info(f"NoFluffJobs: fetched {fetched}/{min(len(postings), max_details)} descriptions")
         except Exception as e:
             logger.error(f"NFJ API: Scraping failed: {e}")
         finally:

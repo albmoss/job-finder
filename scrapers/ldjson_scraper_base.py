@@ -7,9 +7,8 @@ JobPosting, filtry zakresu - jest identyczna, więc siedzi tutaj. To ten sam uk�
 co `candidate_api_base.py`, który w ten sposób obsługuje JustJoin.it i RocketJobs.
 
 Dlaczego strony szczegółów, a nie same listingi: listing daje wyłącznie tytuł i
-link. Opis z ld+json na stronie oferty ma 700-1700 znaków, a ofertę z opisem
-krótszym niż 150 znaków (i bez listy umiejętności) matching/run.py pomija jako
-`brak_opisu`. Bez pobrania szczegółów każda oferta z tych portali by odpadła.
+link. Opis z ld+json na stronie oferty ma 700-1700 znaków; bez niego Jev ocenia
+ofertę po samym tytule.
 """
 
 import logging
@@ -74,6 +73,7 @@ class LdJsonPortalScraper:
     # Domyślne ograniczniki - podklasa może nadpisać, config użytkownika ma pierwszeństwo
     DEFAULT_MAX_PAGES = 15
     DEFAULT_MAX_OFFERS = 400
+    REPORTS_LIVENESS = False
 
     # Odstęp między żądaniami jest ADAPTACYJNY. Zmierzone na przebiegu z 23.08:
     # praca.pl i aplikuj.pl wypuściły ponad 2600 żądań przy 0.6 s i nie oddały
@@ -130,6 +130,7 @@ class LdJsonPortalScraper:
         self._cooldown_until = 0.0
         self._interval = self.MIN_REQUEST_INTERVAL
         self._clean_streak = 0
+        self.liveness_scope = None
 
     # --- interfejs do nadpisania ---------------------------------------------
 
@@ -456,6 +457,8 @@ class LdJsonPortalScraper:
             logger.warning(f"{self.SOURCE_NAME}: no offer links found - "
                            f"the board may have changed its listing structure")
             return []
+        if self.REPORTS_LIVENESS:
+            self.liveness_scope = f"{self.city_slug}|{self.max_pages}|{self.max_offers}"
 
         # Najpierw odsiew po bazie, dopiero potem po tytule: `seen_again_links`
         # ma objąć wszystko, co nadal wisi na portalu, także oferty seniorskie -

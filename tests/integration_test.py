@@ -70,13 +70,6 @@ def test_text_cleaning():
     check("title inside the first sentence keeps the whole sentence",
           format_description(mid, drop_prefix=title) == [mid])
 
-    from matching.run import _has_content
-    from utils.data_models import Job
-    stub = Job(title="Tester", company="Firma", link="https://a.pl/x", source="JustJoinIT",
-               description="Oferta z JustJoinIT: Tester", skills_required=["Selenium"])
-    check("a placeholder with a portal skills list still goes to scoring", _has_content(stub))
-
-
 
 def test_safe_io():
     print("\n[4] Safe writes")
@@ -507,41 +500,56 @@ def test_olx_tempo_przy_blokadzie():
 
 def test_zdjete_z_portalu():
     """
-    Oferta pominięta przez najnowszy przebieg swojego źródła jest zdjęta.
+    Oferta pominięta przez nowszy przebieg jest zdjęta tylko przy pełnym listingu
+    źródła i tylko wtedy, gdy była widziana już przy obecnym zakresie.
 
-    `purge_stale_offers` patrzy wyłącznie na wiek, więc oferta zdjęta z portalu
-    trzy dni po zescrapowaniu zostawała w bazie razem ze swoją oceną. 1 września
-    2026 połowa pierwszej dziesiątki „Dopasowanych" była martwa. Sprawdzone
-    wtedy na dwóch portalach: 18 z 18 ofert pominiętych przez ostatni przebieg
-    było zdjętych, 18 z 18 widzianych - żywych.
+    4 października 2026 sama reguła „nie było w nowszym przebiegu" oznaczyła 63%
+    listy: żywe oferty spoza nowego zakresu kategorii i spoza limitu stron.
     """
     print(chr(10) + "[11] Oferty zdjete z portalu")
 
     from utils.liveness import zdjete_z_portalu, dni_scrapowania
 
     baza = [
-        {"link": "a", "source": "X", "last_seen": "2026-09-01T10:00:00"},
-        {"link": "b", "source": "X", "last_seen": "2026-08-23T10:00:00"},
-        {"link": "c", "source": "X", "last_seen": None},
-        {"link": "d", "source": "Y", "last_seen": "2026-08-23T10:00:00"},
-        {"link": "e", "source": "Z", "last_seen": None},
+        {"link": "a", "source": "X", "last_seen": "2026-09-08T10:00:00"},
+        {"link": "b", "source": "X", "last_seen": "2026-09-05T10:00:00"},
+        {"link": "c", "source": "X", "last_seen": "2026-08-23T10:00:00"},
+        {"link": "d", "source": "X", "last_seen": None},
+        {"link": "e", "source": "Y", "last_seen": "2026-09-08T10:00:00"},
+        {"link": "f", "source": "Y", "last_seen": "2026-08-23T10:00:00"},
     ]
-    zdjete = zdjete_z_portalu(baza)
+    status = {"X": {"liveness": {"scope": "warszawa", "since": "2026-09-01"}}, "Y": {"history": []}}
+    zdjete = zdjete_z_portalu(baza, status)
 
     check("oferta z ostatniego przebiegu zostaje", "a" not in zdjete)
-    check("oferta pominieta przez nowszy przebieg jest zdjeta", "b" in zdjete)
-    check("brak last_seen przy historii zrodla tez liczy sie jako zdjeta",
-          "c" in zdjete)
-    check("zrodlo z jednym przebiegiem nie kasuje wlasnych ofert",
-          "d" not in zdjete, "Y ma tylko 2026-08-23")
-    check("zrodlo bez ani jednego stempla nie da sie ocenic",
-          "e" not in zdjete)
+    check("oferta pominieta przez nowszy przebieg przy tym samym zakresie jest zdjeta", "b" in zdjete)
+    check("oferta widziana ostatnio przed zmiana zakresu nie jest zdjeta", "c" not in zdjete)
+    check("oferta bez last_seen nie jest zdjeta", "d" not in zdjete)
+    check("zrodlo bez pelnego listingu nie oznacza ofert jako zdjetych",
+          "e" not in zdjete and "f" not in zdjete)
 
     dni = dni_scrapowania(baza)
     check("dni scrapowania czytane z ofert, nie z historii scrapera",
-          dni["X"] == {"2026-09-01", "2026-08-23"} and dni["Y"] == {"2026-08-23"},
+          dni["X"] == {"2026-09-08", "2026-09-05", "2026-08-23"} and dni["Y"] == {"2026-09-08", "2026-08-23"},
           str(dict(dni)))
-    check("zrodlo bez stempli nie ma wpisu", "Z" not in dni)
+
+    from utils.data_models import ScraperStatusManager
+    tmp = Path(tempfile.mkdtemp(prefix="test_liveness_"))
+    try:
+        mgr = ScraperStatusManager(str(tmp / "status.json"))
+        mgr.record_liveness_scope("X", "warszawa|junior")
+        first = mgr.load_status()["X"]["liveness"]
+        mgr._write({"X": {"liveness": dict(first, since="2026-09-01")}})
+        mgr.record_liveness_scope("X", "warszawa|junior")
+        check("ten sam zakres nie przesuwa daty since",
+              mgr.load_status()["X"]["liveness"]["since"] == "2026-09-01")
+        mgr.record_liveness_scope("X", "warszawa|junior,mid")
+        check("zmiana zakresu zaczyna liczenie od dzisiaj",
+              mgr.load_status()["X"]["liveness"]["since"] != "2026-09-01")
+        mgr.record_liveness_scope("X", None)
+        check("niepelny listing usuwa wpis", "liveness" not in mgr.load_status()["X"])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_olx_fetch_rownolegly():
@@ -661,6 +669,92 @@ def test_olx_fetch_rownolegly():
         check("czesciowa blokada nie przerywa calosci",
               scraper.enrich_stats["ok"] == 65,
               str(scraper.enrich_stats))
+
+        class StronaPadajaca(StronaFetch):
+            def __init__(self, kody, padnij_przy):
+                super().__init__(kody)
+                self.padnij_przy = padnij_przy
+                self.zamknieta = False
+
+            def is_closed(self):
+                return self.zamknieta
+
+            def close(self):
+                self.zamknieta = True
+
+            def evaluate(self, js, arg):
+                if len(self.odstepy) + 1 == self.padnij_przy:
+                    self.odstepy.append(None)
+                    raise RuntimeError("Page.evaluate: Target crashed")
+                return super().evaluate(js, arg)
+
+        class Kontekst:
+            def __init__(self):
+                self.strony = []
+
+            def new_page(self):
+                strona = StronaPadajaca(lambda n: 200, padnij_przy=0)
+                strona.set_default_timeout = lambda t: None
+                self.strony.append(strona)
+                return strona
+
+        scraper = object.__new__(olx.OLXScraper)
+        scraper.page = StronaPadajaca(lambda n: 200, padnij_przy=2)
+        scraper.context = Kontekst()
+        scraper.timeout = 1000
+        scraper.seen_again_links = []
+        scraper.enrich_descriptions(zbuduj(60))
+        check("po padnieciu karty fetch rusza na nowej i nie gubi ofert",
+              scraper.enrich_stats["ok"] == 60 and len(scraper.context.strony) == 1,
+              f"{scraper.enrich_stats}, nowych kart: {len(scraper.context.strony)}")
+
+        class StronaListingu:
+            def __init__(self, padnieta):
+                self.padnieta = padnieta
+
+            def is_closed(self):
+                return False
+
+            def close(self):
+                pass
+
+            def goto(self, *a, **k):
+                if self.padnieta:
+                    raise RuntimeError("Page.goto: Page crashed")
+                return type("R", (), {"status": 200, "text": lambda s: "<html>ok</html>"})()
+
+        class KontekstListingu:
+            def new_page(self):
+                strona = StronaListingu(padnieta=False)
+                strona.set_default_timeout = lambda t: None
+                return strona
+
+        scraper = object.__new__(olx.OLXScraper)
+        scraper.page = StronaListingu(padnieta=True)
+        scraper.context = KontekstListingu()
+        scraper.timeout = 1000
+        scraper.max_retries = 3
+        scraper.delay = 0
+        check("listing po padnieciu karty wchodzi na nowej",
+              scraper._wejdz_i_wez_html("https://www.olx.pl/praca/x/") == "<html>ok</html>")
+
+        class Strona404(StronaListingu):
+            wejscia = 0
+
+            def goto(self, *a, **k):
+                Strona404.wejscia += 1
+                return type("R", (), {"status": 404, "text": lambda s: "<html>Ups</html>"})()
+
+        scraper.page = Strona404(padnieta=False)
+        check("martwy slug (404) to porazka listingu, bez ponawiania",
+              scraper._wejdz_i_wez_html("https://www.olx.pl/praca/x/") is None
+              and Strona404.wejscia == 1, f"wejsc: {Strona404.wejscia}")
+
+        import utils.scraper_health as sh
+        werdykt = sh.check("OLX Praca", 500, failed_parts=["praktyki-staze"])
+        check("kategoria bez listingu nie jest cichym sukcesem",
+              bool(werdykt) and werdykt["verdict"] == "degraded"
+              and "praktyki-staze" in werdykt["detail"], str(werdykt))
     finally:
         kl.known_links = prawdziwe_known
 

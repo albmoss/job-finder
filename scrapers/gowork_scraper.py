@@ -30,6 +30,7 @@ class GoWorkScraper(LdJsonPortalScraper):
 
     DEFAULT_MAX_PAGES = 10
     DEFAULT_MAX_OFFERS = 400
+    REPORTS_LIVENESS = True
 
     # GoWork tnie ostrzej niż praca.pl i aplikuj.pl: przy 0.6 s i 3 wątkach sypał
     # HTTP 429 kilkanaście razy na 400 pobrań. Sondowanie krótkimi seriami nie

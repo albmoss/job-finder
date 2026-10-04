@@ -29,6 +29,7 @@ class PracaPlScraper(LdJsonPortalScraper):
 
     DEFAULT_MAX_PAGES = 15
     DEFAULT_MAX_OFFERS = 400
+    REPORTS_LIVENESS = True
 
     def __init__(self, config: dict):
         super().__init__(config)
