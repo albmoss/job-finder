@@ -26,7 +26,7 @@ potrafi szukać na to samo stanowisko w dwóch miastach do dwóch różnych zesp
 
 WAŻNE: przy wyborze, który duplikat zachować, oferta z decyzją użytkownika ma
 pierwszeństwo przed dłuższym opisem. Inaczej deduplikacja kasowała ofertę,
-którą oceniłeś, a ocena traciła powiązanie i przepadała.
+którą zapisałeś albo ukryłeś, a decyzja traciła powiązanie i przepadała.
 
 Bez pandas celowo: `to_dict('records')` wstawia NaN w brakujące pola, a NaN
 serializuje się do JSON-a jako gołe `NaN`, czego nie da się potem wczytać.
@@ -196,7 +196,7 @@ def _plan(all_jobs: dict, decided: set) -> tuple:
     Decyzja musi powstać na unii, a nie osobno per plik: pliki mają różną
     zawartość (8453 vs 8325 rekordów) i różne długości opisów, więc niezależna
     deduplikacja wybierała innego zwycięzcę w 18 grupach - a to dokładnie ten
-    rozjazd, przez który ocena zostaje bez oferty.
+    rozjazd, przez który decyzja zostaje bez oferty.
 
     Zwraca (zbiór linków do zachowania, {link_główny: [proweniencja]}).
     """
@@ -239,9 +239,9 @@ def _plan(all_jobs: dict, decided: set) -> tuple:
             l,
         ))
 
-        # Oferty z decyzją NIE są ze sobą scalane. Ta sama praca oceniona na
+        # Oferty z decyzją NIE są ze sobą scalane. Ta sama praca zapisana na
         # dwóch portalach to dwie decyzje w user_decisions.json - zostawienie
-        # jednego rekordu osierociłoby drugą ocenę. Scalanie i tak nic by tu
+        # jednego rekordu osierociłoby drugą decyzję. Scalanie i tak nic by tu
         # nie dało: te oferty są już przeanalizowane, więc nie kosztują tokenów.
         decided_links = [l for l in links if l in decided]
         if decided_links:
@@ -297,12 +297,12 @@ def _apply(path: Path, keep: set, provenance: dict, decided: set, data=None):
             scalone += 1
         final.append(job)
 
-    # Sanity check: żadna oceniona oferta nie mogła zniknąć
+    # Sanity check: żadna oferta z decyzją nie mogła zniknąć
     before = sum(1 for j in data if canonical_link(j.get("link", "")) in decided)
     after = sum(1 for j in final if canonical_link(j.get("link", "")) in decided)
     if after < before:
         logger.error(
-            f"Deduplication would remove {before - after} rated offers "
+            f"Deduplication would remove {before - after} offers with a decision "
             f"- aborting the write to {path.name}."
         )
         return
@@ -353,7 +353,7 @@ def run():
     if stats["extra_decided"]:
         logger.info(
             f"   kept {stats['extra_decided']} extra records carrying a decision "
-            f"(duplicates, but merging would orphan the rating)"
+            f"(duplicates, but merging would orphan the decision)"
         )
 
     _apply(path, keep, provenance, decided, data=data)

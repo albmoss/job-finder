@@ -25,6 +25,7 @@ from utils.safe_io import save_json_atomic, load_json_safe
 from utils.links import canonical_link
 from utils.candidate_scope import load_profile
 from utils.liveness import zdjete_z_portalu
+from utils.offer_check import zdjete_ze_sprawdzen
 from cv_tailor import store as cv_store
 
 logger = logging.getLogger(__name__)
@@ -296,8 +297,23 @@ class JobDataService:
                 except Exception as e:
                     logger.warning(f"Błąd wykrywania ofert zdjętych: {e}")
                     self.zdjete = set()
+                self.zdjete |= self._zdjete_linki(zdjete_ze_sprawdzen())
             self.data_loaded = True
             self._rev += 1
+
+    def _zdjete_linki(self, kanoniczne: Set[str]) -> Set[str]:
+        if not kanoniczne:
+            return set()
+        return {j.link for j in self.raw_jobs if canonical_link(j.link) in kanoniczne}
+
+    def oznacz_zdjete(self, links: Set[str]):
+        with self._lock:
+            self.ensure_loaded()
+            nowe = self._zdjete_linki({canonical_link(link) for link in links}) - self.zdjete
+            if nowe:
+                self.zdjete |= nowe
+                self._rev += 1
+
     def _raw_decision(self, link: str) -> Tuple[Optional[str], Any]:
         for key in (link, canonical_link(link)):
             if key in self.user_decisions:
@@ -315,7 +331,6 @@ class JobDataService:
             step = val.get("next_step")
             return {
                 "status": val.get("status"),
-                "rating": val.get("rating"),
                 "stage": val.get("stage"),
                 "decided_at": val.get("decided_at"),
                 "applied_at": val.get("applied_at"),
@@ -345,7 +360,6 @@ class JobDataService:
             now = datetime.now()
             data: Dict[str, Any] = {
                 "status": status,
-                "rating": old["rating"],
                 "decided_at": now.strftime("%Y-%m-%d %H:%M"),
             }
             if status == "apply":
@@ -370,7 +384,7 @@ class JobDataService:
             if val is None:
                 return False, "Oferta nie ma decyzji — najpierw ją zapisz."
             if isinstance(val, str):
-                val = {"status": val, "rating": None}
+                val = {"status": val}
             if note:
                 val["note"] = note
             else:
@@ -388,7 +402,7 @@ class JobDataService:
             if val is None:
                 return False, "Oferta nie ma decyzji — najpierw ją zapisz albo wyślij."
             if isinstance(val, str):
-                val = {"status": val, "rating": None}
+                val = {"status": val}
             if label:
                 val["next_step"] = {"label": label, "due": due}
             else:

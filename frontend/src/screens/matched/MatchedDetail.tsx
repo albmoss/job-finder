@@ -6,13 +6,13 @@ import {
   Check,
   Download,
   Ellipsis,
-  EyeOff,
   FilePenLine,
   FileText,
   Link,
   LoaderCircle,
   RotateCcw,
   Sparkles,
+  X,
 } from 'lucide-react';
 import { api } from '../../api';
 import { formatRelativeDay } from '../../format';
@@ -46,7 +46,9 @@ export function MatchedDetail({
   onCopyLink,
 }: MatchedDetailProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [moreBelow, setMoreBelow] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const hidden = offer.status === 'reject';
   const saved = offer.status === 'save';
   const added = formatRelativeDay(offer.scraped_at);
@@ -77,6 +79,21 @@ export function MatchedDetail({
     };
   }, [menuOpen]);
 
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const update = () => setMoreBelow(body.scrollTop + body.clientHeight < body.scrollHeight - 2);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(body);
+    for (const child of body.children) observer.observe(child);
+    body.addEventListener('scroll', update, { passive: true });
+    return () => {
+      observer.disconnect();
+      body.removeEventListener('scroll', update);
+    };
+  }, []);
+
   const runMenu = (action: () => void) => {
     setMenuOpen(false);
     action();
@@ -88,7 +105,6 @@ export function MatchedDetail({
         <span className="label">
           {offer.source}
           {added && ` / dodana ${added}`}
-          {offer.is_gone && ' / zdjęta z portalu'}
         </span>
         <div className="mo-menu-anchor" ref={menuRef}>
           <button
@@ -103,17 +119,6 @@ export function MatchedDetail({
           </button>
           {menuOpen && (
             <div className="menu panel mo-menu-right" role="menu">
-              {hidden ? (
-                <button type="button" className="menu-item" role="menuitem" disabled={busy} onClick={() => runMenu(onRestore)}>
-                  <RotateCcw />
-                  Przywróć
-                </button>
-              ) : (
-                <button type="button" className="menu-item" role="menuitem" disabled={busy} onClick={() => runMenu(onHide)}>
-                  <EyeOff />
-                  Ukryj tę ofertę
-                </button>
-              )}
               <button type="button" className="menu-item" role="menuitem" onClick={() => runMenu(onCopyLink)}>
                 <Link />
                 Skopiuj link
@@ -126,7 +131,19 @@ export function MatchedDetail({
       <div className="mo-identity">
         <CompanyLogo url={offer.logo_url} source={offer.source} size="lg" />
         <div className="mo-identity-text">
-          <h1 className="mo-detail-title">{offer.title}</h1>
+          <h1 className="mo-detail-title">
+            {offer.title}
+            <a
+              className="mo-title-link"
+              href={offer.link}
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Otwórz ogłoszenie"
+              title="Otwórz ogłoszenie"
+            >
+              <ArrowUpRight />
+            </a>
+          </h1>
           <p className="mo-detail-company">
             <span>{offer.company}</span>
             {place && (
@@ -136,6 +153,9 @@ export function MatchedDetail({
               </>
             )}
           </p>
+          {offer.is_gone && (
+            <p className="label warn">Ogłoszenie zdjęte z portalu.{hidden ? '' : ' Możesz je odrzucić.'}</p>
+          )}
         </div>
         {offer.match_percentage !== null && (
           <div className="mo-percent">
@@ -145,7 +165,7 @@ export function MatchedDetail({
         )}
       </div>
 
-      <div className="mo-detail-body scroll">
+      <div ref={bodyRef} className={`mo-detail-body scroll${moreBelow ? ' has-more' : ''}`}>
         <dl className="mo-facts">
           {facts.map(([label, value]) => (
             <div key={label} className="mo-fact">
@@ -189,6 +209,12 @@ export function MatchedDetail({
           <Check />
           Oznacz jako wysłane
         </button>
+        {!hidden && (
+          <button type="button" className="btn" disabled={busy} onClick={onHide}>
+            <X />
+            Odrzuć
+          </button>
+        )}
         <span className="mo-actions-spacer" />
         <a className="btn btn-primary" href={offer.link} target="_blank" rel="noreferrer">
           <ArrowUpRight />

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import type { CSSProperties, KeyboardEvent } from 'react';
 import {
   BookmarkCheck,
   Check,
@@ -27,6 +27,15 @@ const CARD_HEIGHT = 96;
 const CARD_GAP = 10;
 const PAGER_SPACE = 50;
 const SORT_LABELS: Record<OfferSort, string> = { match: 'Najlepsze dopasowanie', newest: 'Najnowsze' };
+const CHECK_BATCH = 10;
+
+async function goneAmong(items: OfferListItem[]): Promise<Set<string>> {
+  const links = items.filter((item) => !item.is_gone).map((item) => item.link);
+  const batches: Promise<{ gone: string[] }>[] = [];
+  for (let i = 0; i < links.length; i += CHECK_BATCH) batches.push(api.checkOffers(links.slice(i, i + CHECK_BATCH)));
+  const results = await Promise.all(batches);
+  return new Set(results.flatMap((res) => res.gone));
+}
 
 export function MatchedScreen({ route }: ScreenProps) {
   const app = useApp();
@@ -96,6 +105,13 @@ export function MatchedScreen({ route }: ScreenProps) {
         }
         setList(res);
         setListError(null);
+        goneAmong(res.items).then((gone) => {
+          if (cancelled || gone.size === 0) return;
+          const mark = <T extends { link: string }>(offer: T): T =>
+            gone.has(offer.link) ? { ...offer, is_gone: true } : offer;
+          setList((prev) => prev && { ...prev, items: prev.items.map(mark) });
+          setDetail((prev) => prev && mark(prev));
+        }, () => undefined);
       })
       .catch((err) => {
         if (!cancelled) setListError(errorMessage(err));
@@ -468,10 +484,12 @@ function OfferCard({ item, active, hidden, busy, onSelect, onRestore }: OfferCar
             </button>
           )}
         </div>
+        <span
+          className="mo-card-track"
+          aria-hidden="true"
+          style={{ '--fill': `${Math.max(0, Math.min(100, percent))}%` } as CSSProperties}
+        />
       </div>
-      <span className="mo-card-track" aria-hidden="true">
-        <span className="mo-card-fill" style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
-      </span>
     </div>
   );
 }

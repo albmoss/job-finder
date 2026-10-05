@@ -10,7 +10,7 @@ Skrypt sprowadza linki do postaci kanonicznej (bez query stringa) w:
   - user_decisions.json
 match_results.json ma klucze kanoniczne od początku (matching/run.py).
 
-Przy kolizjach zachowuje rekord bogatszy (dłuższy opis / decyzja z oceną).
+Przy kolizjach zachowuje rekord bogatszy (dłuższy opis / decyzja z datą wysłania).
 Idempotentny - można uruchamiać wielokrotnie.
 """
 
@@ -30,8 +30,6 @@ def decision_richness(val) -> int:
     """Im wyższa wartość, tym cenniejszy rekord decyzji (przy kolizji wygrywa)."""
     if isinstance(val, dict):
         score = 10
-        if val.get("rating") is not None:
-            score += 100          # ręczna ocena to najcenniejsze, co mamy
         if val.get("applied_at"):
             score += 20
         if val.get("status") in ("save", "apply", "aspirational"):
@@ -83,16 +81,7 @@ def migrate_decisions():
         else:
             merged[key] = val
 
-    rated_before = sum(1 for v in decisions.values() if isinstance(v, dict) and v.get("rating") is not None)
-    rated_after = sum(1 for v in merged.values() if isinstance(v, dict) and v.get("rating") is not None)
-
     print(f"  {DECISIONS}: {len(decisions)} -> {len(merged)} (kolizje: {collisions})")
-    print(f"     manual ratings preserved: {rated_before} -> {rated_after}")
-
-    if rated_after < rated_before:
-        print("     WARNING: manual ratings were lost - aborting the write for safety!")
-        return
-
     save_json_atomic(DECISIONS, merged, backup=True)
 
 

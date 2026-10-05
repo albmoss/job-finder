@@ -4,7 +4,7 @@ Purge Stale Offers
 Usuwa z jobs_database.json oferty, których portal od 14 dni nie pokazuje.
 
 Zachowuje:
-  - WSZYSTKIE oferty z decyzją użytkownika (rated/saved/rejected/aspirational)
+  - WSZYSTKIE oferty z decyzją użytkownika (zapisane, ukryte, wysłane)
   - oferty widziane na portalu w ciągu ostatnich 14 dni (`last_seen`)
 
 Liczy się `last_seen`, nie data pobrania: każdy przebieg scrapera odświeża go
@@ -12,11 +12,6 @@ ofertom, które nadal wiszą na liście portalu. Oferta wystawiona na 30 dni zos
 więc w bazie przez cały ten czas. Gdyby wypadła po 14 dniach od pobrania,
 następny przebieg wziąłby ją za nową - drugi raz pobierał jej stronę i płacił
 za ocenę. Usunięta zostaje dopiero oferta, której portal już nie pokazuje.
-
-Dodatkowo: oferty z RĘCZNĄ OCENĄ trafiają do rated_archive.json razem z procentem
-dopasowania. Powód: ocena przeżywa w user_decisions.json, ale sama oferta znikała
-z bazy - a bez tytułu, opisu i wyniku ta ocena jest bezużyteczna do ewaluacji
-rankingu. To jedyny zbiór walidacyjny, jaki mamy.
 """
 
 import os
@@ -31,9 +26,7 @@ from utils.safe_io import load_json_safe, save_json_atomic
 from utils.console import force_utf8
 
 JOBS_DB = "jobs_database.json"
-MATCH_RESULTS = "match_results.json"
 DECISIONS_FILE = "user_decisions.json"
-RATED_ARCHIVE = "rated_archive.json"
 
 
 def load_json(filepath):
@@ -43,43 +36,6 @@ def load_json(filepath):
 
 def save_json(filepath, data):
     save_json_atomic(filepath, data, backup=True)
-
-
-def archive_rated(jobs, results, decisions):
-    """
-    Dopisz do rated_archive.json każdą ofertę z ręczną oceną, wraz z procentem
-    dopasowania z match_results.json. Archiwum rośnie i nigdy nie jest
-    czyszczone - to nasz zbiór walidacyjny.
-    """
-    # Mapuj link kanoniczny -> dane decyzji (obsługa formatu słownikowego oraz niekanonicznych kluczy)
-    rated_by_canon = {}
-    for link, val in decisions.items():
-        if isinstance(val, dict) and val.get("rating") is not None:
-            rated_by_canon[canonical_link(link)] = val
-    if not rated_by_canon:
-        return 0
-
-    archive = load_json_safe(RATED_ARCHIVE, default=[])
-    existing = {canonical_link((a.get("job") or {}).get("link", "")) for a in archive}
-    jobs_by_link = {canonical_link(j.get("link", "")): j for j in jobs}
-
-    added = 0
-    for link, decision_val in rated_by_canon.items():
-        if link in existing:
-            continue
-        job = jobs_by_link.get(link)
-        if job is None:
-            continue  # oferty już nie ma w bazie - nie ma czego archiwizować
-        entry = {"job": job, "match_percentage": (results.get(link) or {}).get("percent")}
-        record = dict(entry)
-        record["user_rating"] = decision_val.get("rating") if isinstance(decision_val, dict) else None
-        record["archived_at"] = datetime.now().isoformat()
-        archive.append(record)
-        added += 1
-
-    if added:
-        save_json_atomic(RATED_ARCHIVE, archive, backup=True)
-    return added
 
 
 def main():
@@ -96,16 +52,10 @@ def main():
         decisions = {}
 
     # Porównujemy na postaci kanonicznej - inaczej ten sam link z parametrem
-    # śledzącym nie zostanie rozpoznany jako "oceniony" i oferta zostanie skasowana.
+    # śledzącym nie zostanie rozpoznany jako mający decyzję i oferta zostanie skasowana.
     decided_links = {canonical_link(k) for k in decisions.keys()}
     print(f"Loaded {len(jobs)} jobs from DB")
     print(f"{len(decided_links)} jobs have user decisions (protected)")
-
-    # Zarchiwizuj oceniane oferty ZANIM cokolwiek usuniemy
-    results = load_json_safe(MATCH_RESULTS, default={}) if os.path.exists(MATCH_RESULTS) else {}
-    archived = archive_rated(jobs, results if isinstance(results, dict) else {}, decisions)
-    if archived:
-        print(f"Archived {archived} rated offers -> {RATED_ARCHIVE}")
 
     # Determine which jobs to keep
     kept_jobs = []

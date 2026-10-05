@@ -38,6 +38,7 @@ rated_archive.json
 preference_profile.json
 candidate_profile.json
 match_results.json
+offer_checks.json
 category_scope.json
 base_cv.json
 cv_versions.json

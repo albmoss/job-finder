@@ -211,14 +211,13 @@ class PipelineProcessManager:
 
     def _init_stages(self, mode, stage=None):
         stages_def = [
-            # Profil z CV (PHASE 0.5) jest częścią etapu 00 - tor ma zostać siedmioetapowy.
-            {"id": "phase0", "num": "00", "title": "Archiwizacja i profil z CV", "pattern": r"PHASE 0(?:\.5)?\b"},
+            # Profil z CV (PHASE 0.5) jest częścią etapu 00 - tor ma zostać sześcioetapowy.
+            {"id": "phase0", "num": "00", "title": "Porządki i profil z CV", "pattern": r"PHASE 0(?:\.5)?\b"},
             {"id": "phase1", "num": "01", "title": "Pobieranie ofert ze źródeł", "pattern": r"PHASE 1\b(?![\.\d])"},
             {"id": "phase1_5", "num": "1.5", "title": "Normalizacja linków", "pattern": r"PHASE 1\.5\b"},
             {"id": "phase2", "num": "02", "title": "Deduplikacja bazy ofert", "pattern": r"PHASE 2\b(?![\.\d])"},
             {"id": "phase2_5", "num": "2.5", "title": "Czyszczenie opisów ofert", "pattern": r"PHASE 2\.5\b"},
             {"id": "phase3", "num": "03", "title": "Dopasowanie do CV", "pattern": r"PHASE 3\b"},
-            {"id": "phase4", "num": "04", "title": "Ewaluacja rankingu", "pattern": r"PHASE 4\b"},
         ]
         self._stages = []
         now = time.time()
@@ -400,21 +399,6 @@ class PipelineProcessManager:
             phase3 = stages.setdefault("phase3", {})
             phase3.update({"scored_now": int(m.group(1)), "errors": int(m.group(2)),
                            "with_percent": int(m.group(3))})
-            return
-
-        # Ewaluacja rankingu (eval_ranking.py): zgodność % dopasowania z ręcznymi ocenami.
-        m = re.search(r"Of those, with an AI score:\s*(\d+)", line)
-        if m:
-            stages.setdefault("phase4", {})["common"] = int(m.group(1))
-            return
-
-        if re.search(r"No manual ratings|Not enough common records", line):
-            stages.setdefault("phase4", {})["insufficient"] = True
-            return
-
-        m = re.search(r"Spearman correlation \(AI score vs rating\):\s*([+-]?[\d.]+)", line)
-        if m:
-            stages.setdefault("phase4", {})["rho"] = float(m.group(1))
             return
 
     def _release_finished_process(self):

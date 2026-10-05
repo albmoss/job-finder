@@ -552,6 +552,117 @@ def test_zdjete_z_portalu():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_sprawdzenie_ofert():
+    """
+    Znaczniki zdjętej oferty per portal (wycinki z prawdziwych stron, 05.10.2026)
+    i ważność wpisów w `offer_checks.json`. Bez sieci.
+    """
+    print(chr(10) + "[11b] Sprawdzenie ofert na portalu")
+
+    from datetime import datetime, timedelta
+    import utils.offer_check as oc
+
+    ld = '<script type="application/ld+json">{"@context":"https://schema.org","@type":"JobPosting","title":"Junior"}</script>'
+    jjit_paczka = '"expiredOfferAlert\\":\\"Offer expired\\",'
+    rj_paczka = '"expiredOfferAlert\\":\\"Oferta archiwalna\\",'
+    przypadki = [
+        ("praca.pl", "https://www.praca.pl/junior-front-end-developer_10000001.html", 200,
+         '<div class="offer-archive">Oferta pracy jest nieaktualna, zobacz podobne</div>' + ld, oc.GONE),
+        ("praca.pl", "https://www.praca.pl/doradca-ds-serwisu_10000002.html", 200, ld, oc.ALIVE),
+        ("GoWork", "https://www.gowork.pl/oferta/specjalista,AbCdEfGhIjKlMnOpQrSt01,warszawa", 200,
+         '<div class="g-job-offer-not-active" data-v-3d739413><span>Oferta pracy wygasła 9 dni temu. '
+         'Obejrzyj inne oferty - </span></div>' + ld, oc.GONE),
+        ("GoWork", "https://www.gowork.pl/oferta/kosztorysant,AbCdEfGhIjKlMnOpQrSt02,warszawa", 200, ld, oc.ALIVE),
+        ("aplikuj.pl 410", "https://www.aplikuj.pl/oferta/1000001/pomoc-nauczyciela", 410, "", oc.GONE),
+        ("aplikuj.pl", "https://www.aplikuj.pl/oferta/1000002/recepcjonista", 200,
+         '<div class="font-medium text-gray-900">\n    Pracodawca zakończył zbieranie CV na tę ofertę.\n</div>', oc.GONE),
+        ("aplikuj.pl", "https://www.aplikuj.pl/oferta/1000003/asystentka-stomatologiczna", 200, ld, oc.ALIVE),
+        ("SOLID.Jobs", "https://solid.jobs/offer-not-found/10001/forma-studio-platny-staz", 200,
+         "<title>SOLID.Jobs – Platforma rekrutacyjna dla specjalistów</title>", oc.GONE),
+        ("SOLID.Jobs", "https://solid.jobs/offer/10002/north-labs-ruby-on-rails-developer", 200, ld, oc.ALIVE),
+        ("JustJoinIT", "https://justjoin.it/job-offer/forma-studio-fullstack-developer-python-react--krakow-python", 200,
+         jjit_paczka + '<div class="MuiPaper-root MuiAlert-root MuiAlert-colorInfo" role="alert" title="Offer expired">',
+         oc.GONE),
+        ("JustJoinIT", "https://justjoin.it/job-offer/north-labs-machine-learning-engineer-warszawa-ai", 200,
+         jjit_paczka + ld, oc.ALIVE),
+        ("JustJoinIT 404", "https://justjoin.it/job-offer/usunieta-oferta-warszawa-java", 404, "", oc.GONE),
+        ("RocketJobs", "https://rocketjobs.pl/oferta/forma-studio-mlodszy-konsultant-warszawa-logistyka", 200,
+         rj_paczka + '<div class="MuiPaper-root MuiAlert-root" role="alert" title="Oferta archiwalna" '
+         'style="--Paper-shadow:none">', oc.GONE),
+        ("RocketJobs", "https://rocketjobs.pl/oferta/north-labs-mlodszy-specjalista-ds-marketingu-warszawa", 200,
+         rj_paczka + ld, oc.ALIVE),
+        ("NoFluffJobs", "https://nofluffjobs.com/pl/job/junior-project-manager-forma-studio-warszawa-2", 200,
+         '{"status":"EXPIRED","postingUrl":"junior-project-manager-forma-studio-warszawa-2"}'
+         '<p class="tw-mb-0"> Oferta pracy Junior Project Manager wygasła. </p>', oc.GONE),
+        ("NoFluffJobs", "https://nofluffjobs.com/pl/job/junior-devops-engineer-north-labs-remote-2", 200,
+         '{"status":"DISABLED","postingUrl":"junior-devops-engineer-north-labs-remote-2"}', oc.GONE),
+        ("NoFluffJobs", "https://nofluffjobs.com/pl/job/product-owner-k-m-forma-studio-warszawa", 200,
+         '{"status":"PUBLISHED","postingUrl":"product-owner-k-m-forma-studio-warszawa"}', oc.ALIVE),
+        ("RocketJobs 429", "https://rocketjobs.pl/oferta/x-warszawa", 429, "", oc.UNKNOWN),
+        ("praca.pl 403", "https://www.praca.pl/x_1.html", 403, "", oc.UNKNOWN),
+        ("GoWork 404", "https://www.gowork.pl/oferta/x,1,warszawa", 404, "", oc.UNKNOWN),
+        ("JustJoinIT captcha", "https://justjoin.it/job-offer/x", 200, "<title>Just a moment...</title>", oc.UNKNOWN),
+    ]
+    for nazwa, url, status, html, oczekiwany in przypadki:
+        stan = oc.stan_strony(oc.portal(url), status, url, html)
+        check(f"{nazwa} {status}: {oczekiwany}", stan == oczekiwany, stan)
+
+    check("sama paczka tlumaczen z 'Oferta archiwalna' nie oznacza zdjetej",
+          oc.stan_strony("candidate_api", 200, "https://rocketjobs.pl/oferta/x", rj_paczka + ld) == oc.ALIVE)
+
+    prawdziwy_get = oc.requests.get
+    zapytania = []
+    oc.requests.get = lambda *a, **k: zapytania.append(a)
+    try:
+        bez_zapytan = [oc.check_offer(link) for link in (
+            "https://www.pracuj.pl/praca/junior,oferta,1000",
+            "https://www.olx.pl/oferta/praca/kasjer-CID4-IDx.html",
+            "https://pl.linkedin.com/jobs/view/1",
+            "https://jobs.lever.co/firma/1",
+        )]
+        check("Pracuj/OLX/LinkedIn/ATS: unknown bez zapytania",
+              bez_zapytan == [oc.UNKNOWN] * 4 and not zapytania, str(bez_zapytan))
+    finally:
+        oc.requests.get = prawdziwy_get
+
+    teraz = datetime(2026, 10, 5, 12, 0)
+    check("zdjeta zostaje zdjeta na zawsze",
+          oc.aktualny({"state": "gone", "checked_at": "2026-01-01T00:00:00"}, teraz))
+    check("zywa sprzed 23 h nie jest sprawdzana ponownie",
+          oc.aktualny({"state": "alive", "checked_at": (teraz - timedelta(hours=23)).isoformat()}, teraz))
+    check("zywa sprzed 25 h jest sprawdzana ponownie",
+          not oc.aktualny({"state": "alive", "checked_at": (teraz - timedelta(hours=25)).isoformat()}, teraz))
+    check("nieznany stan sprzed 25 h jest sprawdzany ponownie",
+          not oc.aktualny({"state": "unknown", "checked_at": (teraz - timedelta(hours=25)).isoformat()}, teraz))
+    check("brak wpisu = do sprawdzenia", not oc.aktualny(None, teraz))
+
+    tmp = Path(tempfile.mkdtemp(prefix="test_offer_checks_"))
+    prawdziwa_sciezka, prawdziwy_check = oc.OFFER_CHECKS_PATH, oc.check_offer
+    sprawdzone = []
+    stany = {"https://www.praca.pl/a_1.html": oc.GONE, "https://www.praca.pl/b_2.html": oc.ALIVE}
+    oc.OFFER_CHECKS_PATH = tmp / "offer_checks.json"
+    oc.check_offer = lambda link: sprawdzone.append(link) or stany[link]
+    try:
+        linki = ["https://www.praca.pl/a_1.html?utm_source=x", "https://www.praca.pl/b_2.html",
+                 "https://www.pracuj.pl/praca/c,oferta,3"]
+        zdjete = oc.sprawdz_oferty(linki, teraz)
+        check("zwraca podany link zdjetej oferty", zdjete == {linki[0]}, str(zdjete))
+        check("Pracuj.pl nie trafia do sprawdzania", "https://www.pracuj.pl/praca/c,oferta,3" not in sprawdzone)
+        zapis = load_json_safe(oc.OFFER_CHECKS_PATH)
+        check("pamiec trzyma kanoniczny link ze stanem i czasem",
+              zapis.get("https://www.praca.pl/a_1.html", {}).get("state") == oc.GONE
+              and "checked_at" in zapis.get("https://www.praca.pl/b_2.html", {}), str(zapis))
+        sprawdzone.clear()
+        oc.sprawdz_oferty(linki, teraz + timedelta(hours=2))
+        check("w ciagu doby nic nie jest sprawdzane drugi raz", sprawdzone == [], str(sprawdzone))
+        oc.sprawdz_oferty(linki, teraz + timedelta(hours=25))
+        check("po dobie wraca tylko zywa", sprawdzone == ["https://www.praca.pl/b_2.html"], str(sprawdzone))
+        check("zdjete ze sprawdzen do plakietki", oc.zdjete_ze_sprawdzen() == {"https://www.praca.pl/a_1.html"})
+    finally:
+        oc.OFFER_CHECKS_PATH, oc.check_offer = prawdziwa_sciezka, prawdziwy_check
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_olx_fetch_rownolegly():
     """
     Opisy ida przez `fetch` w stronie, a blokada nadal przerywa dociąganie.
@@ -940,9 +1051,8 @@ def test_pipeline_stop_and_resume_lifecycle():
     try:
         os.chdir(temp_dir)
 
-        # 1. Real run_pipeline lifecycle: initial checkpoint inside phase0 and stop before phase4
+        # 1. Real run_pipeline lifecycle: initial checkpoint inside phase0 and stop during matching
         phase0_saw_checkpoint = {"seen": False, "has_options": False}
-        phase4_called = {"called": False}
 
         def fake_purge():
             # Executed during Phase 0: verify initial checkpoint was already persisted!
@@ -957,17 +1067,12 @@ def test_pipeline_stop_and_resume_lifecycle():
             t_stop_flag.touch()
             return 1
 
-        def fake_eval():
-            phase4_called["called"] = True
-            return True
-
         with patch.object(pipeline, "purge_stale_offers") as mock_p0, \
              patch.object(pipeline, "migrate_normalize_links") as mock_p1_5, \
              patch.object(pipeline, "deduplicate_db") as mock_p2, \
              patch.object(pipeline, "clean_db") as mock_p2_5, \
              patch.object(pipeline, "JobDatabase") as mock_db_cls, \
-             patch("matching.run.main", side_effect=fake_matching_stopping), \
-             patch("eval_ranking.main", side_effect=fake_eval):
+             patch("matching.run.main", side_effect=fake_matching_stopping):
 
             mock_p0.main = fake_purge
             mock_p1_5.main = lambda: True
@@ -985,7 +1090,6 @@ def test_pipeline_stop_and_resume_lifecycle():
         check("initial checkpoint preserves options inside phase0", phase0_saw_checkpoint["has_options"] is True)
         check("run_pipeline returned False on user stop", res is False)
         check("run_pipeline printed PIPELINE STOPPED", "PIPELINE STOPPED" in run_output)
-        check("phase4 was NOT called after matching stop", phase4_called["called"] is False)
 
         cp_after_stop = load_json_safe(t_checkpoint, default={})
         check("checkpoint marks stopped is True", cp_after_stop.get("stopped") is True)
@@ -993,26 +1097,22 @@ def test_pipeline_stop_and_resume_lifecycle():
 
         # 2. Resuming run_pipeline skips completed stages
         phase0_rerun = {"called": False}
-        phase4_resumed = {"called": False}
+        matching_resumed = {"called": False}
 
         def fake_purge_rerun():
             phase0_rerun["called"] = True
             return True
 
         def fake_matching_success(*args, **kwargs):
+            matching_resumed["called"] = True
             return 0
-
-        def fake_eval_resume(args):
-            phase4_resumed["called"] = True
-            return True
 
         with patch.object(pipeline, "purge_stale_offers") as mock_p0, \
              patch.object(pipeline, "migrate_normalize_links") as mock_p1_5, \
              patch.object(pipeline, "deduplicate_db") as mock_p2, \
              patch.object(pipeline, "clean_db") as mock_p2_5, \
              patch.object(pipeline, "JobDatabase") as mock_db_cls, \
-             patch("matching.run.main", side_effect=fake_matching_success), \
-             patch("eval_ranking.main", side_effect=fake_eval_resume):
+             patch("matching.run.main", side_effect=fake_matching_success):
 
             mock_p0.main = fake_purge_rerun
             mock_p1_5.main = lambda: True
@@ -1028,7 +1128,7 @@ def test_pipeline_stop_and_resume_lifecycle():
 
         check("resumed pipeline returned True on completion", res_resume is True)
         check("resumed pipeline skipped completed phase0", phase0_rerun["called"] is False)
-        check("resumed pipeline executed phase4", phase4_resumed["called"] is True)
+        check("resumed pipeline executed phase3", matching_resumed["called"] is True)
         check("resumed pipeline output contains PIPELINE COMPLETE", "PIPELINE COMPLETE" in resume_output)
 
         # 3. Slow cooperative stop (>1.5s grace period) and subsequent clean start without immediate stop
@@ -1119,7 +1219,7 @@ def test_http_security_and_dns_rebinding_protection():
 
     # 3. Cross-origin mutation protection rejects foreign Origin on POST
     res_csrf = client.post("/api/offers/decision",
-                           json={"link": "https://example.com/test", "status": "save", "rating": 5},
+                           json={"link": "https://example.com/test", "status": "save"},
                            headers={"origin": "http://evil.com"})
     check("cross-origin mutation rejected with 403 Forbidden", res_csrf.status_code == 403)
 
@@ -1193,7 +1293,7 @@ def test_external_data_change_automatic_invalidation():
 
         # 4. Simulate external decision write to disk (e.g. concurrent CLI or external sync)
         time.sleep(0.05)
-        decision_data = {"https://corp-a.com/job1": {"status": "save", "rating": 9, "stage": "save"}}
+        decision_data = {"https://corp-a.com/job1": {"status": "save", "stage": "save"}}
         t_decisions.write_text(json.dumps(decision_data, ensure_ascii=False), encoding="utf-8")
 
         # 5. Consumer polls Zapisane tab without manual reload: observes saved offer automatically
@@ -1291,7 +1391,7 @@ def _check_skipped_stage_progress(PipelineProcessManager):
     mgr._cmd = ["test"]
     mgr._process = DummyProc()
 
-    # 1. Completed state with 1 skipped + 6 done:
+    # 1. Completed state with 1 skipped + 5 done:
     mgr._status = "completed"
     mgr._stages = [
         {"name": "scrape", "title": "Scraping portali", "status": "skipped"},
@@ -1299,34 +1399,32 @@ def _check_skipped_stage_progress(PipelineProcessManager):
         {"name": "enrich", "title": "Wzbogacanie", "status": "done"},
         {"name": "cluster", "title": "Klasteryzacja", "status": "done"},
         {"name": "match", "title": "Dopasowanie", "status": "done"},
-        {"name": "ranking", "title": "Ranking", "status": "done"},
         {"name": "report", "title": "Raport", "status": "done"},
     ]
-    mgr._active_stage_idx = 6
+    mgr._active_stage_idx = 5
     mgr._exit_code = 0
     mgr._pipeline_complete_seen = True
 
     state_completed = mgr.get_state()
     check("completed with skipped stage reports 100.0% progress", state_completed["progress_percent"] == 100.0)
-    check("completed with skipped stage labels 7/7 resolved stages", "7/7" in state_completed["progress_label"])
+    check("completed with skipped stage labels 6/6 resolved stages", "6/6" in state_completed["progress_label"])
     check("completed pipeline cannot be resumed", state_completed["can_resume"] is False)
 
-    # 2. Running state when stage 0 is skipped and stage 1 is active (stages 1-6 pending):
+    # 2. Running state when stage 0 is skipped and stage 1 is active (stages 2-5 pending):
     mgr._stages = [
         {"name": "scrape", "title": "Scraping portali", "status": "skipped"},
         {"name": "extract", "title": "Ekstrakcja", "status": "running"},
         {"name": "enrich", "title": "Wzbogacanie", "status": "pending"},
         {"name": "cluster", "title": "Klasteryzacja", "status": "pending"},
         {"name": "match", "title": "Dopasowanie", "status": "pending"},
-        {"name": "ranking", "title": "Ranking", "status": "pending"},
         {"name": "report", "title": "Raport", "status": "pending"},
     ]
     mgr._status = "running"
     mgr._active_stage_idx = 1
     state_running = mgr.get_state()
     check("running with 1 skipped stage reflects resolved stage in progress_percent",
-          state_running["progress_percent"] == round((1 / 7) * 100, 1))
-    check("running state indicates active stage", "Etap 2 z 7" in state_running["progress_label"])
+          state_running["progress_percent"] == round((1 / 6) * 100, 1))
+    check("running state indicates active stage", "Etap 2 z 6" in state_running["progress_label"])
 
     # 3. Stopped state with unfinished stages:
     mgr._process = ExitedProc()
@@ -1386,14 +1484,6 @@ def test_pipeline_stage_stats_and_eta():
     check("scoring: final summary sets errors and offers with a percent",
           (phase3["errors"], phase3["with_percent"], mgr._telemetry["scoring"]["errors"]) == (2, 140, 2), phase3)
 
-    mgr._parse_telemetry("Of those, with an AI score:         66")
-    mgr._parse_telemetry("Spearman correlation (AI score vs rating): +0.551  (umiarkowana)")
-    check("evaluation: Spearman and common count parsed",
-          mgr._telemetry_snapshot()["stages"]["phase4"] == {"common": 66, "rho": 0.551})
-    fresh = PipelineProcessManager()
-    fresh._parse_telemetry("No manual ratings - nothing to evaluate.")
-    check("evaluation: missing ratings reported as insufficient",
-          fresh._telemetry_snapshot()["stages"]["phase4"] == {"insufficient": True})
     for line in [
         "2026-09-25 18:14:00,000 - main_scraper - INFO - Running aplikuj.pl scraper...",
         "2026-09-25 18:14:01,000 - main_scraper - INFO - Running OLX Praca scraper...",
@@ -1461,7 +1551,7 @@ def test_offer_api_contract():
         client = TestClient(server.app, base_url="http://127.0.0.1:8501")
 
         matched = client.get("/api/offers?tab=Dopasowane").json()
-        check("Dopasowane: every undecided offer with a percent, rated ones included, best first",
+        check("Dopasowane: every undecided offer with a percent, legacy rated entries included, best first",
               [row["link"] for row in matched["items"]] == [jobs[1]["link"], jobs[3]["link"], jobs[4]["link"]],
               [row["link"] for row in matched["items"]])
         check("offers scraped after the last run start are new",
@@ -1477,8 +1567,8 @@ def test_offer_api_contract():
         client.post("/api/offers/decision", json={"link": jobs[3]["link"], "status": "save"})
         noted = client.post("/api/offers/note", json={"link": jobs[3]["link"], "note": " Wysłać po portfolio "})
         on_disk3 = json.loads(paths["USER_DECISIONS_PATH"].read_text(encoding="utf-8"))[jobs[3]["link"]]
-        check("saving keeps the stored rating and the note is trimmed",
-              on_disk3.get("rating") == 7 and noted.json()["offer"]["note"] == "Wysłać po portfolio", on_disk3)
+        check("saving drops the legacy rating key and the note is trimmed",
+              "rating" not in on_disk3 and noted.json()["offer"]["note"] == "Wysłać po portfolio", on_disk3)
         check("note needs a decision",
               client.post("/api/offers/note", json={"link": jobs[1]["link"], "note": "x"}).status_code == 400)
         stats = client.get("/api/stats").json()
@@ -1741,7 +1831,7 @@ def main():
                  test_safe_io, test_llm_providers,
                  test_record_scrape, test_scraper_health,
                  test_idempotent_writes, test_olx_tempo_przy_blokadzie,
-                 test_zdjete_z_portalu, test_olx_fetch_rownolegly,
+                 test_zdjete_z_portalu, test_sprawdzenie_ofert, test_olx_fetch_rownolegly,
                  test_olx_opis_z_listingu, test_pipeline_final_status,
                  test_windows_process_safety,
                  test_pipeline_stop_and_resume_lifecycle,

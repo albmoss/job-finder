@@ -512,7 +512,16 @@ textarea.field {
   width: min(560px, 100%);
   max-height: calc(100dvh - 48px);
   padding: 24px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.27);
   animation: modal-in 250ms var(--ease-out);
+}
+
+.modal::before {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.modal:focus-visible {
+  outline: none;
 }
 
 .modal-wide {
@@ -525,6 +534,10 @@ textarea.field {
   align-items: center;
   gap: 10px;
   margin-top: 4px;
+}
+
+.modal-actions-end {
+  justify-content: flex-end;
 }
 
 .modal-close {

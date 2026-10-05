@@ -1,15 +1,14 @@
 """
-Główny pipeline: profil z CV -> scraping -> czyszczenie -> dopasowanie -> ewaluacja.
+Główny pipeline: profil z CV -> scraping -> czyszczenie -> dopasowanie.
 
 Kolejność ma znaczenie:
-  0. Archiwizacja+purge  - chroni ręczne oceny PRZED usunięciem starych ofert
+  0. Purge               - usuwa oferty niewidziane na portalu od 14 dni
   0.5 Profil z CV        - miasto i poziom z CV wyznaczają zakres scraperów
   1. Scraping            - pomija źródła zescrapowane dziś
   1.5 Normalizacja linków - musi być przed deduplikacją, inaczej ta sama oferta
                             pod dwoma URL-ami przejdzie jako dwie różne
   2. Deduplikacja + czyszczenie opisów
   3. Dopasowanie         - przesiew w kodzie + ocena Jev (matching/run.py)
-  4. Ewaluacja rankingu  - jedyny sposób, żeby stwierdzić czy cokolwiek się poprawiło
 """
 
 from datetime import datetime
@@ -119,7 +118,7 @@ def _finish(phase_results, stopped=False):
 
 def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
     print("\n" + "=" * 60)
-    print("PIPELINE: CV profile -> scraping -> matching -> evaluation")
+    print("PIPELINE: CV profile -> scraping -> matching")
     print("=" * 60)
 
     options = {
@@ -168,10 +167,10 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
             save_checkpoint(completed_stages, options, failed_stage=stage_id, stopped=stopped)
             return False, stopped
 
-    # 0. Archiwizuj oceny i usuń przeterminowane oferty
+    # 0. Usuń przeterminowane oferty
     ok, stopped = _execute_stage(
         "phase0",
-        "PHASE 0: Archive ratings + drop offers older than 14 days",
+        "PHASE 0: Drop offers older than 14 days",
         purge_stale_offers.main,
     )
     if not ok:
@@ -270,19 +269,6 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
         "phase3",
         "PHASE 3: Matching (prefilter + Jev)",
         _match,
-    )
-    if not ok:
-        return _finish(phase_results, stopped=stopped)
-
-    # 4. Ewaluacja - czy ranking faktycznie działa?
-    def _eval():
-        import eval_ranking
-        return eval_ranking.main([])
-
-    ok, stopped = _execute_stage(
-        "phase4",
-        "PHASE 4: Ranking evaluation",
-        _eval,
     )
     if not ok:
         return _finish(phase_results, stopped=stopped)

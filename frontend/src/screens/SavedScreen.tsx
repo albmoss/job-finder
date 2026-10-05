@@ -45,9 +45,9 @@ function placeLine(item: OfferListItem): string {
   return [item.company, where].filter(Boolean).join('\u2002·\u2002');
 }
 
-function savedDay(value: string | null): string {
+function savedLine(value: string | null): string {
   const date = parseDate(value);
-  return date ? formatDayLong(date, date.getFullYear() !== new Date().getFullYear()) : '';
+  return date ? `\u2002·\u2002Zapisano ${formatDayLong(date, date.getFullYear() !== new Date().getFullYear())}` : '';
 }
 
 export function SavedScreen({ route }: ScreenProps) {
@@ -173,7 +173,7 @@ export function SavedScreen({ route }: ScreenProps) {
               {items.map((item) => (
                 <li
                   key={item.link}
-                  className="sv-row"
+                  className="glass sv-row"
                   aria-current={item.link === selected?.link}
                   tabIndex={0}
                   onClick={() => select(item.link)}
@@ -201,12 +201,14 @@ export function SavedScreen({ route }: ScreenProps) {
                   </div>
                   <p className="sv-row-place">{placeLine(item)}</p>
                   <div className="sv-row-meta">
-                    <span>{item.salary_text || 'Brak widełek'}</span>
+                    <span className="sv-row-pay">
+                      {item.salary_text || 'Brak widełek'}
+                      <span className="sv-row-saved">{savedLine(item.decided_at)}</span>
+                    </span>
                     <span className={item.cv?.status === 'ready' ? 'sv-cv is-ready' : 'sv-cv'}>
                       {cvStatusText(item.cv)}
                     </span>
                   </div>
-                  <p className="sv-row-date">Zapisano {savedDay(item.decided_at)}</p>
                 </li>
               ))}
             </ul>
@@ -240,7 +242,19 @@ function SavedDetail({ item, onMarkSent, onNoteSaved }: SavedDetailProps) {
   const { toast } = useApp();
   const [note, setNote] = useState(item.note);
   const [savingNote, setSavingNote] = useState(false);
+  const [checkedGone, setCheckedGone] = useState(false);
   const cv = item.cv;
+
+  useEffect(() => {
+    if (item.is_gone) return;
+    let alive = true;
+    api.checkOffers([item.link]).then((res) => {
+      if (alive && res.gone.length > 0) setCheckedGone(true);
+    }, () => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [item.link, item.is_gone]);
 
   const saveNote = async () => {
     setSavingNote(true);
@@ -260,11 +274,14 @@ function SavedDetail({ item, onMarkSent, onNoteSaved }: SavedDetailProps) {
     <div className="sv-detail-body scroll">
       <p className="sv-company">{item.company}</p>
       <h2 className="sv-title">{item.title}</h2>
+      {(item.is_gone || checkedGone) && (
+        <p className="label warn">Ogłoszenie zdjęte z portalu. Możesz je usunąć z zapisanych.</p>
+      )}
 
       {cv?.status === 'ready' ? (
-        <>
-          <div className="sv-cv-card">
-            <FileCheck2 />
+        <div className="glass sv-cv-card">
+          <FileCheck2 className="sv-cv-card-icon" />
+          <div className="sv-cv-card-text">
             <p className="sv-cv-card-title">CV pod ofertę jest gotowe</p>
             <p className="label">{cv.file_name}</p>
           </div>
@@ -272,11 +289,15 @@ function SavedDetail({ item, onMarkSent, onNoteSaved }: SavedDetailProps) {
             <Download />
             Pobierz CV
           </a>
-        </>
+        </div>
       ) : cv?.status === 'draft' || cv?.status === 'running' ? (
-        <>
-          <div className="sv-cv-card">
-            {cv.status === 'running' ? <LoaderCircle className="spin" /> : <FilePenLine />}
+        <div className="glass sv-cv-card">
+          {cv.status === 'running' ? (
+            <LoaderCircle className="sv-cv-card-icon spin" />
+          ) : (
+            <FilePenLine className="sv-cv-card-icon" />
+          )}
+          <div className="sv-cv-card-text">
             <p className="sv-cv-card-title">{cv.status === 'running' ? 'Tworzymy CV…' : 'Szkic CV czeka na sprawdzenie'}</p>
             <p className="label">Wersja {cv.version}</p>
           </div>
@@ -284,11 +305,11 @@ function SavedDetail({ item, onMarkSent, onNoteSaved }: SavedDetailProps) {
             <FilePenLine />
             Sprawdź wersję
           </a>
-        </>
+        </div>
       ) : (
-        <>
-          <div className="sv-cv-card">
-            <FileText />
+        <div className="glass sv-cv-card">
+          <FileText className="sv-cv-card-icon" />
+          <div className="sv-cv-card-text">
             <p className="sv-cv-card-title">Bez osobnej wersji CV</p>
             <p className="label">Wyślesz bazowe CV albo dopasujesz je do tej oferty.</p>
           </div>
@@ -296,7 +317,7 @@ function SavedDetail({ item, onMarkSent, onNoteSaved }: SavedDetailProps) {
             <FilePenLine />
             Dopasuj CV
           </a>
-        </>
+        </div>
       )}
 
       <label className="sv-note-label" htmlFor="sv-note">
@@ -322,14 +343,16 @@ function SavedDetail({ item, onMarkSent, onNoteSaved }: SavedDetailProps) {
 
       <div className="sv-spacer" />
 
-      <a className="btn btn-primary" href={item.link} target="_blank" rel="noreferrer">
-        <ArrowUpRight />
-        Otwórz ogłoszenie
-      </a>
-      <button type="button" className="btn" onClick={() => onMarkSent(item)}>
-        <Check />
-        Oznacz jako wysłane
-      </button>
+      <div className="sv-actions">
+        <button type="button" className="btn" onClick={() => onMarkSent(item)}>
+          <Check />
+          Oznacz jako wysłane
+        </button>
+        <a className="btn btn-primary" href={item.link} target="_blank" rel="noreferrer">
+          <ArrowUpRight />
+          Otwórz ogłoszenie
+        </a>
+      </div>
       <p className="sv-hint">Aplikujesz na stronie pracodawcy. Po wysłaniu zaznacz to tutaj.</p>
     </div>
   );

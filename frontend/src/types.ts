@@ -70,8 +70,6 @@ export interface StageStats {
     /** Oferty z procentem w całej bazie po etapie. */
     with_percent?: number;
   };
-  /** Ewaluacja rankingu: Spearman % dopasowania vs ręczne oceny; `insufficient` przy < 10 ocen. */
-  phase4?: { rho?: number; common?: number; insufficient?: boolean };
 }
 export interface PipelineTelemetry {
   sources: SourceTelemetry[];

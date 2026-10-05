@@ -12,14 +12,13 @@ const STAGE_TITLE: Record<string, string> = {
   phase2: 'Porządkowanie ofert',
   phase2_5: 'Porządkowanie ofert',
   phase3: 'Porównywanie z CV',
-  phase4: 'Porównywanie z CV',
 };
 
 function describeRun(pipeline: PipelineState, summary: RunSummary | null) {
   const stageId = pipeline.stages[pipeline.current_stage_idx]?.id ?? '';
   const title = STAGE_TITLE[stageId] ?? 'Szukanie ofert';
   if (pipeline.status === 'stopping') return { title, detail: 'Zatrzymywanie…' };
-  if (summary && summary.to_check != null && (stageId === 'phase3' || stageId === 'phase4')) {
+  if (summary && summary.to_check != null && stageId === 'phase3') {
     const n = summary.to_check;
     return {
       title,

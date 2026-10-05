@@ -14,12 +14,13 @@ const SENIORITY_LABEL: Record<string, string> = {
   manager: 'Manager',
 };
 
-/** „CV gotowe. Profil: Warszawa, Junior, praca zdalna.” */
+/** „CV gotowe. Profil: Frontend Developer · Warszawa, Junior, praca zdalna.” */
 export function profileLine(profile: CVProfile | null | undefined): string {
   if (!profile) return 'CV gotowe. Profil zostanie odczytany z CV na starcie.';
   const seniority = profile.seniority ? (SENIORITY_LABEL[profile.seniority.toLowerCase()] ?? profile.seniority) : null;
-  const parts = [profile.city, seniority, profile.remote ? 'praca zdalna' : null].filter(Boolean);
-  return parts.length ? `CV gotowe. Profil: ${parts.join(', ')}.` : 'CV gotowe.';
+  const details = [profile.city, seniority, profile.remote ? 'praca zdalna' : null].filter(Boolean).join(', ');
+  const summary = [profile.roles[0]?.trim(), details].filter(Boolean).join(' · ');
+  return summary ? `CV gotowe. Profil: ${summary}.` : 'CV gotowe.';
 }
 
 export function LaunchModal({ onClose }: { onClose: () => void }) {
@@ -74,16 +75,21 @@ export function LaunchModal({ onClose }: { onClose: () => void }) {
         <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
         Zgadzam się na przetwarzanie CV przez modele i koszt API.
       </label>
-      <div className="modal-actions">
+      <p className="label">Zgoda jest odznaczona przy każdym uruchomieniu.</p>
+      <div className="modal-actions modal-actions-end">
         <button type="button" className="btn" onClick={onClose}>
           Anuluj
         </button>
-        <button type="button" className="btn" disabled={!consent || !ready || starting} onClick={start}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={!consent || !ready || starting}
+          onClick={start}
+        >
           <Search />
           Szukaj ofert
         </button>
       </div>
-      <p className="label">Zgoda jest odznaczona przy każdym uruchomieniu.</p>
     </Modal>
   );
 }

@@ -118,10 +118,12 @@
 }
 
 .mo-card {
-  display: flex;
+  display: grid;
   flex: 1 0 96px;
-  align-items: flex-start;
-  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: center;
+  align-items: start;
+  column-gap: 12px;
   max-height: 128px;
   padding: 12px 14px;
   border-radius: 18px;
@@ -136,7 +138,6 @@
 
 .mo-card-body {
   display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 5px;
   min-width: 0;
@@ -243,21 +244,16 @@
 }
 
 .mo-card-track {
-  position: absolute;
-  right: 14px;
-  bottom: 8px;
-  left: 66px;
-  height: 2px;
-  border-radius: 1px;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.mo-card-fill {
   display: block;
-  height: 100%;
-  border-radius: 1px;
-  background: var(--ink);
-  opacity: 0.85;
+  height: 0;
+  margin-top: 5px;
+  border-top: 2px solid;
+  border-image: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ink) 85%, transparent) var(--fill),
+      rgba(255, 255, 255, 0.12) var(--fill)
+    )
+    1;
 }
 
 .mo-pager {
@@ -387,6 +383,32 @@
   overflow-wrap: anywhere;
 }
 
+.mo-title-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 6px;
+  border-radius: 8px;
+  color: var(--muted);
+  vertical-align: -3px;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.mo-title-link:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--ink);
+}
+
+.mo-title-link svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.75;
+}
+
 .mo-detail-company {
   display: flex;
   flex-wrap: wrap;
@@ -420,6 +442,11 @@
   min-height: 0;
   margin-right: -14px;
   padding-right: 14px;
+}
+
+.mo-detail-body.has-more {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 40px), transparent);
 }
 
 .mo-facts {

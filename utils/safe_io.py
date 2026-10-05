@@ -1,8 +1,8 @@
 """
 Bezpieczny zapis JSON: atomowy + rotacyjne backupy.
 
-Powód: user_decisions.json i rated_archive.json to dane, których NIE DA SIĘ
-odtworzyć (setki ręcznych ocen). Zapis wprost do pliku oznacza, że przerwanie
+Powód: user_decisions.json to dane, których NIE DA SIĘ odtworzyć (setki decyzji
+użytkownika). Zapis wprost do pliku oznacza, że przerwanie
 procesu w trakcie writeu zostawia obcięty/pusty plik i dane przepadają.
 """
 import json

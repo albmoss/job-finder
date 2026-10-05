@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, Upload } from 'lucide-react';
+import { Check, Eye, EyeOff, Upload } from 'lucide-react';
 import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { BACKUPS, plural } from '../plural';
@@ -123,19 +123,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <h3 className="title-md">Dopasowanie ofert: Jev</h3>
           <span className="label">{jevConfigured ? 'klucz ustawiony' : 'brak klucza'}</span>
         </div>
-        <label className="label" htmlFor="st-jev">
-          Klucz TypeSafe ({JEV_KEY})
+        <label className="st-label" htmlFor="st-jev">
+          Klucz TypeSafe
+          <span className="st-env">{JEV_KEY}</span>
         </label>
-        <div className="st-row">
-          <SecretInput
-            id="st-jev"
-            value={jevKey}
-            placeholder={jevConfigured ? '•••••••• (bez zmian)' : 'klucz z panelu TypeSafe'}
-            disabled={saving}
-            onChange={setJevKey}
-          />
+        <SecretInput
+          id="st-jev"
+          value={jevKey}
+          placeholder={jevConfigured ? '•••••••• (bez zmian)' : 'klucz z panelu TypeSafe'}
+          disabled={saving}
+          onChange={setJevKey}
+        />
+        <div>
           <button type="button" className="btn" disabled={saving || !jevKey.trim()} onClick={saveJev}>
-            Zapisz
+            Zapisz klucz
           </button>
         </div>
       </section>
@@ -155,7 +156,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 : 'zapis przełączy dostawcę'}
             </span>
           </div>
-          <div className="segmented" role="radiogroup" aria-label="Dostawca modelu">
+          <div className="segmented st-providers" role="radiogroup" aria-label="Dostawca modelu">
             {info.providers.map((p) => (
               <button
                 key={p.id}
@@ -170,12 +171,14 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   setModels(null);
                 }}
               >
+                {p.id === providerId && <Check aria-hidden="true" />}
                 {p.label}
               </button>
             ))}
           </div>
-          <label className="label" htmlFor="st-llm-key">
-            Klucz ({provider.key_env})
+          <label className="st-label" htmlFor="st-llm-key">
+            Klucz {provider.label}
+            <span className="st-env">{provider.key_env}</span>
           </label>
           <SecretInput
             id="st-llm-key"
@@ -184,8 +187,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             disabled={saving}
             onChange={setLlmKey}
           />
-          <label className="label" htmlFor="st-llm-models">
-            Modele po przecinku ({provider.models_env}); puste = domyślne
+          <label className="st-label" htmlFor="st-llm-models">
+            Modele (po przecinku, puste = domyślne)
+            <span className="st-env">{provider.models_env}</span>
           </label>
           <input
             id="st-llm-models"
@@ -197,7 +201,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           />
           <div>
             <button type="button" className="btn" disabled={saving || !llmDirty} onClick={saveLlm}>
-              Zapisz model
+              {isCurrent ? 'Zapisz klucz i modele' : 'Zapisz dostawcę, klucz i modele'}
             </button>
           </div>
         </section>
@@ -213,7 +217,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         <div>
           <button type="button" className="btn" disabled={saving} onClick={() => fileRef.current?.click()}>
             <Upload />
-            {cv?.ready ? 'Zamień plik CV' : 'Wybierz plik CV'}
+            {cv?.ready ? 'Zastąp CV' : 'Wybierz plik CV'}
           </button>
           <input
             ref={fileRef}

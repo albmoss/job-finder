@@ -14,7 +14,7 @@ type Phase = 'profile' | 'scraping' | 'matching' | 'done' | 'failed' | 'stopped'
 const GROUPS = [
   { num: '01', label: 'Twój profil', ids: ['phase0'] },
   { num: '02', label: 'Szukanie ofert', ids: ['phase1', 'phase1_5', 'phase2', 'phase2_5'] },
-  { num: '03', label: 'Porównywanie z CV', ids: ['phase3', 'phase4'] },
+  { num: '03', label: 'Porównywanie z CV', ids: ['phase3'] },
 ] as const;
 
 const RUNNING_PHASES: Phase[] = ['profile', 'scraping', 'matching'];
@@ -101,7 +101,7 @@ function statusLine(index: number, state: GroupState, summary: RunSummary | null
 function restCopy(phase: Phase): string {
   if (phase === 'profile' || phase === 'scraping') return 'Porównywanie z CV zacznie się po pobraniu ofert.';
   if (phase === 'matching') return 'Porównujemy wymagania i doświadczenie z Twoim CV.';
-  if (phase === 'done') return 'Wszystkie oferty z tego wyszukiwania są sprawdzone.';
+  if (phase === 'done') return 'Oferty z procentem dopasowania, bez zapisanych, ukrytych i wysłanych.';
   return 'Pozostałe oferty sprawdzimy przy następnym wyszukiwaniu.';
 }
 
@@ -116,6 +116,7 @@ export function ProgressScreen(_props: ScreenProps) {
   const sub = subtitle(phase, pipeline, summary);
   const left = summary?.to_check != null ? Math.max(0, summary.to_check - summary.checked) : null;
   const recent = summary?.recent.slice(0, 3) ?? [];
+  const finished = phase === 'done' && summary != null;
 
   return (
     <div className="pg">
@@ -141,11 +142,17 @@ export function ProgressScreen(_props: ScreenProps) {
 
       <section className="pg-panel panel">
         <div className="pg-count">
-          <p className="pg-eyebrow pg-count-label">SPRAWDZONE OFERTY</p>
+          <p className="pg-eyebrow pg-count-label">{finished ? 'DO PRZEJRZENIA' : 'SPRAWDZONE OFERTY'}</p>
           <div className="pg-count-main">
-            <p className="pg-count-num">{countFormat.format(summary?.checked ?? 0)}</p>
-            {summary?.to_check != null && (
-              <p className="pg-count-of">z {countFormat.format(summary.to_check)} do porównania</p>
+            <p className="pg-count-num">
+              {countFormat.format(finished ? summary.matched_count : (summary?.checked ?? 0))}
+            </p>
+            {finished ? (
+              <p className="pg-count-of">z {countFormat.format(summary.checked)} sprawdzonych</p>
+            ) : (
+              summary?.to_check != null && (
+                <p className="pg-count-of">z {countFormat.format(summary.to_check)} do porównania</p>
+              )
             )}
           </div>
           <div className="pg-count-rest">
@@ -160,8 +167,8 @@ export function ProgressScreen(_props: ScreenProps) {
         <div className="pg-sep" />
         <div className="pg-recent">
           <div className="pg-recent-head">
-            <h2 className="pg-recent-title">Ostatnio dopasowane</h2>
-            {summary && (
+            <h2 className="pg-recent-title">Najlepsze dopasowania</h2>
+            {summary && !finished && (
               <span className="pg-recent-total">
                 {countFormat.format(summary.matched_count)} {plural(summary.matched_count, OFFERS)}
               </span>

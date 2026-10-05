@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronRight, CircleCheck, FileText, Settings2, TriangleAlert, Upload } from 'lucide-react';
+import {
+  ArrowRight,
+  ArrowUpRight,
+  ChevronRight,
+  CircleCheck,
+  FileText,
+  Settings2,
+  TriangleAlert,
+  Upload,
+} from 'lucide-react';
 import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { navigate, paths } from '../router';
@@ -173,9 +182,25 @@ export function MyCvScreen(_props: ScreenProps) {
             <span className="cv-file-name" title={cv?.filename}>
               {cv?.filename ?? ''}
             </span>
-            {cv?.pdf_pages != null && (
-              <span className="label">
-                {cv.pdf_pages} {plural(cv.pdf_pages, PAGES)}
+            {cv && (cv.pdf_pages != null || cv.pdf_url) && (
+              <span className="cv-preview-meta">
+                {cv.pdf_pages != null && (
+                  <span className="label">
+                    {cv.pdf_pages} {plural(cv.pdf_pages, PAGES)}
+                  </span>
+                )}
+                {cv.pdf_url && (
+                  <a
+                    className="btn-quiet cv-open"
+                    href={`${cv.pdf_url}?v=${fileRev}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="Otwórz PDF"
+                    title="Otwórz PDF"
+                  >
+                    <ArrowUpRight />
+                  </a>
+                )}
               </span>
             )}
           </div>
@@ -196,10 +221,13 @@ export function MyCvScreen(_props: ScreenProps) {
               <h2 className="cv-card-title">Profil odczytany z CV</h2>
               {profile &&
                 (profile.current ? (
-                  <CircleCheck className="cv-head-icon" aria-label="Profil aktualny" />
+                  <span className="cv-state">
+                    <CircleCheck className="cv-head-icon" aria-hidden="true" />
+                    Profil aktualny
+                  </span>
                 ) : (
-                  <span className="cv-stale">
-                    <TriangleAlert className="cv-head-icon warn" />
+                  <span className="cv-state">
+                    <TriangleAlert className="cv-head-icon warn" aria-hidden="true" />
                     Profil zostanie przeliczony przy następnym wyszukiwaniu
                   </span>
                 ))}
@@ -221,14 +249,20 @@ export function MyCvScreen(_props: ScreenProps) {
                   </div>
                 </div>
                 {profile.roles.length > 0 && (
-                  <p className="cv-roles" title={profile.roles.join(', ')}>
-                    {profile.roles.join(', ')}
-                  </p>
+                  <div className="cv-fact">
+                    <span className="label">Stanowiska</span>
+                    <p className="cv-fact-text" title={profile.roles.join(', ')}>
+                      {profile.roles.join(', ')}
+                    </p>
+                  </div>
                 )}
                 {profile.skills.length > 0 && (
-                  <p className="cv-skills" title={profile.skills.join(', ')}>
-                    {profile.skills.join(', ')}
-                  </p>
+                  <div className="cv-fact">
+                    <span className="label">Umiejętności</span>
+                    <p className="cv-fact-text muted" title={profile.skills.join(', ')}>
+                      {profile.skills.join(', ')}
+                    </p>
+                  </div>
                 )}
                 <p className="cv-note">
                   Zakres wyszukiwania dobieramy automatycznie. Jeśli profil się nie zgadza, popraw treść bazowego CV.
@@ -277,11 +311,23 @@ export function MyCvScreen(_props: ScreenProps) {
                     : 'Wczytywanie…'}
               </p>
             )}
-            <button type="button" className="btn cv-fit" onClick={() => navigate(paths.instructions)}>
-              <Settings2 />
-              Instrukcje agenta
-            </button>
-            <p className="label">Stały prompt dopasowania CV. Nie musisz wklejać go przy każdej ofercie.</p>
+            <div className="cv-actions">
+              {versions && versions.length === 0 && !versionsError && (
+                <button type="button" className="btn" onClick={() => navigate(paths.matched())}>
+                  Przejdź do ofert
+                  <ArrowRight />
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn-quiet"
+                title="Stały prompt dopasowania CV. Nie musisz wklejać go przy każdej ofercie."
+                onClick={() => navigate(paths.instructions)}
+              >
+                <Settings2 />
+                Instrukcje agenta
+              </button>
+            </div>
           </section>
         </div>
       </div>

@@ -1,30 +1,35 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { flushSync } from 'react-dom';
 import {
+  Archive,
   ArrowUpRight,
   CalendarDays,
   Check,
   ChevronRight,
   Ellipsis,
   FileText,
+  Handshake,
   LoaderCircle,
+  MessagesSquare,
   Plus,
+  Send,
   Undo2,
+  type LucideIcon,
 } from 'lucide-react';
 import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
-import { formatDayLong, formatRelativeDay } from '../format';
+import { formatDayLong, parseDate } from '../format';
 import { navigate, paths } from '../router';
 import type { ApplicationItem, NextStep, Stage } from '../types';
 import { AddFromLinkModal } from './add/AddFromLinkModal';
 import type { ScreenProps } from './types';
 import '../styles/applications.css';
 
-const STAGES: { id: Stage; label: string }[] = [
-  { id: 'apply', label: 'Wysłane' },
-  { id: 'interview', label: 'Rozmowy' },
-  { id: 'offer', label: 'Oferta pracy' },
-  { id: 'archive', label: 'Zakończone' },
+const STAGES: { id: Stage; label: string; icon: LucideIcon; hint: string }[] = [
+  { id: 'apply', label: 'Wysłane', icon: Send, hint: 'Tu trafiają oferty oznaczone jako wysłane.' },
+  { id: 'interview', label: 'Rozmowy', icon: MessagesSquare, hint: 'Przeciągnij tu aplikację, gdy zaproszą Cię na rozmowę.' },
+  { id: 'offer', label: 'Oferta pracy', icon: Handshake, hint: 'Przeciągnij tu aplikację, gdy dostaniesz ofertę.' },
+  { id: 'archive', label: 'Zakończone', icon: Archive, hint: 'Przeciągnij tu rekrutacje, które się skończyły.' },
 ];
 
 const DRAG_TYPE = 'application/x-jobfinder-link';
@@ -65,16 +70,13 @@ function formatDue(due: string | null | undefined, now = new Date()): string {
   return `${day}, ${time}`;
 }
 
-function dateLine(item: ApplicationItem): string {
-  if (item.stage === 'apply') return `Wysłano ${formatRelativeDay(item.applied_at ?? item.decided_at)}`;
-  if (item.stage === 'archive') return `Zamknięto ${formatRelativeDay(item.decided_at)}`;
-  if (item.stage === 'offer' && item.next_step?.due) {
-    const parsed = parseDue(item.next_step.due);
-    if (parsed) return `Odpowiedź do ${formatDayLong(parsed.date, parsed.date.getFullYear() !== new Date().getFullYear())}`;
-  }
-  if (item.next_step?.due) return formatDue(item.next_step.due);
-  const day = formatRelativeDay(item.decided_at);
-  return day.charAt(0).toUpperCase() + day.slice(1);
+function sentDay(item: ApplicationItem): { label: string; iso: string } | null {
+  const date = parseDate(item.applied_at ?? item.decided_at);
+  if (!date) return null;
+  return {
+    label: formatDayLong(date, date.getFullYear() !== new Date().getFullYear()),
+    iso: date.toISOString(),
+  };
 }
 
 function toInputValue(due: string | null | undefined): string {
@@ -276,6 +278,12 @@ export function ApplicationsScreen({ route }: ScreenProps) {
                   <span className="ap-col-count">{cards.length}</span>
                 </header>
                 <div className="ap-cards scroll">
+                  {cards.length === 0 && (
+                    <div className={`ap-drop-zone${dragging ? ' is-armed' : ''}`}>
+                      <stage.icon />
+                      <p className="ap-drop-hint">{dragging ? 'Upuść tutaj' : stage.hint}</p>
+                    </div>
+                  )}
                   {cards.map((item) => (
                     <ApplicationCard
                       key={item.link}
@@ -349,12 +357,26 @@ interface ApplicationCardProps {
 function ApplicationCard(props: ApplicationCardProps) {
   const { item, focused, dragging, moving, menuOpen, editing, onToggleMenu, onMove, onEditStep, onUndo } = props;
   const [stagesOpen, setStagesOpen] = useState(false);
+  const [open, setOpen] = useState(focused);
+  const expanded = open || editing;
+  const sent = sentDay(item);
 
   useEffect(() => {
     if (!menuOpen) setStagesOpen(false);
   }, [menuOpen]);
 
-  const className = ['glass', 'ap-card', focused && 'is-focused', dragging && 'is-dragging', menuOpen && 'is-menu']
+  useEffect(() => {
+    if (focused) setOpen(true);
+  }, [focused]);
+
+  const className = [
+    'glass',
+    'ap-card',
+    expanded && 'is-open',
+    focused && 'is-focused',
+    dragging && 'is-dragging',
+    menuOpen && 'is-menu',
+  ]
     .filter(Boolean)
     .join(' ');
 
@@ -366,9 +388,18 @@ function ApplicationCard(props: ApplicationCardProps) {
       draggable={!editing}
       onDragStart={props.onDragStart}
       onDragEnd={props.onDragEnd}
+      onClick={(e) => {
+        if (editing || (e.target as Element).closest('button, a, input, form, .ap-menu')) return;
+        setOpen((o) => !o);
+      }}
     >
       <div className="ap-card-top">
         <span className="ap-card-company">{item.company}</span>
+        {sent && (
+          <time className="ap-card-sent" dateTime={sent.iso} title={`Wysłano ${sent.label}`}>
+            {sent.label}
+          </time>
+        )}
         <div className="ap-menu-wrap">
           <button
             type="button"
@@ -419,24 +450,32 @@ function ApplicationCard(props: ApplicationCardProps) {
           )}
         </div>
       </div>
-      <h3 className="ap-card-title">{item.title}</h3>
-      <p className="ap-card-date">{dateLine(item)}</p>
-      {editing ? (
-        <NextStepEditor item={item} onCancel={props.onCancelEdit} onSave={props.onSaveStep} />
-      ) : (
-        <p className="ap-card-meta">
-          {item.next_step ? (
-            <>
-              {parseDue(item.next_step.due)?.hasTime ? <CalendarDays /> : <FileText />}
-              {item.next_step.label}
-            </>
+      <h3 className="ap-card-heading">
+        <button type="button" className="ap-card-title" aria-expanded={expanded} onClick={() => setOpen((o) => !o)}>
+          {item.title}
+        </button>
+      </h3>
+      {expanded && (
+        <div className="ap-card-more">
+          {editing ? (
+            <NextStepEditor item={item} onCancel={props.onCancelEdit} onSave={props.onSaveStep} />
           ) : (
-            <>
-              <FileText />
-              {item.cv ? `CV: wersja ${item.cv.version}` : 'CV: bazowe'}
-            </>
+            <p className="ap-card-meta">
+              {item.next_step ? (
+                <>
+                  {parseDue(item.next_step.due)?.hasTime ? <CalendarDays /> : <FileText />}
+                  {item.next_step.label}
+                  {item.next_step.due && `\u2002·\u2002${formatDue(item.next_step.due)}`}
+                </>
+              ) : (
+                <>
+                  <FileText />
+                  {item.cv ? `CV: wersja ${item.cv.version}` : 'CV: bazowe'}
+                </>
+              )}
+            </p>
           )}
-        </p>
+        </div>
       )}
     </article>
   );

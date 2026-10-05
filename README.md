@@ -53,14 +53,13 @@ where it stopped.
 
 | # | Stage | Why it is there |
 |:-:|---|---|
-| 0 | `purge_stale_offers` | archives my ratings before old offers are dropped |
+| 0 | `purge_stale_offers` | drops offers a board stopped showing two weeks ago, keeps the ones I acted on |
 | 0.5 | `utils/cv_profile` | reads the CV once per change: city, level, skills, languages |
 | 1 | `main_scraper` | pulls every board in parallel: the API where there is one, HTML where not |
 | 1.5 | `migrate_normalize_links` | the same offer under `?utm_source=…` must not count twice |
 | 2 | `deduplicate_db` | one offer often sits on four boards at once |
 | 2.5 | `clean_db` | trims boilerplate from descriptions |
 | 3 | `matching/run` | drops certain mismatches in code, scores the rest with Jev |
-| 4 | `eval_ranking` | checks the ranking against the offers I saved, sent or hid |
 
 <div align="center">
 <img src="docs/pipeline.png" alt="Search progress: stages, offers checked and the latest matches" width="640">
@@ -94,7 +93,6 @@ python run_final_pipeline.py --rescore-all    # rescore everything, e.g. after c
 
 python -m utils.cv_profile                    # show the profile read from the CV
 python -m matching.run --limit 100            # score up to 100 new offers
-python eval_ranking.py                        # is the ranking any good?
 
 PYTHONIOENCODING=utf-8 python tests/integration_test.py   # no API calls
 ```
@@ -164,5 +162,5 @@ goes in `GEMINI_MODELS`, `OPENAI_MODELS` or `ANTHROPIC_MODELS`, comma-separated.
   are never redone.
 - **The database is JSON files** with atomic writes and backup rotation. Postgres is the
   obvious next step.
-- **Personal data stays local.** Keys live in `.env`; the CV, its profile, CV versions, scores,
-  ratings and decisions are gitignored.
+- **Personal data stays local.** Keys live in `.env`; the CV, its profile, CV versions, scores
+  and decisions are gitignored.

@@ -3,6 +3,7 @@ Job Finder - Backend HTTP Server (Starlette + Uvicorn)
 Wystawia API REST dla frontendu React/TypeScript, zarządza procesami, danymi i bezpieczeństwem.
 """
 
+import asyncio
 from datetime import datetime
 import logging
 import math
@@ -42,6 +43,7 @@ from app_services import (
     save_uploaded_cv,
 )
 from cv_tailor.routes import routes as cv_tailor_routes
+from utils.offer_check import sprawdz_oferty
 from pipeline_manager import PipelineProcessManager
 
 logging.basicConfig(
@@ -54,6 +56,7 @@ BASE_DIR = Path(__file__).parent
 FRONTEND_DIST_DIR = BASE_DIR / "frontend" / "dist"
 
 PAGE_SIZE = 5
+CHECK_LIMIT = 10
 
 
 def sanitize_log_line(line: str) -> str:
@@ -196,7 +199,7 @@ async def api_note_update(request: Request) -> JSONResponse:
 
 
 async def api_decision_restore(request: Request) -> JSONResponse:
-    """Cofa decyzję użytkownika dla danej oferty (przywraca do bazy jako nieocenioną)."""
+    """Cofa decyzję użytkownika dla danej oferty (oferta wraca na listę bez decyzji)."""
     try:
         body = await request.json()
     except Exception:
@@ -237,6 +240,20 @@ async def api_next_step_update(request: Request) -> JSONResponse:
     if not ok:
         return JSONResponse({"error": msg}, status_code=400)
     return JSONResponse({"ok": True, "offer": job_data_service.get_offer_detail(link)})
+
+
+async def api_offers_check(request: Request) -> JSONResponse:
+    """Sprawdza na portalu, czy oglądane oferty wciąż wiszą; zwraca te zdjęte."""
+    body = await _json_body(request)
+    links = body.get("links") if body else None
+    if not isinstance(links, list) or not all(isinstance(link, str) and link for link in links):
+        return JSONResponse({"error": "Pole 'links' musi być listą linków"}, status_code=400)
+    if len(links) > CHECK_LIMIT:
+        return JSONResponse({"error": f"Najwyżej {CHECK_LIMIT} linków naraz"}, status_code=400)
+    gone = await asyncio.to_thread(sprawdz_oferty, links)
+    if gone:
+        await asyncio.to_thread(job_data_service.oznacz_zdjete, gone)
+    return JSONResponse({"gone": [link for link in links if link in gone]})
 
 
 async def api_applications(request: Request) -> JSONResponse:
@@ -493,6 +510,7 @@ routes = [
     Route("/api/offers/restore", api_decision_restore, methods=["POST"]),
     Route("/api/offers/note", api_note_update, methods=["POST"]),
     Route("/api/offers/next-step", api_next_step_update, methods=["POST"]),
+    Route("/api/offers/check", api_offers_check, methods=["POST"]),
     Route("/api/applications", api_applications, methods=["GET"]),
     Route("/api/tools/fetch-link", api_tool_fetch_link, methods=["POST"]),
     Route("/api/tools/save-manual-job", api_tool_save_manual_job, methods=["POST"]),

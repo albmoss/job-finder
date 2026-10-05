@@ -83,6 +83,8 @@ export const api = {
 
   getOfferDetail: (link: string) => request<OfferDetail>(`/offers/detail?${new URLSearchParams({ link })}`),
 
+  checkOffers: (links: string[]) => post<{ gone: string[] }>('/offers/check', { links }),
+
   /** `cvVersionId` tylko przy `apply`: wersja CV wysłana z aplikacją. */
   updateDecision: (link: string, status: DecisionStatus, stage?: Stage, cvVersionId?: string) =>
     post<DecisionResponse>('/offers/decision', { link, status, stage, cv_version_id: cvVersionId }),
