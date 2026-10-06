@@ -1,0 +1,33 @@
+---
+config:
+  theme: base
+  look: classic
+  htmlLabels: false
+  markdownAutoWrap: false
+  fontFamily: "Segoe UI, -apple-system, Helvetica, Arial, sans-serif"
+  flowchart:
+    htmlLabels: false
+    nodeSpacing: 24
+    rankSpacing: 28
+    padding: 10
+    wrappingWidth: 400
+  themeVariables:
+    fontFamily: "Segoe UI, -apple-system, Helvetica, Arial, sans-serif"
+    fontSize: 20px
+    lineColor: "#8b949e"
+---
+flowchart LR
+    cv(["Upload CV"]) --> profile["CV profile<br/>city, level, skills"]
+    profile --> run["Scrape<br/>job boards"]
+    run --> match["Prefilter +<br/>Jev scoring"]
+    profile --> match
+    match --> list["Ranked<br/>list"]
+    list --> me(["Save, hide<br/>or apply"])
+    me --> tailor["CV tailored<br/>to the offer"]
+    me --> apps(["Applications<br/>board"])
+
+    classDef step fill:#161a33,stroke:#5A70FF,stroke-width:2px,color:#ffffff
+    classDef me fill:#241a3d,stroke:#8B5CFF,stroke-width:2px,color:#ffffff
+    class profile,run,match,list,tailor step
+    class cv,me,apps me
+    linkStyle default stroke-width:2px

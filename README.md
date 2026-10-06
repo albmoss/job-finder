@@ -29,22 +29,7 @@ seniority the scrapers look for, and every offer gets a match percentage against
 offer for later, hide it, or mark it as sent, and a sent offer moves along the applications
 board. Violet comes from me, blue runs on its own.
 
-```mermaid
-flowchart LR
-    cv(["Upload CV"]) --> profile["CV profile<br/>city, level, skills"]
-    profile --> run["Scrape<br/>job boards"]
-    run --> match["Prefilter +<br/>Jev scoring"]
-    profile --> match
-    match --> list["Ranked<br/>list"]
-    list --> me(["Save, hide<br/>or apply"])
-    me --> tailor["CV tailored<br/>to the offer"]
-    me --> apps(["Applications<br/>board"])
-
-    classDef step fill:#161a33,stroke:#5A70FF,stroke-width:1.5px,color:#ffffff
-    classDef me fill:#241a3d,stroke:#8B5CFF,stroke-width:1.5px,color:#ffffff
-    class profile,run,match,list,tailor step
-    class cv,me,apps me
-```
+<img src="docs/how_it_works.svg" alt="Upload CV, CV profile, scrape job boards, prefilter and Jev scoring, ranked list, then save, hide or apply: a tailored CV or the applications board" width="100%">
 
 ## Pipeline
 
