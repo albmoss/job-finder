@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/logo.svg" alt="" width="72">
+
 # Job Finder
 
 **Every job board in Poland, read overnight and ranked against one CV.**
@@ -27,14 +29,16 @@
 Job boards go in, one ranked list comes out. The CV is the only input: it sets the city and
 seniority the scrapers look for, and every offer gets a match percentage against it. I save an
 offer for later, hide it, or mark it as sent, and a sent offer moves along the applications
-board. Violet comes from me, blue runs on its own.
+board. Each candidate in the app has their own CV, scores and decisions; the scraped offers
+are shared. Violet comes from me, blue runs on its own.
 
 <img src="docs/how_it_works.svg" alt="Upload CV, CV profile, scrape job boards, prefilter and Jev scoring, ranked list, then save, hide or apply: a tailored CV or the applications board" width="100%">
 
 ## Pipeline
 
 One command, always in this order. A failed stage stops the run, and `--resume` picks up
-where it stopped.
+where it stopped. A single board going down is not a failed stage: the other boards carry on,
+and the next search tries that board again.
 
 | # | Stage | Why it is there |
 |:-:|---|---|
@@ -106,8 +110,9 @@ level fit, hard blockers, interview chance, whether the offer follows the direct
 points to). `matching/jev.py` turns them into a percentage with fixed weights, so the same
 offer and CV always get the same score.
 
-Both passes are cached per offer and CV. A run scores only new or changed offers; a new CV
-runs both passes again for every offer.
+Both passes are cached per offer. A run scores only new or changed offers, against the current
+CV. An edited CV does not rescore offers that already have a score; each keeps the profile it
+was scored with. `--rescore-all` redoes everything.
 
 ## CV per offer
 
@@ -147,5 +152,5 @@ goes in `GEMINI_MODELS`, `OPENAI_MODELS` or `ANTHROPIC_MODELS`, comma-separated.
   are never redone.
 - **The database is JSON files** with atomic writes and backup rotation. Postgres is the
   obvious next step.
-- **Personal data stays local.** Keys live in `.env`; the CV, its profile, CV versions, scores
-  and decisions are gitignored.
+- **Personal data stays local.** Keys live in `.env`; each candidate's CV, profile, CV
+  versions, scores and decisions live in `candidates/`, which is gitignored.
