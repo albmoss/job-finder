@@ -23,7 +23,7 @@ import { locationLine } from './offer/offer_format';
 import type { ScreenProps } from './types';
 import '../styles/matched.css';
 
-const CARD_HEIGHT = 96;
+const CARD_HEIGHT = 100;
 const CARD_GAP = 10;
 const PAGER_SPACE = 50;
 const SORT_LABELS: Record<OfferSort, string> = { match: 'Najlepsze dopasowanie', newest: 'Najnowsze' };
@@ -442,7 +442,6 @@ interface OfferCardProps {
 }
 
 function OfferCard({ item, active, hidden, busy, onSelect, onRestore }: OfferCardProps) {
-  const percent = item.match_percentage ?? 0;
   const place = locationLine(item.location, item.work_mode);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target !== event.currentTarget) return;
@@ -462,10 +461,7 @@ function OfferCard({ item, active, hidden, busy, onSelect, onRestore }: OfferCar
     >
       <CompanyLogo url={item.logo_url} source={item.source} size="sm" />
       <div className="mo-card-body">
-        <div className="mo-card-top">
-          <span className="mo-card-title">{item.title}</span>
-          {item.match_percentage !== null && <span className="mo-card-percent">{item.match_percentage}%</span>}
-        </div>
+        <span className="mo-card-title" title={item.title}>{item.title}</span>
         <span className="mo-card-company">{item.company}</span>
         <div className="mo-card-bottom">
           <span className="mo-card-place">{item.is_gone ? [place, 'zdjęta z portalu'].filter(Boolean).join(' · ') : place}</span>
@@ -484,12 +480,17 @@ function OfferCard({ item, active, hidden, busy, onSelect, onRestore }: OfferCar
             </button>
           )}
         </div>
+      </div>
+      <div className="mo-card-score">
+        {item.match_percentage !== null && <span className="mo-card-percent">{item.match_percentage}%</span>}
+      </div>
+      {item.match_percentage !== null && (
         <span
           className="match-track"
           aria-hidden="true"
-          style={{ '--fill': `${Math.max(0, Math.min(100, percent))}%` } as CSSProperties}
+          style={{ '--fill': `${Math.max(0, Math.min(100, item.match_percentage))}%` } as CSSProperties}
         />
-      </div>
+      )}
     </div>
   );
 }

@@ -9,7 +9,7 @@
   flex: none;
   flex-direction: column;
   gap: 10px;
-  width: 360px;
+  width: clamp(360px, 36%, 460px);
   min-height: 0;
   padding: 0 4px;
 }
@@ -85,6 +85,7 @@
 
 .mo-fresh {
   flex: none;
+  margin-top: -8px;
   color: var(--muted);
   font-size: 12px;
   line-height: 17px;
@@ -97,6 +98,7 @@
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+  margin-top: 4px;
 }
 
 .mo-cards {
@@ -119,13 +121,13 @@
 
 .mo-card {
   display: grid;
-  flex: 1 0 96px;
-  grid-template-columns: auto minmax(0, 1fr);
+  flex: 1 0 100px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-content: center;
-  align-items: start;
-  column-gap: 12px;
+  align-items: center;
+  column-gap: 16px;
   max-height: 128px;
-  padding: 12px 14px;
+  padding: 13px 20px 13px 16px;
   border-radius: 18px;
   overflow: hidden;
   cursor: pointer;
@@ -133,13 +135,16 @@
 }
 
 .mo-card .logo-tile {
-  margin-top: 2px;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  font-size: 10px;
 }
 
 .mo-card-body {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 3px;
   min-width: 0;
 }
 
@@ -158,17 +163,10 @@
   outline-offset: 1px;
 }
 
-.mo-card-top {
-  display: flex;
-  gap: 12px;
-}
-
 .mo-card-title {
-  flex: 1;
-  min-width: 0;
   overflow: hidden;
-  font-size: 14px;
-  line-height: 20px;
+  font-size: 15px;
+  line-height: 21px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -177,18 +175,30 @@
   font-weight: 600;
 }
 
+.mo-card-score {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 56px;
+}
+
 .mo-card-percent {
-  flex: none;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 20px;
   font-weight: 500;
-  line-height: 20px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.4px;
+  line-height: 24px;
   filter: brightness(1.12);
 }
 
 .mo-card.is-active .mo-card-percent {
   color: var(--ink);
   filter: none;
+}
+
+.mo-card .match-track {
+  grid-column: 2 / -1;
+  margin-top: 10px;
 }
 
 .mo-card-company,
