@@ -7,9 +7,17 @@ listing tego źródła obejmuje wszystko w swoim zakresie, a oferta była widzia
 już przy obecnym zakresie. Oba warunki zapisuje main_scraper w `scraper_status.json`
 (pole `liveness`: `scope` i `since`, dzień pierwszego przebiegu z tym zakresem);
 źródło bez tego pola nie oznacza ofert jako zdjętych.
+
+Drugi sygnał to data ważności podana przez portal (`valid_through`): oferta, której
+termin minął, a od tego dnia nie pojawiła się w żadnym przebiegu, jest zdjęta.
+Nie dotyczy źródeł z `WAZNOSC_NIEPEWNA`, które wystawiają oferty po terminie.
 """
 
+import re
 from collections import defaultdict
+
+WAZNOSC_NIEPEWNA = frozenset({"SOLID.Jobs", "aplikuj.pl"})
+_DATA = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def _pole(job, nazwa):
@@ -60,3 +68,19 @@ def zdjete_z_portalu(jobs, status: dict):
             if link:
                 zdjete.add(link)
     return zdjete
+
+
+def wygasle(jobs, dzis: str):
+    """Linki ofert po terminie ważności, niewidzianych od dnia, w którym termin minął."""
+    wynik = set()
+    for job in jobs:
+        if _pole(job, "source") in WAZNOSC_NIEPEWNA:
+            continue
+        termin = (_pole(job, "valid_through") or "")[:10]
+        if not _DATA.fullmatch(termin) or termin >= dzis:
+            continue
+        if (_pole(job, "last_seen") or "")[:10] <= termin:
+            link = _pole(job, "link")
+            if link:
+                wynik.add(link)
+    return wynik

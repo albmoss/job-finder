@@ -10,17 +10,17 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Callable
 
+from utils import candidates
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSIONS_PATH = ROOT / "cv_versions.json"
-PDF_DIR = ROOT / "cv_versions"
 
 INTERRUPTED_ERROR = "Tworzenie CV przerwało ponowne uruchomienie serwera. Spróbuj ponownie."
 
 _lock = threading.RLock()
 _versions: list[dict] | None = None
+_versions_path: Path | None = None
 
 SUMMARY_KEYS = ("id", "link", "company", "title", "version", "status", "phase", "language",
                 "created_at", "updated_at", "file_name", "pending_numbers", "error")
@@ -31,16 +31,28 @@ def now() -> str:
 
 
 def _all() -> list[dict]:
-    global _versions
-    if _versions is None:
-        data = load_json_safe(VERSIONS_PATH, default={"versions": []})
+    global _versions, _versions_path
+    path = candidates.path(candidates.CV_VERSIONS)
+    if _versions is None or _versions_path != path:
+        data = load_json_safe(path, default={"versions": []})
         items = data.get("versions") if isinstance(data, dict) else None
         _versions = [v for v in items or [] if isinstance(v, dict) and v.get("id")]
+        _versions_path = path
+        stuck = [v for v in _versions if v.get("status") == "running"]
+        for v in stuck:
+            v.update(status="failed", phase=None, error=INTERRUPTED_ERROR, updated_at=now())
+        if stuck:
+            _save()
     return _versions
 
 
 def _save() -> None:
-    save_json_atomic(VERSIONS_PATH, {"versions": _all()}, backup=False)
+    save_json_atomic(_versions_path, {"versions": _versions}, backup=False)
+
+
+def busy() -> bool:
+    with _lock:
+        return any(v.get("status") == "running" for v in _all())
 
 
 def _find(version_id: str) -> dict | None:
@@ -134,16 +146,4 @@ def slug(text: str) -> str:
 
 
 def pdf_path(version_id: str) -> Path:
-    return PDF_DIR / f"{version_id}.pdf"
-
-
-def _recover() -> None:
-    with _lock:
-        stuck = [v for v in _all() if v.get("status") == "running"]
-        for v in stuck:
-            v.update(status="failed", phase=None, error=INTERRUPTED_ERROR, updated_at=now())
-        if stuck:
-            _save()
-
-
-_recover()
+    return candidates.path(candidates.CV_VERSIONS_DIR) / f"{version_id}.pdf"

@@ -17,9 +17,13 @@ import json
 import re
 from pathlib import Path
 
+from utils import candidates
 from utils.offer_fields import SENIORITY, _fold
 
-PROFILE_PATH = Path(__file__).resolve().parent.parent / "candidate_profile.json"
+
+def profile_path() -> Path:
+    return candidates.path(candidates.PROFILE)
+
 
 # Poziom z CV -> poziomy do ściągania.
 _LEVEL_WINDOW = {
@@ -34,7 +38,7 @@ _LEVEL_WINDOW = {
 
 def load_profile(path: Path | None = None) -> dict | None:
     """Profil kandydata albo None, gdy CV nie zostało jeszcze przetworzone."""
-    target = path or PROFILE_PATH
+    target = path or profile_path()
     try:
         with open(target, "r", encoding="utf-8") as f:
             data = json.load(f)

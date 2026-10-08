@@ -248,6 +248,8 @@ class PipelineProcessManager:
             "added": None,
             "details_done": None,
             "details_total": None,
+            "error": None,
+            "health": None,
         }
         self._telemetry["sources"].append(entry)
         return entry
@@ -298,10 +300,17 @@ class PipelineProcessManager:
             src["state"] = "skipped"
             return
 
-        m = re.search(r"[✗\u2717]\s*(.+?):\s*(?:Failed|Thread crashed)\b", line, re.IGNORECASE)
+        m = re.search(r"[✗\u2717]\s*(.+?):\s*(?:Failed|Thread crashed)\b(?:\s*-\s*(.+))?", line, re.IGNORECASE)
         if m:
             src = self._get_or_create_source(m.group(1), default_state="failed")
             src["state"] = "failed"
+            src["error"] = (m.group(2) or "").strip()[:300] or None
+            return
+
+        m = re.search(r"^health:\s*(.+?)\s+-\s+(broken|degraded|weak|inconclusive)\s+\((.*)\)\s*$", line.strip())
+        if m:
+            src = self._get_or_create_source(m.group(1), default_state="done")
+            src["health"] = {"verdict": m.group(2), "detail": m.group(3)[:300]}
             return
 
         cl = re.sub(r"^.*?-\s*(?:INFO|WARNING|ERROR|DEBUG|CRITICAL)\s*-\s*", "", line).strip()

@@ -3,7 +3,7 @@ App Services - obsługa danych, decyzji użytkownika, CV, kluczy API i narzędzi
 Niezależna warstwa usługowa dla backendu HTTP.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import logging
@@ -13,10 +13,8 @@ import re
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from config import (
-    JOBS_DATABASE_PATH,
-    LAST_SCRAPE_RUN_PATH,
-)
+from config import JOBS_DATABASE_PATH
+from utils import candidates
 from utils.llm import PLACEHOLDERS, PROVIDERS, settings_from_env
 from utils.cv_parser import CVParser
 from utils.data_models import JobDatabase, Job, JobMatch, ScraperStatusManager, is_placeholder_description
@@ -24,14 +22,20 @@ from utils.text_cleaner import detect_work_mode, strip_html
 from utils.safe_io import save_json_atomic, load_json_safe
 from utils.links import canonical_link
 from utils.candidate_scope import load_profile
-from utils.liveness import zdjete_z_portalu
+from utils.liveness import wygasle, zdjete_z_portalu
 from utils.offer_check import zdjete_ze_sprawdzen
 from cv_tailor import store as cv_store
 
 logger = logging.getLogger(__name__)
 
-USER_DECISIONS_PATH = Path("user_decisions.json")
-MATCH_RESULTS_PATH = Path("match_results.json")
+
+def decisions_path() -> Path:
+    return candidates.path(candidates.DECISIONS)
+
+
+def match_results_path() -> Path:
+    return candidates.path(candidates.MATCH_RESULTS)
+
 
 OFFER_TABS = ("Dopasowane", "Ukryte", "Zapisane")
 SAVED_STATUSES = frozenset({"save", "aspirational"})
@@ -152,13 +156,12 @@ def format_description_blocks(paragraphs: List[str]) -> List[Dict[str, Any]]:
     return blocks
 
 
-def _file_signature(path: Path) -> Optional[Tuple[int, int]]:
-    """Zwraca (mtime_ns, size) lub None jeśli plik nie istnieje."""
+def _file_signature(path: Path) -> Tuple[str, Optional[int], Optional[int]]:
     try:
         st = path.stat()
-        return (st.st_mtime_ns, st.st_size)
-    except (FileNotFoundError, OSError):
-        return None
+        return (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (str(path), None, None)
 
 
 class JobDataService:
@@ -178,15 +181,16 @@ class JobDataService:
         self.user_decisions: Dict[str, Any] = {}
         self.data_loaded = False
         self._rev = 0
-        self._signatures: Dict[str, Optional[Tuple[int, int]]] = {
+        self._signatures: Dict[str, Optional[Tuple[str, Optional[int], Optional[int]]]] = {
             "decisions": None,
             "matches": None,
             "jobs": None,
         }
+        self._decisions_path: Optional[Path] = None
 
     def fresh_since(self) -> Optional[str]:
         """Start ostatniego pobierania (ISO, czas lokalny) albo None, gdy nigdy nie zapisany."""
-        data = load_json_safe(LAST_SCRAPE_RUN_PATH, default=None)
+        data = load_json_safe(candidates.path(candidates.LAST_SCRAPE_RUN), default=None)
         started = data.get("started_at") if isinstance(data, dict) else None
         return started if isinstance(started, str) and started else None
 
@@ -201,8 +205,10 @@ class JobDataService:
 
     def ensure_loaded(self, force=False):
         with self._lock:
-            sig_dec = _file_signature(USER_DECISIONS_PATH)
-            sig_mat = _file_signature(MATCH_RESULTS_PATH)
+            dec_path = decisions_path()
+            mat_path = match_results_path()
+            sig_dec = _file_signature(dec_path)
+            sig_mat = _file_signature(mat_path)
             sig_jobs = _file_signature(JOBS_DATABASE_PATH)
 
             if (
@@ -220,14 +226,15 @@ class JobDataService:
 
             # 1. User decisions
             if needs_dec:
-                self.user_decisions = load_json_safe(USER_DECISIONS_PATH, default={}) or {}
+                self.user_decisions = load_json_safe(dec_path, default={}) or {}
+                self._decisions_path = dec_path
                 self._signatures["decisions"] = sig_dec
             # 2. Match results
             if needs_mat:
                 match_results = {}
-                if MATCH_RESULTS_PATH.exists():
+                if mat_path.exists():
                     try:
-                        data = load_json_safe(MATCH_RESULTS_PATH, default={})
+                        data = load_json_safe(mat_path, default={})
                         if isinstance(data, dict):
                             match_results = data
                     except Exception as e:
@@ -294,6 +301,7 @@ class JobDataService:
 
                 try:
                     self.zdjete = zdjete_z_portalu(self.raw_jobs, ScraperStatusManager().load_status())
+                    self.zdjete |= wygasle(self.raw_jobs, date.today().isoformat())
                 except Exception as e:
                     logger.warning(f"Błąd wykrywania ofert zdjętych: {e}")
                     self.zdjete = set()
@@ -340,7 +348,7 @@ class JobDataService:
             }
 
     def _save_decisions(self) -> bool:
-        ok = save_json_atomic(USER_DECISIONS_PATH, self.user_decisions, backup=True, keep=20)
+        ok = save_json_atomic(self._decisions_path or decisions_path(), self.user_decisions, backup=True, keep=20)
         if not ok:
             logger.error("Nie udało się zapisać decyzji użytkownika do pliku!")
         self._rev += 1
@@ -425,7 +433,7 @@ class JobDataService:
                 self.user_decisions.pop(c_link, None)
                 changed = True
             if changed:
-                save_json_atomic(USER_DECISIONS_PATH, self.user_decisions, backup=True, keep=20)
+                save_json_atomic(self._decisions_path or decisions_path(), self.user_decisions, backup=True, keep=20)
                 self._rev += 1
             return changed
 
@@ -628,6 +636,8 @@ class JobDataService:
                         "company": job.company or "—",
                         "location": job.location or "",
                         "work_mode": work_mode_text(job),
+                        "source": job.source or "—",
+                        "logo_url": job.logo_url,
                         "match_percentage": pct,
                     }
                     for pct, job in found[:limit]
@@ -641,31 +651,36 @@ job_data_service = JobDataService()
 
 # --- CV & API Keys & Environment Management ---
 
-CV_TXT_PATH = Path(__file__).parent / "final_cv_text.txt"
-CV_PDF_PATH = Path(__file__).parent / "cv.pdf"
+def cv_txt_path() -> Path:
+    return candidates.path(candidates.CV_TEXT)
+
+
+def cv_pdf_path() -> Path:
+    return candidates.path(candidates.CV_PDF)
+
 
 def get_cv_info() -> Dict[str, Any]:
-    cv_txt_path = CV_TXT_PATH
-    cv_pdf_path = CV_PDF_PATH
+    txt_path = cv_txt_path()
+    pdf_path = cv_pdf_path()
     text = ""
-    if cv_txt_path.exists():
+    if txt_path.exists():
         try:
-            with open(cv_txt_path, "r", encoding="utf-8") as f:
+            with open(txt_path, "r", encoding="utf-8") as f:
                 content = f.read().strip()
                 if content and not content.startswith("ERROR:"):
                     text = content
         except Exception as e:
-            logger.warning(f"Błąd odczytu {cv_txt_path}: {e}")
+            logger.warning(f"Błąd odczytu {txt_path}: {e}")
 
-    if not text and cv_pdf_path.exists():
+    if not text and pdf_path.exists():
         try:
-            extracted = CVParser.extract_from_pdf(str(cv_pdf_path))
+            extracted = CVParser.extract_from_pdf(str(pdf_path))
             if extracted and len(extracted.strip()) > 20:
                 text = CVParser.clean_text(extracted)
-                with open(cv_txt_path, "w", encoding="utf-8") as f:
+                with open(txt_path, "w", encoding="utf-8") as f:
                     f.write(text)
         except Exception as e:
-            logger.warning(f"Błąd ekstrakcji z {cv_pdf_path}: {e}")
+            logger.warning(f"Błąd ekstrakcji z {pdf_path}: {e}")
 
     has_cv = bool(text and len(text.strip()) > 20)
     pdf_current = pdf_is_current()
@@ -673,10 +688,10 @@ def get_cv_info() -> Dict[str, Any]:
     if pdf_current:
         try:
             from pypdf import PdfReader
-            pdf_pages = len(PdfReader(str(cv_pdf_path)).pages)
+            pdf_pages = len(PdfReader(str(pdf_path)).pages)
         except Exception as e:
-            logger.warning(f"Nie udało się policzyć stron {cv_pdf_path}: {e}")
-    filename = "cv.pdf" if pdf_current else ("final_cv_text.txt" if cv_txt_path.exists() else "Brak")
+            logger.warning(f"Nie udało się policzyć stron {pdf_path}: {e}")
+    filename = "cv.pdf" if pdf_current else ("final_cv_text.txt" if txt_path.exists() else "Brak")
 
     return {
         "ready": has_cv,
@@ -691,11 +706,12 @@ def get_cv_info() -> Dict[str, Any]:
 
 def pdf_is_current() -> bool:
     """cv.pdf to bieżące CV, dopóki tekst nie został później wklejony ręcznie."""
-    if not CV_PDF_PATH.exists():
+    pdf_path, txt_path = cv_pdf_path(), cv_txt_path()
+    if not pdf_path.exists():
         return False
-    if not CV_TXT_PATH.exists():
+    if not txt_path.exists():
         return True
-    return CV_PDF_PATH.stat().st_mtime >= CV_TXT_PATH.stat().st_mtime - 60
+    return pdf_path.stat().st_mtime >= txt_path.stat().st_mtime - 60
 
 
 def _profile_summary(cv: str) -> Optional[Dict[str, Any]]:
@@ -722,18 +738,18 @@ def _profile_summary(cv: str) -> Optional[Dict[str, Any]]:
 
 
 def save_uploaded_cv(filename: str, content_bytes: bytes) -> Tuple[bool, str]:
-    cv_txt_path = CV_TXT_PATH
+    txt_path = cv_txt_path()
     name = filename.lower()
     text = None
 
     try:
         if name.endswith(".pdf"):
-            pdf_path = CV_PDF_PATH
+            pdf_path = cv_pdf_path()
             with open(pdf_path, "wb") as f:
                 f.write(content_bytes)
             text = CVParser.extract_from_pdf(str(pdf_path))
         elif name.endswith((".docx", ".doc")):
-            docx_path = CV_PDF_PATH.with_name("cv.docx")
+            docx_path = candidates.path(candidates.CV_DOCX)
             with open(docx_path, "wb") as f:
                 f.write(content_bytes)
             text = CVParser.extract_from_docx(str(docx_path))
@@ -742,7 +758,7 @@ def save_uploaded_cv(filename: str, content_bytes: bytes) -> Tuple[bool, str]:
 
         if text and len(text.strip()) > 20:
             cleaned = CVParser.clean_text(text)
-            with open(cv_txt_path, "w", encoding="utf-8") as f:
+            with open(txt_path, "w", encoding="utf-8") as f:
                 f.write(cleaned)
             return True, f"Zapisano CV ({len(cleaned)} znaków)."
         else:
@@ -753,12 +769,12 @@ def save_uploaded_cv(filename: str, content_bytes: bytes) -> Tuple[bool, str]:
 
 
 def save_pasted_cv_text(raw_text: str) -> Tuple[bool, str]:
-    cv_txt_path = CV_TXT_PATH
+    txt_path = cv_txt_path()
     if not raw_text or len(raw_text.strip()) < 20:
         return False, "Wklejona treść CV jest za krótka (minimum 20 znaków)."
     try:
         cleaned = CVParser.clean_text(raw_text)
-        with open(cv_txt_path, "w", encoding="utf-8") as f:
+        with open(txt_path, "w", encoding="utf-8") as f:
             f.write(cleaned)
         return True, f"Zapisano treść CV ({len(cleaned)} znaków)."
     except Exception as e:

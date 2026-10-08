@@ -44,6 +44,7 @@ base_cv.json
 cv_versions.json
 cv_versions/
 cv_tailor_instructions.md
+candidates/
 
 # Kopie zapasowe plików danych (utils/safe_io.py)
 backups/

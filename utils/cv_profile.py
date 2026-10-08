@@ -21,11 +21,14 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from utils.candidate_scope import PROFILE_PATH, load_profile
+from utils import candidates
+from utils.candidate_scope import load_profile, profile_path
 from utils.offer_fields import SENIORITY, norm_language
-from utils.safe_io import save_json_atomic
+from utils.safe_io import load_json_safe, save_json_atomic
 
-CV_TEXT_PATH = Path(__file__).resolve().parent.parent / "final_cv_text.txt"
+
+def cv_text_path() -> Path:
+    return candidates.path(candidates.CV_TEXT)
 
 
 class _Language(BaseModel):
@@ -34,6 +37,9 @@ class _Language(BaseModel):
 
 
 class CandidateProfile(BaseModel):
+    full_name: Optional[str] = Field(description=(
+        "Imię i nazwisko kandydata z CV, np. z nagłówka albo danych kontaktowych; "
+        "null, gdy CV ich nie podaje"))
     city: Optional[str] = Field(description=(
         "Miasto zamieszkania albo szukania pracy podane w CV, zapisane w języku kraju, "
         "w którym leży (Warszawa, nie Warsaw; Kraków, nie Cracow) - tej nazwy używają "
@@ -68,7 +74,7 @@ CV:
 
 def cv_text() -> str | None:
     try:
-        text = CV_TEXT_PATH.read_text(encoding="utf-8").strip()
+        text = cv_text_path().read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return None
     return text or None
@@ -128,6 +134,7 @@ def build_profile(text: str) -> dict:
                     "cv_sha256": _sha(text),
                     "generated_at": datetime.now().isoformat(timespec="seconds"),
                     "model": model,
+                    "name": (items[0].get("full_name") or "").strip() or None,
                 }
                 return profile
     raise RuntimeError(f"Nie udało się wyciągnąć profilu z CV: {last_error}")
@@ -145,15 +152,32 @@ def ensure_profile(force: bool = False) -> dict | None:
     if (not force and current
             and current.get("_metadata", {}).get("cv_sha256") == _sha(text)):
         return current
+    if current:
+        remember_profile(current)
     profile = build_profile(text)
-    save_json_atomic(PROFILE_PATH, profile, backup=False)
+    save_json_atomic(profile_path(), profile, backup=False)
+    remember_profile(profile)
+    candidates.adopt_name(profile["_metadata"].get("name"))
     return profile
 
 
 def profile_fingerprint(profile: dict) -> str:
-    """Skrót pól profilu używanych przy ocenie - zmiana CV unieważnia wyniki."""
+    """Skrót pól profilu, z którego powstała ocena; klucz w historii profili kandydata."""
     body = {k: v for k, v in profile.items() if not k.startswith("_")}
     return _sha(json.dumps(body, ensure_ascii=False, sort_keys=True))[:16]
+
+
+def profile_history() -> dict:
+    data = load_json_safe(candidates.path(candidates.PROFILE_HISTORY), default={})
+    return data if isinstance(data, dict) else {}
+
+
+def remember_profile(profile: dict) -> None:
+    history = profile_history()
+    fp = profile_fingerprint(profile)
+    if fp not in history:
+        history[fp] = profile
+        save_json_atomic(candidates.path(candidates.PROFILE_HISTORY), history, backup=False)
 
 
 def main(argv: list[str] | None = None) -> int:

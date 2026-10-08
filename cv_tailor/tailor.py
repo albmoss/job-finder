@@ -10,11 +10,11 @@ from pathlib import Path
 from cv_tailor import jpath, store
 from cv_tailor.model import Cancelled, TailorError, ask, ensure_base_cv, normalize_cv
 from cv_tailor.schema import TailorReply
+from utils import candidates
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_INSTRUCTIONS_PATH = Path(__file__).resolve().parent / "default_instructions.md"
-USER_INSTRUCTIONS_PATH = store.ROOT / "cv_tailor_instructions.md"
 INSTRUCTIONS_FILE_NAME = "cv_tailor.md"
 
 SECTIONS = ("summary", "experience", "projects", "skills", "education", "languages", "certificates", "other")
@@ -29,13 +29,17 @@ _cancel_flags: dict[str, threading.Event] = {}
 _flags_lock = threading.Lock()
 
 
+def user_instructions_path() -> Path:
+    return candidates.path(candidates.TAILOR_INSTRUCTIONS)
+
+
 def default_instructions() -> str:
     return DEFAULT_INSTRUCTIONS_PATH.read_text(encoding="utf-8")
 
 
 def instructions() -> dict:
     try:
-        text = USER_INSTRUCTIONS_PATH.read_text(encoding="utf-8")
+        text = user_instructions_path().read_text(encoding="utf-8")
         is_default = False
     except FileNotFoundError:
         text, is_default = default_instructions(), True
@@ -45,12 +49,12 @@ def instructions() -> dict:
 def save_instructions(text: str) -> dict:
     if text.strip() == default_instructions().strip():
         return reset_instructions()
-    USER_INSTRUCTIONS_PATH.write_text(text, encoding="utf-8")
+    user_instructions_path().write_text(text, encoding="utf-8")
     return instructions()
 
 
 def reset_instructions() -> dict:
-    USER_INSTRUCTIONS_PATH.unlink(missing_ok=True)
+    user_instructions_path().unlink(missing_ok=True)
     return instructions()
 
 

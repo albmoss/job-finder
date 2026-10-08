@@ -29,12 +29,11 @@ import hashlib
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
 
+from utils import candidates
 from utils.safe_io import load_json_safe, save_json_atomic
 
 logger = logging.getLogger(__name__)
-CACHE_PATH = Path(__file__).resolve().parent.parent / "category_scope.json"
 
 # Kategoria zostaje, gdy Jev daje jej co najmniej tyle szans.
 THRESHOLD = 0.1
@@ -82,7 +81,7 @@ def pick_categories(portal: str, catalog: dict[str, str]) -> list[str] | None:
     profile_fp = profile_fingerprint(profile)
     catalog_fp = _catalog_fp(catalog)
 
-    cache = load_json_safe(str(CACHE_PATH), default={})
+    cache = load_json_safe(str(candidates.path(candidates.CATEGORY_SCOPE)), default={})
     if not isinstance(cache, dict):
         cache = {}
     entry = cache.get(portal) or {}
@@ -107,7 +106,7 @@ def pick_categories(portal: str, catalog: dict[str, str]) -> list[str] | None:
         "probabilities": {catalog[c]: round(p, 3) for c, p in sorted(probs.items(), key=lambda x: -x[1])},
         "picked_at": datetime.now().isoformat(timespec="seconds"),
     }
-    save_json_atomic(str(CACHE_PATH), cache, backup=False)
+    save_json_atomic(str(candidates.path(candidates.CATEGORY_SCOPE)), cache, backup=False)
     logger.info(f"{portal}: {len(picked)}/{len(catalog)} kategorii pasuje do CV: "
                 + ", ".join(catalog[c] for c in picked))
     return picked

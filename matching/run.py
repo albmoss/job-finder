@@ -6,9 +6,10 @@ Wynik trafia do `match_results.json`: słownik kanoniczny link -> wpis
      "offer_fp": str, "profile_fp": str, "model": str | None, "scored_at": ISO}
 `percent` jest None dla ofert odrzuconych przez przesiew (`filtered`).
 
-Oferta jest oceniana raz dla pary „treść oferty + profil z CV”. Kolejny
-przebieg pomija wpisy z tym samym `offer_fp` i `profile_fp`, więc ocenia tylko
-nowe albo zmienione oferty. Przed pełną oceną idzie wstępna (matching/triage.py):
+Oferta jest oceniana raz dla treści oferty: zmiana CV u tego samego kandydata
+nie unieważnia ocen. Wpis trzyma `profile_fp` profilu, z którym powstał, a przesiew
+takiej oferty liczy się z tym profilem (historia w utils/cv_profile.py). Nowe
+i zmienione oferty ocenia bieżący profil. Przed pełną oceną idzie wstępna (matching/triage.py):
 oferty bez szansy dostają `filtered = "kierunek"` i nie kosztują pełnego zapytania.
 
 Uruchomienie ręczne: python -m matching.run [--limit N] [--rescore-all]
@@ -28,14 +29,14 @@ import requests
 
 from matching import jev, triage
 from matching.prefilter import reject_reason
-from utils.cv_profile import cv_text, ensure_profile, profile_fingerprint
+from utils import candidates
+from utils.cv_profile import cv_text, ensure_profile, profile_fingerprint, profile_history, remember_profile
 from utils.data_models import Job, JobDatabase
 from utils.links import canonical_link
 from utils.offer_fields import STRUCTURED_FIELDS, text_features
 from utils.safe_io import load_json_safe, save_json_atomic
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-RESULTS_PATH = BASE_DIR / "match_results.json"
 JOBS_PATH = BASE_DIR / "jobs_database.json"
 STOP_FLAG_FILE = BASE_DIR / "pipeline_stop_requested.flag"
 
@@ -43,6 +44,10 @@ WORKERS = 8
 SAVE_EVERY = 200
 # Linia postępu co tyle sekund (i na końcu): arkusz pipeline'u liczy z niej postęp i ETA.
 PROGRESS_EVERY_S = 2.0
+
+
+def results_path() -> Path:
+    return candidates.path(candidates.MATCH_RESULTS)
 
 
 def offer_fingerprint(job: Job) -> str:
@@ -53,16 +58,17 @@ def offer_fingerprint(job: Job) -> str:
 
 
 def load_results() -> dict:
-    data = load_json_safe(str(RESULTS_PATH), default={})
+    data = load_json_safe(str(results_path()), default={})
     return data if isinstance(data, dict) else {}
 
 
-def _triage(todo, results, profile, cv, profile_fp, key, session, now):
+def _triage(todo, results, profile, cv, profile_fp, kept, key, session, now):
     known, ask = {}, []
     for link, job, _ in todo:
         cached = (results.get(link) or {}).get("triage") or {}
-        if cached.get("fp") == triage.triage_fp(job) and cached.get("profile_fp") == profile_fp:
-            known[link] = cached["p"]
+        if cached.get("fp") == triage.triage_fp(job) and (
+                cached.get("profile_fp") == profile_fp or link in kept):
+            known[link] = (cached["p"], cached.get("profile_fp") or profile_fp)
         else:
             ask.append((link, job))
     errors, stopped = 0, False
@@ -71,14 +77,15 @@ def _triage(todo, results, profile, cv, profile_fp, key, session, now):
             ask, jev.candidate_state(profile, cv), key, session, STOP_FLAG_FILE.exists)
         print(f"Triage: {len(fresh)}/{len(ask)} offers checked, {tokens} input tokens, "
               f"{len(known)} cached")
-        known.update(fresh)
+        known.update({link: (p, profile_fp) for link, p in fresh.items()})
 
     passed, rejected = [], 0
     for link, job, fp in todo:
         if link not in known:
             continue
-        mark = {"p": round(known[link], 4), "fp": triage.triage_fp(job), "profile_fp": profile_fp}
-        if known[link] >= triage.THRESHOLD:
+        p, basis_fp = known[link]
+        mark = {"p": round(p, 4), "fp": triage.triage_fp(job), "profile_fp": basis_fp}
+        if p >= triage.THRESHOLD:
             entry = results.setdefault(link, {"percent": None, "filtered": None, "answers": None,
                                               "offer_fp": None, "profile_fp": None, "model": None,
                                               "scored_at": None})
@@ -87,7 +94,7 @@ def _triage(todo, results, profile, cv, profile_fp, key, session, now):
         else:
             rejected += 1
             results[link] = {"percent": None, "filtered": "kierunek", "answers": None,
-                             "offer_fp": fp, "profile_fp": profile_fp, "model": None,
+                             "offer_fp": fp, "profile_fp": basis_fp, "model": None,
                              "scored_at": now, "triage": mark}
     return passed, rejected, errors, stopped
 
@@ -111,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     cv = cv_text()
     profile_fp = profile_fingerprint(profile)
+    remember_profile(profile)
+    history = profile_history()
     print(f"Profile: {profile.get('seniority')} | {profile.get('city')} | "
           f"{len(profile.get('skills') or [])} skills | fp {profile_fp}")
 
@@ -118,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     # --rescore-all: pełne przeliczenie, np. po zmianie pytań albo wag w matching/jev.py.
     results = {} if "--rescore-all" in args else load_results()
     live_links = set()
+    kept: set[str] = set()
     todo: list[tuple[str, Job, str]] = []
     filtered: dict[str, int] = {}
     now = datetime.now().isoformat(timespec="seconds")
@@ -131,18 +141,22 @@ def main(argv: list[str] | None = None) -> int:
             for name, value in text_features(job.description).items():
                 setattr(job, name, value)
         fp = offer_fingerprint(job)
+        entry = results.get(link)
+        basis_fp = profile_fp
+        if entry and entry.get("offer_fp") == fp:
+            kept.add(link)
+            if entry.get("profile_fp") in history:
+                basis_fp = entry["profile_fp"]
         # Przesiew idzie po każdej ofercie, także ocenionej: jest darmowy, a nowa
         # reguła ma zdjąć z listy także oferty ocenione przed jej dodaniem.
-        reason = reject_reason(job, profile)
+        reason = reject_reason(job, history.get(basis_fp, profile))
         if reason:
             filtered[reason] = filtered.get(reason, 0) + 1
             results[link] = {"percent": None, "filtered": reason, "answers": None,
-                             "offer_fp": fp, "profile_fp": profile_fp, "model": None,
+                             "offer_fp": fp, "profile_fp": basis_fp, "model": None,
                              "scored_at": now}
             continue
-        entry = results.get(link)
-        if (entry and entry.get("percent") is not None and entry.get("offer_fp") == fp
-                and entry.get("profile_fp") == profile_fp):
+        if link in kept and entry.get("percent") is not None:
             continue
         todo.append((link, job, fp))
 
@@ -154,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     stopped = False
     errors = 0
     if limit != 0 and todo:
-        todo, rejected, errors, stopped = _triage(todo, results, profile, cv, profile_fp, key, session, now)
+        todo, rejected, errors, stopped = _triage(todo, results, profile, cv, profile_fp, kept, key, session, now)
         if rejected:
             filtered["kierunek"] = rejected
 
@@ -162,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         todo = todo[:limit]
     total = len(todo)
     print(f"Prefilter: {sum(filtered.values())} rejected {filtered} | to score: {total}")
-    save_json_atomic(str(RESULTS_PATH), results, backup=True)
+    save_json_atomic(str(results_path()), results, backup=True)
 
     done = 0
     started = last_report = time.monotonic()
@@ -200,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 done += 1
                 if done % SAVE_EVERY == 0:
-                    save_json_atomic(str(RESULTS_PATH), results, backup=False)
+                    save_json_atomic(str(results_path()), results, backup=False)
                 now_s = time.monotonic()
                 if now_s - last_report >= PROGRESS_EVERY_S or done == total:
                     last_report = now_s
@@ -210,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("   Stop requested - finishing in-flight offers.")
                 stopped = True
 
-    save_json_atomic(str(RESULTS_PATH), results, backup=False)
+    save_json_atomic(str(results_path()), results, backup=False)
     scored = sum(1 for e in results.values() if e.get("percent") is not None)
     print(f"Matching done: {done} scored now, {errors} errors, {scored} offers with a percent.")
     # Zatrzymanie (flaga albo odrzucony klucz) to nie sukces: pipeline nie może

@@ -277,18 +277,21 @@ class ScraperStatusManager:
             self._write(status_data)
 
     def is_scraped_today(self, source_name: str) -> bool:
-        """Czy źródło zostało dziś poprawnie zescrapowane."""
+        """Czy źródło zostało dziś poprawnie zescrapowane dla aktywnego kandydata."""
         from datetime import datetime
+        from utils import candidates
 
         with self._lock:
             entry = self._read().get(source_name, {})
 
         return (entry.get('last_run_date') == datetime.now().date().isoformat()
-                and entry.get('status') == 'success')
+                and entry.get('status') == 'success'
+                and entry.get('candidate', candidates.FIRST_ID) == candidates.active_id())
 
     def mark_as_completed(self, source_name: str, jobs_count: int):
         """Odnotowuje udany dzisiejszy scraping źródła."""
         from datetime import datetime
+        from utils import candidates
 
         now = datetime.now()
         with self._lock:
@@ -299,6 +302,7 @@ class ScraperStatusManager:
                 'status': 'success',
                 'jobs_count': jobs_count,
                 'timestamp': now.isoformat(),
+                'candidate': candidates.active_id(),
             })
             data[source_name] = entry
             self._write(data)

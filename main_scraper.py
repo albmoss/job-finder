@@ -76,11 +76,11 @@ def refresh_sources(source_names):
 
     Oferty z decyzją użytkownika są zachowywane - nie kasujemy tego, co oceniłeś.
     """
+    from utils import candidates
     from utils.links import canonical_link
     from utils.safe_io import load_json_safe, save_json_atomic
 
-    decisions = load_json_safe("user_decisions.json", default={})
-    decided = {canonical_link(k) for k in decisions}
+    decided = candidates.decided_links()
     targets = {s.lower() for s in source_names}
 
     def matches(record_source: str) -> bool:
@@ -376,28 +376,19 @@ def run_all_scrapers(only=None, force=False, refresh=False):
     print("="*60)
 
     findings = _report_health(scraper_results, db, skipped_no_key, disabled_reported)
-    blocking_sources = _blocking_scrape_sources(scraper_results, findings)
-    if blocking_sources:
-        raise RuntimeError(
-            "Scraping incomplete for: " + ", ".join(blocking_sources)
-        )
+    if _scrape_failed(scraper_results, findings):
+        raise RuntimeError("Scraping failed: no source returned offers")
 
     return all_jobs
 
 
-def _blocking_scrape_sources(scraper_results, findings):
-    """Źródła, przez które cały etap nie może udawać pełnego sukcesu."""
-    blocking = {
-        source
-        for source, result in scraper_results.items()
-        if result.get("status") != "skipped" and not result.get("success")
-    }
-    blocking.update(
-        finding["source"]
-        for finding in findings
-        if finding.get("verdict") in {"broken", "degraded"}
+def _scrape_failed(scraper_results, findings):
+    """Etap pada dopiero wtedy, gdy żadne uruchomione źródło nie dało ofert."""
+    broken = {f["source"] for f in findings if f.get("verdict") == "broken"}
+    ran = {source: result for source, result in scraper_results.items() if result.get("status") != "skipped"}
+    return bool(ran) and not any(
+        result.get("success") and source not in broken for source, result in ran.items()
     )
-    return sorted(blocking)
 
 
 def _report_health(scraper_results, db, skipped_no_key, disabled):

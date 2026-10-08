@@ -19,11 +19,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from utils import candidates
 from utils.links import canonical_link as normalize
 from utils.safe_io import load_json_safe, save_json_atomic
 
 JOBS_DB = "jobs_database.json"
-DECISIONS = "user_decisions.json"
 
 
 def decision_richness(val) -> int:
@@ -65,9 +65,15 @@ def migrate_jobs():
 
 
 def migrate_decisions():
-    decisions = load_json_safe(DECISIONS, default={})
+    for directory in candidates.dirs():
+        _migrate_decisions(directory / candidates.DECISIONS)
+
+
+def _migrate_decisions(path):
+    label = f"{path.parent.name}/{path.name}"
+    decisions = load_json_safe(path, default={})
     if not decisions:
-        print(f"  {DECISIONS}: empty, skipping")
+        print(f"  {label}: empty, skipping")
         return
 
     merged = {}
@@ -81,8 +87,8 @@ def migrate_decisions():
         else:
             merged[key] = val
 
-    print(f"  {DECISIONS}: {len(decisions)} -> {len(merged)} (kolizje: {collisions})")
-    save_json_atomic(DECISIONS, merged, backup=True)
+    print(f"  {label}: {len(decisions)} -> {len(merged)} (kolizje: {collisions})")
+    save_json_atomic(path, merged, backup=True)
 
 
 def main():

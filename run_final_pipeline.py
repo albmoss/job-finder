@@ -25,7 +25,8 @@ force_utf8()
 from main_scraper import run_all_scrapers
 from utils.data_models import JobDatabase
 from utils.safe_io import load_json_safe, save_json_atomic
-from config import JOBS_DATABASE_PATH, LAST_SCRAPE_RUN_PATH
+from config import JOBS_DATABASE_PATH
+from utils import candidates
 import clean_db
 import purge_stale_offers
 import deduplicate_db
@@ -124,10 +125,14 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
     options = {
         "skip_scraping": skip_scraping,
         "rescore_all": rescore_all,
+        "candidate": candidates.active_id(),
     }
 
+    checkpoint = load_checkpoint() if resume else {}
+    if resume and checkpoint.get("options", {}).get("candidate", candidates.FIRST_ID) != options["candidate"]:
+        logger.info("Checkpoint belongs to another candidate - starting from the beginning.")
+        resume = False
     if resume:
-        checkpoint = load_checkpoint()
         completed_stages = set(checkpoint.get("completed_stages", []))
         saved_options = checkpoint.get("options", {})
         if "skip_scraping" in saved_options:
@@ -205,9 +210,10 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
         def _scrape():
             # Granica „nowych” ofert na liście. Wznowienie zostawia start przerwanego
             # pobierania, żeby oferty z pierwszej części nie straciły oznaczenia.
-            if not (resume and LAST_SCRAPE_RUN_PATH.exists()):
+            last_run = candidates.path(candidates.LAST_SCRAPE_RUN)
+            if not (resume and last_run.exists()):
                 save_json_atomic(
-                    LAST_SCRAPE_RUN_PATH,
+                    last_run,
                     {"started_at": datetime.now().isoformat(timespec="seconds")},
                     backup=False,
                 )

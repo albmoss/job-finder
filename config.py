@@ -12,9 +12,6 @@ load_dotenv(Path(__file__).parent / ".env")
 
 BASE_DIR = Path(__file__).parent
 JOBS_DATABASE_PATH = BASE_DIR / "jobs_database.json"
-# Start ostatniego pobierania ofert (run_final_pipeline, etap 1). Granica „nowych”
-# ofert na liście: scraped_at >= started_at.
-LAST_SCRAPE_RUN_PATH = BASE_DIR / "last_scrape_run.json"
 
 # Model czytający CV (profil kandydata w utils/cv_profile.py): dostawca, modele i pula
 # kluczy (LLM_PROVIDER w .env; domyślnie Gemini) - patrz utils/llm.py i .env.example.

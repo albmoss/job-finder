@@ -10,7 +10,7 @@ import math
 import os
 from pathlib import Path
 import re
-from typing import List
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import uvicorn
@@ -26,7 +26,7 @@ from starlette.staticfiles import StaticFiles
 
 from app_services import (
     APP_STAGES,
-    CV_PDF_PATH,
+    cv_pdf_path,
     DECISION_STATUSES,
     OFFER_TABS,
     check_pipeline_prerequisites,
@@ -42,7 +42,9 @@ from app_services import (
     save_llm_settings,
     save_uploaded_cv,
 )
+from cv_tailor import store as cv_store
 from cv_tailor.routes import routes as cv_tailor_routes
+from utils import candidates
 from utils.offer_check import sprawdz_oferty
 from pipeline_manager import PipelineProcessManager
 
@@ -380,7 +382,7 @@ async def api_cv_file(request: Request) -> Response:
     """Bieżące CV w PDF do podglądu w przeglądarce."""
     if not pdf_is_current():
         return JSONResponse({"error": "Brak pliku PDF z CV"}, status_code=404)
-    return FileResponse(CV_PDF_PATH, media_type="application/pdf",
+    return FileResponse(cv_pdf_path(), media_type="application/pdf",
                         headers={"Content-Disposition": 'inline; filename="cv.pdf"', "Cache-Control": "no-store"})
 
 
@@ -487,6 +489,51 @@ async def api_env_keys_llm(request: Request) -> JSONResponse:
     })
 
 
+# --- Kandydaci ---
+
+async def api_candidates(request: Request) -> JSONResponse:
+    return JSONResponse(candidates.listing())
+
+
+def _candidate_change_blocked() -> Optional[JSONResponse]:
+    if PipelineProcessManager.get_instance().is_running():
+        return JSONResponse({"error": "Nie można zmieniać kandydata w trakcie wyszukiwania."}, status_code=409)
+    if cv_store.busy():
+        return JSONResponse({"error": "Poczekaj, aż skończy się tworzenie wersji CV."}, status_code=409)
+    return None
+
+
+async def _candidate_action(request: Request, action, blocking: bool) -> JSONResponse:
+    body = await _json_body(request)
+    if body is None:
+        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
+    if blocking:
+        blocked = _candidate_change_blocked()
+        if blocked:
+            return blocked
+    try:
+        return JSONResponse(action(body))
+    except candidates.CandidateError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+async def api_candidate_create(request: Request) -> JSONResponse:
+    return await _candidate_action(request, lambda b: candidates.create(b.get("name")), True)
+
+
+async def api_candidate_activate(request: Request) -> JSONResponse:
+    return await _candidate_action(request, lambda b: candidates.activate(str(b.get("id") or "")), True)
+
+
+async def api_candidate_rename(request: Request) -> JSONResponse:
+    return await _candidate_action(
+        request, lambda b: candidates.rename(str(b.get("id") or ""), b.get("name")), False)
+
+
+async def api_candidate_delete(request: Request) -> JSONResponse:
+    return await _candidate_action(request, lambda b: candidates.delete(str(b.get("id") or "")), True)
+
+
 # --- Routing i obsługa statycznego frontendu ---
 
 async def spa_index_fallback(request: Request) -> Response:
@@ -526,6 +573,11 @@ routes = [
     Route("/api/env-keys", api_env_keys_get, methods=["GET"]),
     Route("/api/env-keys", api_env_keys_save, methods=["POST"]),
     Route("/api/env-keys/llm", api_env_keys_llm, methods=["POST"]),
+    Route("/api/candidates", api_candidates, methods=["GET"]),
+    Route("/api/candidates", api_candidate_create, methods=["POST"]),
+    Route("/api/candidates/activate", api_candidate_activate, methods=["POST"]),
+    Route("/api/candidates/rename", api_candidate_rename, methods=["POST"]),
+    Route("/api/candidates/delete", api_candidate_delete, methods=["POST"]),
     *cv_tailor_routes,
 ]
 

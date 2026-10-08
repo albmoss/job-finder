@@ -37,6 +37,7 @@ import logging
 import re
 from pathlib import Path
 
+from utils import candidates
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
 
@@ -150,9 +151,8 @@ def _sanitize_nan(job: dict) -> int:
 
 
 def _decided_links() -> set:
-    """Linki, na których użytkownik podjął decyzję - chronione przed usunięciem."""
-    decisions = load_json_safe("user_decisions.json", default={})
-    return {canonical_link(k) for k in decisions}
+    """Linki, na których któryś kandydat podjął decyzję - chronione przed usunięciem."""
+    return candidates.decided_links()
 
 
 def _merge_provenance(winner: dict, losers: list) -> bool:

@@ -14,24 +14,18 @@ następny przebieg wziąłby ją za nową - drugi raz pobierał jej stronę i p�
 za ocenę. Usunięta zostaje dopiero oferta, której portal już nie pokazuje.
 """
 
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from utils import candidates
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
 from utils.console import force_utf8
 
 JOBS_DB = "jobs_database.json"
-DECISIONS_FILE = "user_decisions.json"
-
-
-def load_json(filepath):
-    default = {} if filepath == DECISIONS_FILE else []
-    return load_json_safe(filepath, default=default)
 
 
 def save_json(filepath, data):
@@ -46,14 +40,8 @@ def main():
     print(f"PURGE STALE OFFERS (keeping from {cutoff_date.isoformat()} onwards + decided)")
     print("=" * 60)
 
-    jobs = load_json(JOBS_DB)
-    decisions = load_json(DECISIONS_FILE) if os.path.exists(DECISIONS_FILE) else {}
-    if isinstance(decisions, list):
-        decisions = {}
-
-    # Porównujemy na postaci kanonicznej - inaczej ten sam link z parametrem
-    # śledzącym nie zostanie rozpoznany jako mający decyzję i oferta zostanie skasowana.
-    decided_links = {canonical_link(k) for k in decisions.keys()}
+    jobs = load_json_safe(JOBS_DB, default=[])
+    decided_links = candidates.decided_links()
     print(f"Loaded {len(jobs)} jobs from DB")
     print(f"{len(decided_links)} jobs have user decisions (protected)")
 

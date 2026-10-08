@@ -10,10 +10,8 @@ from pydantic import BaseModel
 
 from cv_tailor.schema import BaseCv
 from cv_tailor.store import ROOT
+from utils import candidates
 from utils.safe_io import load_json_safe, save_json_atomic
-
-BASE_CV_PATH = ROOT / "base_cv.json"
-CV_TEXT_PATH = ROOT / "final_cv_text.txt"
 
 _base_lock = threading.Lock()
 
@@ -36,7 +34,7 @@ def llm_settings():
 
 def cv_text() -> str | None:
     try:
-        text = CV_TEXT_PATH.read_text(encoding="utf-8").strip()
+        text = candidates.path(candidates.CV_TEXT).read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return None
     return text or None
@@ -135,7 +133,7 @@ def ensure_base_cv(cancelled: Callable[[], bool]) -> dict:
         raise TailorError("Brak CV. Najpierw wgraj CV.")
     sha = _sha(text)
     with _base_lock:
-        cached = load_json_safe(BASE_CV_PATH, default={})
+        cached = load_json_safe(candidates.path(candidates.BASE_CV), default={})
         if isinstance(cached, dict) and cached.get("_metadata", {}).get("cv_sha256") == sha \
                 and isinstance(cached.get("cv"), dict):
             return normalize_cv(cached["cv"])
@@ -143,7 +141,7 @@ def ensure_base_cv(cancelled: Callable[[], bool]) -> dict:
         cv = normalize_cv(raw)
         if not cv["name"] and not cv["experience"] and not cv["projects"]:
             raise TailorError("Model nie odczytał treści CV. Spróbuj ponownie.")
-        save_json_atomic(BASE_CV_PATH, {
+        save_json_atomic(candidates.path(candidates.BASE_CV), {
             "_metadata": {"cv_sha256": sha, "generated_at": datetime.now().isoformat(timespec="seconds")},
             "cv": cv,
         }, backup=False)

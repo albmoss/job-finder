@@ -20,12 +20,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from utils import candidates
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
 from utils.text_cleaner import clean_job_description, strip_html
 
 ROOT = Path(__file__).parent.parent
 PASSED, FAILED = [], []
+candidates.ROOT = Path(tempfile.mkdtemp(prefix="test_candidates_")) / "candidates"
 
 
 def check(name, condition, detail=""):
@@ -533,6 +535,21 @@ def test_zdjete_z_portalu():
           dni["X"] == {"2026-09-08", "2026-09-05", "2026-08-23"} and dni["Y"] == {"2026-09-08", "2026-08-23"},
           str(dict(dni)))
 
+    from utils.liveness import wygasle
+    terminy = [
+        {"link": "w1", "source": "JustJoinIT", "valid_through": "2026-10-04T23:59:59+02:00",
+         "last_seen": "2026-10-02T10:00:00"},
+        {"link": "w2", "source": "JustJoinIT", "valid_through": "2026-10-04T23:59:59+02:00",
+         "last_seen": "2026-10-06T10:00:00"},
+        {"link": "w3", "source": "JustJoinIT", "valid_through": "2026-10-07T00:00:00Z",
+         "last_seen": "2026-10-02T10:00:00"},
+        {"link": "w4", "source": "aplikuj.pl", "valid_through": "2026-09-20T23:59:59+02:00",
+         "last_seen": "2026-09-19T10:00:00"},
+        {"link": "w5", "source": "Pracuj.pl", "valid_through": None, "last_seen": "2026-09-01T10:00:00"},
+    ]
+    check("oferta po terminie waznosci, niewidziana od terminu, jest zdjeta",
+          wygasle(terminy, "2026-10-07") == {"w1"}, str(wygasle(terminy, "2026-10-07")))
+
     from utils.data_models import ScraperStatusManager
     tmp = Path(tempfile.mkdtemp(prefix="test_liveness_"))
     try:
@@ -983,21 +1000,19 @@ def test_pipeline_final_status():
 
     import main_scraper
 
-    results = {
-        "zdrowy": {"success": True, "status": "scraped"},
-        "blad": {"success": False, "status": "failed"},
-        "pominiety": {"success": True, "status": "skipped"},
-    }
-    findings = [{"source": "uszkodzony", "verdict": "degraded", "detail": "brak pola"}]
-    blocking = main_scraper._blocking_scrape_sources(results, findings)
-    check("awaria i zdegradowane dane blokuja sukces scrapingu",
-          blocking == ["blad", "uszkodzony"], str(blocking))
-
-    warnings = [{"source": "maly", "verdict": "weak", "detail": "mniej ofert"}]
-    check("slaby wynik ostrzega, ale nie udaje awarii technicznej",
-          main_scraper._blocking_scrape_sources(
-              {"zdrowy": {"success": True, "status": "scraped"}}, warnings
-          ) == [])
+    zdrowy = {"success": True, "status": "scraped"}
+    blad = {"success": False, "status": "failed"}
+    pominiety = {"success": True, "status": "skipped"}
+    check("jedno zepsute zrodlo nie zatrzymuje przebiegu",
+          main_scraper._scrape_failed({"zdrowy": zdrowy, "blad": blad, "pominiety": pominiety},
+                                      [{"source": "blad", "verdict": "broken", "detail": "wyjatek"}]) is False)
+    check("same awarie zatrzymuja przebieg",
+          main_scraper._scrape_failed({"blad": blad, "pominiety": pominiety}, []) is True)
+    check("zrodlo z zerem ofert przy dawnych wynikach nie liczy sie jako dzialajace",
+          main_scraper._scrape_failed({"pusty": zdrowy, "blad": blad},
+                                      [{"source": "pusty", "verdict": "broken", "detail": "zero ofert"}]) is True)
+    check("przebieg z samymi pominietymi zrodlami nie jest awaria",
+          main_scraper._scrape_failed({"pominiety": pominiety}, []) is False)
 
 
 
@@ -1245,16 +1260,14 @@ def test_external_data_change_automatic_invalidation():
     temp_path = Path(temp_dir)
 
     t_jobs = temp_path / "jobs_database.json"
-    t_matches = temp_path / "match_results.json"
-    t_decisions = temp_path / "user_decisions.json"
 
     orig_jobs = app_services.JOBS_DATABASE_PATH
-    orig_matches = app_services.MATCH_RESULTS_PATH
-    orig_dec = app_services.USER_DECISIONS_PATH
+    orig_root = candidates.ROOT
 
     app_services.JOBS_DATABASE_PATH = t_jobs
-    app_services.MATCH_RESULTS_PATH = t_matches
-    app_services.USER_DECISIONS_PATH = t_decisions
+    candidates.ROOT = temp_path / "candidates"
+    t_matches = candidates.path(candidates.MATCH_RESULTS)
+    t_decisions = candidates.path(candidates.DECISIONS)
     try:
         # Initial disk state: 1 job, 1 match, 0 decisions
         job1 = {"title": "Initial Dev", "company": "Corp A", "link": "https://corp-a.com/job1",
@@ -1313,8 +1326,7 @@ def test_external_data_change_automatic_invalidation():
 
     finally:
         app_services.JOBS_DATABASE_PATH = orig_jobs
-        app_services.MATCH_RESULTS_PATH = orig_matches
-        app_services.USER_DECISIONS_PATH = orig_dec
+        candidates.ROOT = orig_root
         app_services.job_data_service.reload()
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -1504,6 +1516,15 @@ def test_pipeline_stage_stats_and_eta():
     check("details: final summary fills the tile even when some pages had no JobPosting",
           src["details_done"] == src["details_total"] == 3482, src)
 
+    mgr._parse_telemetry("2026-09-25 18:30:00,000 - main_scraper - ERROR - ✗ GoWork.pl: Failed - 403 Client Error: Forbidden")
+    mgr._parse_telemetry("health: GoWork.pl - inconclusive (portal odmówił obsługi (403 Client Error: Forbidden))")
+    src = next(s for s in mgr._telemetry_snapshot()["sources"] if s["name"] == "GoWork.pl")
+    check("failed source keeps its error and the health verdict",
+          src["state"] == "failed" and src["error"] == "403 Client Error: Forbidden"
+          and src["health"] == {"verdict": "inconclusive",
+                                "detail": "portal odmówił obsługi (403 Client Error: Forbidden)"}, src)
+
+
 def test_offer_api_contract():
     print("\n[24] Fresh offers, tabs, notes, next step and decisions over HTTP")
     import tempfile, shutil, json
@@ -1513,15 +1534,15 @@ def test_offer_api_contract():
     import server
 
     temp_path = Path(tempfile.mkdtemp(prefix="test_offer_api_"))
+    orig_jobs, orig_root = app_services.JOBS_DATABASE_PATH, candidates.ROOT
+    app_services.JOBS_DATABASE_PATH = temp_path / "jobs_database.json"
+    candidates.ROOT = temp_path / "candidates"
     paths = {
-        "JOBS_DATABASE_PATH": temp_path / "jobs_database.json",
-        "MATCH_RESULTS_PATH": temp_path / "match_results.json",
-        "USER_DECISIONS_PATH": temp_path / "user_decisions.json",
-        "LAST_SCRAPE_RUN_PATH": temp_path / "last_scrape_run.json",
+        "JOBS_DATABASE_PATH": app_services.JOBS_DATABASE_PATH,
+        "MATCH_RESULTS_PATH": candidates.path(candidates.MATCH_RESULTS),
+        "USER_DECISIONS_PATH": candidates.path(candidates.DECISIONS),
+        "LAST_SCRAPE_RUN_PATH": candidates.path(candidates.LAST_SCRAPE_RUN),
     }
-    originals = {name: getattr(app_services, name) for name in paths}
-    for name, path in paths.items():
-        setattr(app_services, name, path)
 
     def job(n, scraped_at):
         return {"title": f"Analityk {n}", "company": "Corp", "link": f"https://corp.example/job{n}",
@@ -1607,8 +1628,8 @@ def test_offer_api_contract():
         cleared = client.post("/api/offers/next-step", json={"link": jobs[0]["link"], "label": "", "due": None})
         check("empty label removes the next step", cleared.status_code == 200 and cleared.json()["offer"]["next_step"] is None)
     finally:
-        for name, path in originals.items():
-            setattr(app_services, name, path)
+        app_services.JOBS_DATABASE_PATH = orig_jobs
+        candidates.ROOT = orig_root
         app_services.job_data_service.reload()
         shutil.rmtree(temp_path, ignore_errors=True)
 
@@ -1822,6 +1843,133 @@ def test_company_logos():
     check("LinkedIn: the ghost placeholder is not a logo", LinkedInScraper._card_logo(ghost) is None)
 
 
+def test_candidates():
+    print("\n[27] Candidates: migration, isolation, shared offers and CV change without rescoring")
+    import hashlib
+    from unittest.mock import patch
+    from starlette.testclient import TestClient
+    import app_services
+    import matching.run as matching_run
+    import purge_stale_offers
+    import server
+    from utils import cv_profile
+    from utils.cv_profile import profile_fingerprint
+
+    temp_path = Path(tempfile.mkdtemp(prefix="test_candidates_flow_"))
+    orig_jobs, orig_root, old_cwd = app_services.JOBS_DATABASE_PATH, candidates.ROOT, os.getcwd()
+    cv = "Analityk danych. SQL, Python, raporty dla zarządu. Warszawa."
+    profile = {"city": "Warszawa", "seniority": "junior", "years_experience": 1.0, "skills": ["SQL"],
+               "languages": [{"name": "polish", "level": "C2"}], "roles": ["Analityk"],
+               "_metadata": {"cv_sha256": hashlib.sha256(cv.encode("utf-8")).hexdigest()}}
+
+    def job(n, last_seen="2099-01-01"):
+        return {"title": f"Analityk {n}", "company": "Corp", "link": f"https://corp.example/job{n}",
+                "location": "Warszawa", "description": "Analiza danych w SQL i raporty dla zarządu.",
+                "source": "Test", "scraped_at": "2026-09-20T10:00:00", "last_seen": last_seen}
+
+    jobs = [job(1), job(2), job(3, last_seen="2020-01-01")]
+    (temp_path / "jobs_database.json").write_text(json.dumps(jobs), encoding="utf-8")
+    (temp_path / "final_cv_text.txt").write_text(cv, encoding="utf-8")
+    (temp_path / "candidate_profile.json").write_text(json.dumps(profile), encoding="utf-8")
+    (temp_path / "user_decisions.json").write_text(json.dumps({jobs[0]["link"]: "save"}), encoding="utf-8")
+    (temp_path / "match_results.json").write_text(json.dumps({jobs[0]["link"]: {"percent": 81}}), encoding="utf-8")
+
+    try:
+        app_services.JOBS_DATABASE_PATH = temp_path / "jobs_database.json"
+        candidates.ROOT = temp_path / "candidates"
+        listing = candidates.listing()
+        check("existing single-user data becomes the first candidate",
+              listing["active"] == "k1" and listing["items"][0]["has_cv"]
+              and (candidates.ROOT / "k1" / "user_decisions.json").exists()
+              and not (temp_path / "user_decisions.json").exists(), listing)
+
+        client = TestClient(server.app, base_url="http://127.0.0.1:8501")
+        app_services.job_data_service.reload()
+        check("first candidate sees its saved offer",
+              [r["link"] for r in client.get("/api/offers?tab=Zapisane").json()["items"]] == [jobs[0]["link"]])
+
+        created = client.post("/api/candidates", json={"name": "  Druga   osoba "}).json()
+        check("new candidate becomes active with a cleaned name",
+              created["active"] == "k2" and created["items"][1]["name"] == "Druga osoba", created)
+        candidates.adopt_name("Jan Kowalski")
+        check("a name given by the user is not replaced by the name from the CV",
+              candidates.listing()["items"][1]["name"] == "Druga osoba")
+        check("new candidate starts without CV, scores or decisions",
+              client.get("/api/cv").json()["ready"] is False
+              and client.get("/api/offers?tab=Zapisane").json()["total"] == 0
+              and client.get("/api/offers?tab=Dopasowane").json()["total"] == 0)
+        check("the active candidate cannot be deleted",
+              client.post("/api/candidates/delete", json={"id": "k2"}).status_code == 400)
+        with patch.object(server.PipelineProcessManager.get_instance(), "is_running", return_value=True):
+            check("switching is blocked during a run",
+                  client.post("/api/candidates/activate", json={"id": "k1"}).status_code == 409)
+
+        (candidates.ROOT / "k1" / "user_decisions.json").write_text(
+            json.dumps({jobs[0]["link"]: "save", jobs[2]["link"]: "reject"}), encoding="utf-8")
+        os.chdir(temp_path)
+        with redirect_stdout(io.StringIO()):
+            purge_stale_offers.main()
+        kept = [j["link"] for j in load_json_safe(temp_path / "jobs_database.json", default=[])]
+        check("a stale offer decided by an inactive candidate survives the purge",
+              jobs[2]["link"] in kept and jobs[0]["link"] in kept, kept)
+
+        client.post("/api/candidates/activate", json={"id": "k1"})
+        check("switching back restores the first candidate's lists",
+              [r["link"] for r in client.get("/api/offers?tab=Zapisane").json()["items"]] == [jobs[0]["link"]])
+
+        named = dict(profile, _metadata=dict(profile["_metadata"], name="Anna Nowak"))
+        with patch("utils.cv_profile.build_profile", return_value=named):
+            cv_profile.ensure_profile(force=True)
+        check("a candidate with a default name takes the name from the CV profile",
+              candidates.listing()["items"][0]["name"] == "Anna Nowak", candidates.listing())
+        client.post("/api/candidates/rename", json={"id": "k1", "name": "Ania"})
+        with patch("utils.cv_profile.build_profile", return_value=named):
+            cv_profile.ensure_profile(force=True)
+        check("after a manual rename the CV name no longer overrides it",
+              candidates.listing()["items"][0]["name"] == "Ania")
+
+        results_path = candidates.path(candidates.MATCH_RESULTS)
+        loaded = {j.link: j for j in matching_run.JobDatabase(str(temp_path / "jobs_database.json")).load_jobs()}
+        old_fp = profile_fingerprint(profile)
+        results_path.write_text(json.dumps({jobs[0]["link"]: {
+            "percent": 81, "filtered": None, "answers": {}, "offer_fp": matching_run.offer_fingerprint(loaded[jobs[0]["link"]]),
+            "profile_fp": old_fp, "model": "m", "scored_at": "2026-09-20T10:00:00"}}), encoding="utf-8")
+        changed = dict(profile, skills=["SQL", "Power BI"])
+        candidates.path(candidates.PROFILE).write_text(json.dumps(changed), encoding="utf-8")
+
+        asked = []
+
+        def fake_triage(items, *a, **k):
+            asked.extend(link for link, _ in items)
+            return {link: 1.0 for link, _ in items}, 0, 0, False
+
+        with patch.object(matching_run.jev, "api_key", return_value="test"), \
+             patch.object(matching_run, "JOBS_PATH", temp_path / "jobs_database.json"), \
+             patch.object(matching_run.triage, "triage", fake_triage), \
+             patch.object(matching_run.jev, "ask", return_value={"answers": {}, "model": "m"}), \
+             patch.object(matching_run.jev, "percent", return_value=55), \
+             redirect_stdout(io.StringIO()):
+            code = matching_run.main([])
+        after = json.loads(results_path.read_text(encoding="utf-8"))
+        check("after a CV change only unscored offers go to Jev",
+              code == 0 and sorted(asked) == sorted([jobs[1]["link"], jobs[2]["link"]]), asked)
+        check("the offer scored with the previous CV keeps its score and profile",
+              after[jobs[0]["link"]]["percent"] == 81 and after[jobs[0]["link"]]["profile_fp"] == old_fp)
+        check("new offers are scored with the current profile",
+              after[jobs[1]["link"]]["percent"] == 55
+              and after[jobs[1]["link"]]["profile_fp"] == profile_fingerprint(changed))
+
+        removed = client.post("/api/candidates/delete", json={"id": "k2"}).json()
+        check("deleting an inactive candidate removes its data",
+              [c["id"] for c in removed["items"]] == ["k1"] and not (candidates.ROOT / "k2").exists())
+    finally:
+        os.chdir(old_cwd)
+        app_services.JOBS_DATABASE_PATH = orig_jobs
+        candidates.ROOT = orig_root
+        app_services.job_data_service.reload()
+        shutil.rmtree(temp_path, ignore_errors=True)
+
+
 def main():
     print("=" * 62)
     print("  INTEGRATION TESTS (no API calls)")
@@ -1842,7 +1990,8 @@ def main():
                  test_pipeline_stage_stats_and_eta,
                  test_offer_api_contract,
                  test_foreign_run_visible_to_server,
-                 test_company_logos):
+                 test_company_logos,
+                 test_candidates):
         try:
             test()
         except Exception as e:
