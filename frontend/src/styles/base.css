@@ -546,6 +546,37 @@ textarea.field {
   right: 18px;
 }
 
+.modal-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.modal-badge {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  outline: 1.5px solid rgba(231, 229, 228, 0.55);
+  outline-offset: -0.75px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink);
+}
+
+.modal-badge svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 2.25;
+}
+
+.modal-badge.is-warn {
+  outline-color: var(--warn-line);
+  background: var(--warn-fill);
+  color: var(--warn);
+}
+
 .menu {
   position: absolute;
   z-index: 40;
@@ -664,6 +695,87 @@ textarea.field {
   }
 }
 
+.spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.14);
+  border-top-color: var(--accent);
+  border-right-color: rgba(231, 229, 228, 0.45);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.live-dot {
+  position: relative;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.live-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: live-ping 1.8s var(--ease-out) infinite;
+}
+
+@keyframes live-ping {
+  from {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.8);
+  }
+}
+
+@keyframes breathe {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.meter {
+  position: relative;
+  display: block;
+  height: 2px;
+  overflow: hidden;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.meter-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transform-origin: left center;
+  transition: transform 900ms var(--ease-out);
+}
+
+.meter.is-indeterminate .meter-fill {
+  right: auto;
+  width: 40%;
+  background: linear-gradient(90deg, rgba(231, 229, 228, 0), var(--accent) 50%, rgba(231, 229, 228, 0));
+  transition: none;
+  animation: meter-slide 1.6s var(--ease-in-out) infinite;
+}
+
+@keyframes meter-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
 .logo-tile {
   display: inline-flex;
   flex: none;
@@ -726,6 +838,19 @@ textarea.field {
   height: 22px;
 }
 
+.match-track {
+  display: block;
+  height: 0;
+  margin-top: 5px;
+  border-top: 2px solid;
+  border-image: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ink) 85%, transparent) var(--fill),
+      rgba(255, 255, 255, 0.12) var(--fill)
+    )
+    1;
+}
+
 @keyframes modal-in {
   from {
     opacity: 0;
@@ -747,5 +872,28 @@ textarea.field {
     --modal-scale: 1;
     --rise: 0%;
     --nudge: 0px;
+  }
+
+  .spinner {
+    border-color: rgba(255, 255, 255, 0.4);
+    animation: breathe 2s ease-in-out infinite;
+  }
+
+  .live-dot::after {
+    display: none;
+  }
+
+  .live-dot {
+    animation: breathe 2s ease-in-out infinite;
+  }
+
+  .meter-fill {
+    transition: none;
+  }
+
+  .meter.is-indeterminate .meter-fill {
+    width: 100%;
+    background: var(--accent);
+    animation: breathe 2s ease-in-out infinite;
   }
 }

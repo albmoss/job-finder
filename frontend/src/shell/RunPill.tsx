@@ -3,26 +3,28 @@ import { useApp } from '../app_context';
 import { countFormat } from '../format';
 import { COMPARED, DOWNLOADED, OFFERS, plural } from '../plural';
 import { paths } from '../router';
+import {
+  STAGE_TITLE,
+  currentStageId,
+  elapsedSeconds,
+  formatClock,
+  scoringProgress,
+  useNow,
+} from '../run_progress';
 import type { PipelineState, RunSummary } from '../types';
-
-const STAGE_TITLE: Record<string, string> = {
-  phase0: 'Odczytywanie CV',
-  phase1: 'Pobieranie ofert',
-  phase1_5: 'Porządkowanie ofert',
-  phase2: 'Porządkowanie ofert',
-  phase2_5: 'Porządkowanie ofert',
-  phase3: 'Porównywanie z CV',
-};
+import { Meter } from './Meter';
 
 function describeRun(pipeline: PipelineState, summary: RunSummary | null) {
-  const stageId = pipeline.stages[pipeline.current_stage_idx]?.id ?? '';
+  const stageId = currentStageId(pipeline);
   const title = STAGE_TITLE[stageId] ?? 'Szukanie ofert';
-  if (pipeline.status === 'stopping') return { title, detail: 'Zatrzymywanie…' };
-  if (summary && summary.to_check != null && stageId === 'phase3') {
-    const n = summary.to_check;
+  const scoring = stageId === 'phase3' ? scoringProgress(pipeline) : null;
+  const progress = scoring?.fraction ?? null;
+  if (pipeline.status === 'stopping') return { title, detail: 'Zatrzymywanie…', progress };
+  if (scoring && scoring.total != null) {
     return {
       title,
-      detail: `${countFormat.format(summary.checked)} z ${countFormat.format(n)} ${plural(n, COMPARED)}`,
+      detail: `${countFormat.format(scoring.scored)} z ${countFormat.format(scoring.total)} ${plural(scoring.total, COMPARED)}`,
+      progress,
     };
   }
   const downloaded = summary?.downloaded;
@@ -30,23 +32,31 @@ function describeRun(pipeline: PipelineState, summary: RunSummary | null) {
     return {
       title,
       detail: `${countFormat.format(downloaded)} ${plural(downloaded, OFFERS)} ${plural(downloaded, DOWNLOADED)}`,
+      progress,
     };
   }
-  return { title, detail: pipeline.current_stage_idx > 0 ? 'Profil odczytany' : 'Czytamy Twoje CV' };
+  return { title, detail: pipeline.current_stage_idx > 0 ? 'Profil odczytany' : 'Czytamy Twoje CV', progress };
 }
 
 export function RunPill() {
   const { pipeline, runSummary, stopSearch } = useApp();
+  const now = useNow(true);
   if (!pipeline) return null;
-  const { title, detail } = describeRun(pipeline, runSummary);
+  const { title, detail, progress } = describeRun(pipeline, runSummary);
   const stopping = pipeline.status === 'stopping';
+  const elapsed = elapsedSeconds(pipeline, now);
 
   return (
     <div className="tb-run glass" role="status" aria-label="Wyszukiwanie ofert">
       <a className="tb-run-link" href={`#${paths.progress}`} title="Szczegóły wyszukiwania">
+        <span className="spinner tb-run-spinner" aria-hidden="true" />
         <span className="tb-run-text">
-          <span className="tb-run-title">{title}</span>
+          <span className="tb-run-row">
+            <span className="tb-run-title">{title}</span>
+            {elapsed != null && <span className="tb-run-clock">{formatClock(elapsed)}</span>}
+          </span>
           <span className="tb-run-detail">{detail}</span>
+          <Meter value={progress} className="tb-run-meter" />
         </span>
         <ChevronRight />
       </a>

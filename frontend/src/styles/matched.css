@@ -243,19 +243,6 @@
   stroke-width: 1.75;
 }
 
-.mo-card-track {
-  display: block;
-  height: 0;
-  margin-top: 5px;
-  border-top: 2px solid;
-  border-image: linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--ink) 85%, transparent) var(--fill),
-      rgba(255, 255, 255, 0.12) var(--fill)
-    )
-    1;
-}
-
 .mo-pager {
   display: flex;
   flex: none;

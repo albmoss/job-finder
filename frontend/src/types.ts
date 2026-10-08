@@ -33,6 +33,8 @@ export interface SourceTelemetry {
   /** Postęp pobierania opisów ofert (strony szczegółów), z meldunków scrapera. */
   details_done?: number | null;
   details_total?: number | null;
+  error?: string | null;
+  health?: { verdict: 'broken' | 'degraded' | 'weak' | 'inconclusive'; detail: string } | null;
 }
 
 /** Przesiew w kodzie (matching/prefilter.py) i wstępna ocena (matching/triage.py): powód → liczba odrzuconych ofert. */
@@ -106,6 +108,8 @@ export interface RunSummaryOffer {
   company: string;
   location: string;
   work_mode: string;
+  source: string;
+  logo_url: string | null;
   match_percentage: number | null;
 }
 
@@ -346,6 +350,21 @@ export interface CVInfo {
   pdf_pages: number | null;
   /** Profil z CV (candidate_profile.json); null przed pierwszym przebiegiem. */
   profile: CVProfile | null;
+}
+
+export interface Candidate {
+  id: string;
+  name: string;
+  created_at: string;
+  cv_updated_at: string | null;
+  has_cv: boolean;
+  seniority: string | null;
+  city: string | null;
+}
+
+export interface CandidatesResponse {
+  active: string | null;
+  items: Candidate[];
 }
 
 export interface EnvField {

@@ -1,5 +1,6 @@
 import type {
   ApplicationsResponse,
+  CandidatesResponse,
   CVInfo,
   CvVersionCreate,
   CvVersionDetail,
@@ -158,4 +159,10 @@ export const api = {
   getTailorInstructions: () => request<TailorInstructions>('/cv-tailor/instructions'),
   saveTailorInstructions: (text: string) => post<TailorInstructions>('/cv-tailor/instructions', { text }),
   resetTailorInstructions: () => post<TailorInstructions>('/cv-tailor/instructions/reset'),
+
+  getCandidates: () => request<CandidatesResponse>('/candidates'),
+  createCandidate: () => post<CandidatesResponse>('/candidates', {}),
+  activateCandidate: (id: string) => post<CandidatesResponse>('/candidates/activate', { id }),
+  renameCandidate: (id: string, name: string) => post<CandidatesResponse>('/candidates/rename', { id, name }),
+  deleteCandidate: (id: string) => post<CandidatesResponse>('/candidates/delete', { id }),
 };

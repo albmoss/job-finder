@@ -12,6 +12,7 @@ import {
 import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { navigate, paths } from '../router';
+import { CV_REPLACED_TOAST } from '../shell/SettingsModal';
 import { Modal } from '../shell/Modal';
 import { PAGES, plural, type PluralForms } from '../plural';
 import type { CVProfile, CvVersionSummary } from '../types';
@@ -129,12 +130,13 @@ export function MyCvScreen(_props: ScreenProps) {
   }, [dataVersion]);
 
   const upload = async (file: File) => {
+    const hadCv = Boolean(cv?.ready);
     setUploading(true);
     try {
       const res = await api.uploadCVFile(file);
       await refreshCv();
       setFileRev((n) => n + 1);
-      toast(`Zapisano CV: ${res.cv_info.filename}.`);
+      toast(hadCv ? CV_REPLACED_TOAST : `Zapisano CV: ${res.cv_info.filename}.`);
     } catch (err) {
       toast(`Nie udało się zastąpić CV: ${errorMessage(err)}`);
     } finally {

@@ -8,6 +8,8 @@ import { Modal } from './Modal';
 
 const JEV_KEY = 'TYPESAFE_API_KEY';
 
+export const CV_REPLACED_TOAST = 'Zapisano nowe CV. Dotychczasowe oceny zostają, nowe oferty Jev oceni według tego CV.';
+
 function SecretInput({
   id,
   value,
@@ -107,12 +109,14 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       return res.message;
     });
 
-  const uploadCv = (file: File) =>
-    run(async () => {
+  const uploadCv = (file: File) => {
+    const hadCv = Boolean(cv?.ready);
+    return run(async () => {
       const res = await api.uploadCVFile(file);
       await refreshCv();
-      return `Zapisano CV: ${res.cv_info.filename}.`;
+      return hadCv ? CV_REPLACED_TOAST : `Zapisano CV: ${res.cv_info.filename}.`;
     });
+  };
 
   return (
     <Modal title="Ustawienia" onClose={onClose} wide>

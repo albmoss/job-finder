@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 
 interface ModalProps {
   title: ReactNode;
+  label?: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
@@ -12,7 +13,7 @@ interface ModalProps {
 }
 
 /** Okno w `.panel` na `.modal-backdrop`, portal do body; Esc i klik obok zamykają. */
-export function Modal({ title, onClose, children, wide, closeButton = true }: ModalProps) {
+export function Modal({ title, label, onClose, children, wide, closeButton = true }: ModalProps) {
   const ref = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -45,7 +46,7 @@ export function Modal({ title, onClose, children, wide, closeButton = true }: Mo
         className={`modal panel scroll${wide ? ' modal-wide' : ''}`}
         role="dialog"
         aria-modal="true"
-        aria-label={typeof title === 'string' ? title : undefined}
+        aria-label={label ?? (typeof title === 'string' ? title : undefined)}
         tabIndex={-1}
       >
         <h2 className="title-lg">{title}</h2>

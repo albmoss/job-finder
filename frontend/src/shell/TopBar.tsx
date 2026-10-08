@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { Bookmark, FileUser, RefreshCw, Send, Settings2, Sparkles, type LucideIcon } from 'lucide-react';
+import { Bookmark, FileUser, RefreshCw, Send, Sparkles, type LucideIcon } from 'lucide-react';
 import { useApp } from '../app_context';
 import { paths, useRoute, type RouteName } from '../router';
+import { CandidateMenu } from './CandidateMenu';
 import { RunPill } from './RunPill';
 
 export function LogoMark({ size = 28 }: { size?: number }) {
@@ -61,30 +62,30 @@ function useActivePill(navRef: RefObject<HTMLElement | null>, activeIndex: numbe
   return { pill, ready };
 }
 
-/** `minimal`: tylko logo i Ustawienia (ekrany 07 i 10). `running`: stan wyszukiwania zamiast przycisku. */
 export function TopBar({ minimal, running }: { minimal: boolean; running: boolean }) {
   const route = useRoute();
-  const { openLaunch, openSettings } = useApp();
+  const { openLaunch } = useApp();
+  const showPill = !minimal && running && route.name !== 'postep';
 
   return (
-    <header className="tb">
+    <header className={minimal ? 'tb tb-minimal' : showPill ? 'tb is-running' : 'tb'}>
       <a className="tb-brand" href={`#${paths.matched()}`} aria-label="jobfinder">
         <LogoMark />
         <span className="tb-wordmark">jobfinder</span>
       </a>
       {!minimal && <TopNav route={route.name} />}
       <div className="tb-spacer" />
-      {!minimal && running && <RunPill />}
+      {showPill && <RunPill />}
       {!minimal && !running && (
-        <button type="button" className="btn" onClick={openLaunch}>
-          <RefreshCw />
-          Szukaj nowych ofert
-        </button>
+        <div className="tb-actions glass">
+          <button type="button" className="tb-action" onClick={openLaunch}>
+            <RefreshCw />
+            Szukaj nowych ofert
+          </button>
+        </div>
       )}
-      <button type="button" className="btn" onClick={openSettings}>
-        <Settings2 />
-        Ustawienia
-      </button>
+      {(showPill || (!minimal && !running)) && <span className="tb-divider" aria-hidden="true" />}
+      <CandidateMenu />
     </header>
   );
 }

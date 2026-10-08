@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import type { CVInfo, CvVersionSummary, OfferDetail, PipelineState, RunSummary } from './types';
+import type { CandidatesResponse, CVInfo, CvVersionSummary, OfferDetail, PipelineState, RunSummary } from './types';
 
 export interface ToastOptions {
   /** Np. { label: 'Cofnij', run: undo }. */
@@ -35,6 +35,9 @@ export interface AppContextValue {
 
   cv: CVInfo | null;
   refreshCv: () => Promise<CVInfo | null>;
+
+  candidates: CandidatesResponse | null;
+  applyCandidates: (next: CandidatesResponse) => Promise<void>;
 
   /** Rośnie po każdej zmianie danych ofert (decyzje, koniec przebiegu); dodaj do zależności pobierania. */
   dataVersion: number;

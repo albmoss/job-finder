@@ -1,22 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CircleCheck, TriangleAlert } from 'lucide-react';
+import { TriangleAlert } from 'lucide-react';
 import { api, errorMessage } from './api';
 import { AppContext, type AppContextValue, type MarkSentOffer, type MarkSentOptions } from './app_context';
 import { navigate, paths, useRoute } from './router';
 import { SCREENS } from './screens';
 import { LaunchModal } from './shell/LaunchModal';
+import { RunDoneModal, type RunDoneState } from './shell/RunDoneModal';
 import { MarkSentModal, type MarkSentState } from './shell/MarkSentModal';
 import { SettingsModal } from './shell/SettingsModal';
 import { Toasts, useToasts } from './shell/Toasts';
 import { TopBar } from './shell/TopBar';
-import type { CVInfo, DecisionStatus, OfferDetail, PipelineState, RunSummary } from './types';
+import { isBusy } from './run_progress';
+import type { CandidatesResponse, CVInfo, DecisionStatus, OfferDetail, PipelineState, RunSummary } from './types';
 
 const POLL_BUSY_MS = 1200;
 const POLL_IDLE_MS = 4000;
-
-function isBusy(state: PipelineState | null): boolean {
-  return Boolean(state && (state.running || state.status === 'stopping'));
-}
 
 export function App() {
   const route = useRoute();
@@ -29,6 +27,10 @@ export function App() {
   const [launchOpen, setLaunchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [markSent, setMarkSent] = useState<MarkSentState | null>(null);
+  const [runDone, setRunDone] = useState<RunDoneState | null>(null);
+  const [candidates, setCandidates] = useState<CandidatesResponse | null>(null);
+  const [candidateEpoch, setCandidateEpoch] = useState(0);
+  const candidatesRef = useRef<CandidatesResponse | null>(null);
 
   const pipelineBusy = isBusy(pipeline);
   const routeRef = useRef(route);
@@ -36,7 +38,7 @@ export function App() {
 
   const bumpData = useCallback(() => setDataVersion((v) => v + 1), []);
 
-  const refreshCv = useCallback(async () => {
+  const loadCv = useCallback(async () => {
     try {
       const info = await api.getCV();
       setCv(info);
@@ -45,6 +47,34 @@ export function App() {
       return null;
     }
   }, []);
+
+  const applyCandidates = useCallback(
+    async (next: CandidatesResponse) => {
+      const previous = candidatesRef.current;
+      candidatesRef.current = next;
+      setCandidates(next);
+      if (!previous || previous.active === next.active) return;
+      const info = await loadCv();
+      const active = next.items.find((c) => c.id === next.active);
+      setCandidateEpoch((n) => n + 1);
+      bumpData();
+      navigate((info?.ready ?? active?.has_cv) ? paths.matched() : paths.start, { replace: true });
+    },
+    [loadCv, bumpData],
+  );
+
+  const refreshCandidates = useCallback(async () => {
+    try {
+      await applyCandidates(await api.getCandidates());
+    } catch {
+      return;
+    }
+  }, [applyCandidates]);
+
+  const refreshCv = useCallback(async () => {
+    const [info] = await Promise.all([loadCv(), refreshCandidates()]);
+    return info;
+  }, [loadCv, refreshCandidates]);
 
   const refreshRunSummary = useCallback(async () => {
     try {
@@ -84,6 +114,13 @@ export function App() {
     if (watchSummary && pipeline) refreshRunSummary();
   }, [watchSummary, pipeline, refreshRunSummary]);
 
+  const profileDone = pipeline?.stages.find((s) => s.id === 'phase0')?.status === 'done';
+  const profileWasDone = useRef(profileDone);
+  useEffect(() => {
+    if (pipelineBusy && profileDone && !profileWasDone.current) refreshCandidates();
+    profileWasDone.current = profileDone;
+  }, [pipelineBusy, profileDone, refreshCandidates]);
+
   const wasBusy = useRef(false);
   useEffect(() => {
     if (!pipeline) return;
@@ -91,22 +128,15 @@ export function App() {
     if (wasBusy.current && !busy) {
       bumpData();
       refreshCv();
-      const onProgress = routeRef.current.name === 'postep';
-      if (pipeline.status === 'completed') {
-        if (onProgress) {
-          navigate(paths.matched());
-          toast('Wyszukiwanie zakończone.', { icon: CircleCheck });
-        } else {
-          toast('Wyszukiwanie zakończone.', {
-            icon: CircleCheck,
-            action: { label: 'Pokaż oferty', run: () => navigate(paths.matched()) },
-          });
-        }
-      } else if (pipeline.status === 'failed') {
-        toast(pipeline.error_message ? `Wyszukiwanie przerwane: ${pipeline.error_message}` : 'Wyszukiwanie przerwane.', {
-          icon: TriangleAlert,
-          action: onProgress ? undefined : { label: 'Szczegóły', run: () => navigate(paths.progress) },
-        });
+      if (pipeline.status === 'completed' || pipeline.status === 'failed') {
+        const finished = pipeline;
+        api.getRunSummary().then(
+          (summary) => {
+            setRunSummary(summary);
+            setRunDone({ pipeline: finished, summary });
+          },
+          () => setRunDone({ pipeline: finished, summary: null }),
+        );
       } else if (pipeline.status === 'stopped') {
         toast('Wyszukiwanie zatrzymane.');
       }
@@ -124,6 +154,7 @@ export function App() {
       const res = await api.startPipeline('full');
       setPipeline(res.state);
       setRunSummary(null);
+      setRunDone(null);
       navigate(paths.progress);
       return true;
     } catch (err) {
@@ -184,6 +215,8 @@ export function App() {
       stopSearch,
       cv,
       refreshCv,
+      candidates,
+      applyCandidates,
       dataVersion,
       bumpData,
       toast,
@@ -199,6 +232,8 @@ export function App() {
       stopSearch,
       cv,
       refreshCv,
+      candidates,
+      applyCandidates,
       dataVersion,
       bumpData,
       toast,
@@ -209,14 +244,16 @@ export function App() {
   );
 
   const Screen = SCREENS[route.name];
-  const minimal = route.name === 'start' || route.name === 'postep';
+  const minimal = route.name === 'start' || (route.name === 'postep' && cvMissing && !pipelineBusy);
   const blockedByGate = cvMissing && route.name !== 'start' && route.name !== 'postep';
 
   return (
     <AppContext.Provider value={context}>
       <div className="app">
         <TopBar minimal={minimal} running={pipelineBusy} />
-        <main className="workspace">{!blockedByGate && <Screen key={route.path} route={route} />}</main>
+        <main className="workspace">
+          {!blockedByGate && <Screen key={`${candidateEpoch}:${route.path}`} route={route} />}
+        </main>
       </div>
       <div className="dock">
         <Toasts toasts={toasts} dismiss={dismiss} />
@@ -224,6 +261,7 @@ export function App() {
       {launchOpen && <LaunchModal onClose={() => setLaunchOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {markSent && <MarkSentModal state={markSent} onClose={() => setMarkSent(null)} />}
+      {runDone && <RunDoneModal state={runDone} onClose={() => setRunDone(null)} />}
     </AppContext.Provider>
   );
 }

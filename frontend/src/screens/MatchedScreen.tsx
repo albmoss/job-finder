@@ -485,7 +485,7 @@ function OfferCard({ item, active, hidden, busy, onSelect, onRestore }: OfferCar
           )}
         </div>
         <span
-          className="mo-card-track"
+          className="match-track"
           aria-hidden="true"
           style={{ '--fill': `${Math.max(0, Math.min(100, percent))}%` } as CSSProperties}
         />

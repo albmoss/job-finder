@@ -1,36 +1,25 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { flushSync } from 'react-dom';
 import {
-  Archive,
   ArrowUpRight,
   CalendarDays,
   Check,
   ChevronRight,
   Ellipsis,
   FileText,
-  Handshake,
   LoaderCircle,
-  MessagesSquare,
   Plus,
-  Send,
   Undo2,
-  type LucideIcon,
 } from 'lucide-react';
 import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { formatDayLong, parseDate } from '../format';
 import { navigate, paths } from '../router';
+import { STAGES } from '../stages';
 import type { ApplicationItem, NextStep, Stage } from '../types';
 import { AddFromLinkModal } from './add/AddFromLinkModal';
 import type { ScreenProps } from './types';
 import '../styles/applications.css';
-
-const STAGES: { id: Stage; label: string; icon: LucideIcon; hint: string }[] = [
-  { id: 'apply', label: 'Wysłane', icon: Send, hint: 'Tu trafiają oferty oznaczone jako wysłane.' },
-  { id: 'interview', label: 'Rozmowy', icon: MessagesSquare, hint: 'Przeciągnij tu aplikację, gdy zaproszą Cię na rozmowę.' },
-  { id: 'offer', label: 'Oferta pracy', icon: Handshake, hint: 'Przeciągnij tu aplikację, gdy dostaniesz ofertę.' },
-  { id: 'archive', label: 'Zakończone', icon: Archive, hint: 'Przeciągnij tu rekrutacje, które się skończyły.' },
-];
 
 const DRAG_TYPE = 'application/x-jobfinder-link';
 

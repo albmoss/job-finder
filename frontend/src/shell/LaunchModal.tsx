@@ -5,7 +5,7 @@ import { useApp } from '../app_context';
 import type { CVProfile, PipelinePrerequisites } from '../types';
 import { Modal } from './Modal';
 
-const SENIORITY_LABEL: Record<string, string> = {
+export const SENIORITY_LABEL: Record<string, string> = {
   intern: 'Stażysta',
   junior: 'Junior',
   mid: 'Mid',
