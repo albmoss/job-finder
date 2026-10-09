@@ -187,6 +187,7 @@ class JobDataService:
             "jobs": None,
         }
         self._decisions_path: Optional[Path] = None
+        self._matched_cache: Dict[str, Tuple[int, List[Tuple[Job, Dict[str, Any]]]]] = {}
 
     def fresh_since(self) -> Optional[str]:
         """Start ostatniego pobierania (ISO, czas lokalny) albo None, gdy nigdy nie zapisany."""
@@ -494,19 +495,24 @@ class JobDataService:
             out: List[Tuple[Job, Dict[str, Any]]] = []
 
             if tab == "Dopasowane":
-                for m in self.analyzed_matches:
-                    rec = self.decision(m.job.link)
-                    if rec["status"] in DECIDED_STATUSES:
-                        continue
-                    out.append((m.job, rec))
-                if sort == "newest":
-                    out.sort(key=lambda t: t[0].scraped_at or "", reverse=True)
+                cached = self._matched_cache.get(sort)
+                if cached and cached[0] == self._rev:
+                    out = cached[1]
                 else:
-                    zdjete = self.zdjete
-                    out.sort(
-                        key=lambda t: (t[0].link not in zdjete, self._percent(t[0]) or -1),
-                        reverse=True,
-                    )
+                    for m in self.analyzed_matches:
+                        rec = self.decision(m.job.link)
+                        if rec["status"] in DECIDED_STATUSES:
+                            continue
+                        out.append((m.job, rec))
+                    if sort == "newest":
+                        out.sort(key=lambda t: t[0].scraped_at or "", reverse=True)
+                    else:
+                        zdjete = self.zdjete
+                        out.sort(
+                            key=lambda t: (t[0].link not in zdjete, self._percent(t[0]) or -1),
+                            reverse=True,
+                        )
+                    self._matched_cache[sort] = (self._rev, out)
             else:
                 wanted = SAVED_STATUSES if tab == "Zapisane" else HIDDEN_STATUSES
                 seen: Set[str] = set()

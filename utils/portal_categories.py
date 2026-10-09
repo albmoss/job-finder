@@ -18,9 +18,11 @@ kierunek, dziedzinę pokrewną i dawną pracę daje na liście OLX wyraźny podz
 między powtórzeniami.
 
 Wynik trafia do `category_scope.json` i liczy się ponownie dopiero po zmianie
-profilu CV albo listy kategorii portalu. Bez CV, bez klucza albo przy błędzie
-Jev funkcja zwraca None: scraper szuka wtedy bez filtra kategorii, czyli tak
-jak przed jego wprowadzeniem.
+profilu CV albo listy kategorii portalu. Przy błędzie Jev scraper bierze kategorie
+wybrane poprzednio dla tego portalu (te, które portal nadal ma). Bez CV, bez
+klucza i bez wcześniejszego wyboru funkcja zwraca None: scraper szuka wtedy bez
+filtra kategorii, czyli tak jak przed jego wprowadzeniem. Scrapery biegną
+równolegle, więc zapis pliku idzie pod `_cache_lock`.
 """
 
 from __future__ import annotations
@@ -28,12 +30,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 from datetime import datetime
 
 from utils import candidates
 from utils.safe_io import load_json_safe, save_json_atomic
 
 logger = logging.getLogger(__name__)
+
+_cache_lock = threading.Lock()
 
 # Kategoria zostaje, gdy Jev daje jej co najmniej tyle szans.
 THRESHOLD = 0.1
@@ -70,7 +75,7 @@ def pick_categories(portal: str, catalog: dict[str, str]) -> list[str] | None:
     Kody kategorii `portal`, w których warto szukać ofert dla CV.
 
     `catalog`: kod kategorii w adresie portalu -> nazwa czytelna dla człowieka.
-    None = szukaj bez filtra kategorii (brak CV, klucza albo odpowiedzi Jev).
+    None = szukaj bez filtra kategorii (brak CV albo brak odpowiedzi Jev i wcześniejszego wyboru).
     """
     from utils.candidate_scope import load_profile
     from utils.cv_profile import cv_text, profile_fingerprint
@@ -81,10 +86,9 @@ def pick_categories(portal: str, catalog: dict[str, str]) -> list[str] | None:
     profile_fp = profile_fingerprint(profile)
     catalog_fp = _catalog_fp(catalog)
 
-    cache = load_json_safe(str(candidates.path(candidates.CATEGORY_SCOPE)), default={})
-    if not isinstance(cache, dict):
-        cache = {}
-    entry = cache.get(portal) or {}
+    path = str(candidates.path(candidates.CATEGORY_SCOPE))
+    cache = load_json_safe(path, default={})
+    entry = (cache.get(portal) if isinstance(cache, dict) else None) or {}
     if entry.get("profile_fp") == profile_fp and entry.get("catalog_fp") == catalog_fp:
         return list(entry["picked"])
 
@@ -92,6 +96,11 @@ def pick_categories(portal: str, catalog: dict[str, str]) -> list[str] | None:
     try:
         probs = _ask_jev(catalog, profile, cv_text())
     except JevError as e:
+        previous = [code for code in entry.get("picked") or [] if code in catalog]
+        if previous:
+            logger.warning(f"{portal}: nie udało się dobrać kategorii do CV ({e}) - "
+                           f"biorę poprzedni wybór ({len(previous)} kategorii)")
+            return previous
         logger.warning(f"{portal}: nie udało się dobrać kategorii do CV ({e}) - szukam bez filtra kategorii")
         return None
 
@@ -99,14 +108,18 @@ def pick_categories(portal: str, catalog: dict[str, str]) -> list[str] | None:
     if not picked:
         logger.warning(f"{portal}: żadna kategoria nie przeszła progu - szukam bez filtra kategorii")
         return None
-    cache[portal] = {
-        "profile_fp": profile_fp,
-        "catalog_fp": catalog_fp,
-        "picked": picked,
-        "probabilities": {catalog[c]: round(p, 3) for c, p in sorted(probs.items(), key=lambda x: -x[1])},
-        "picked_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    save_json_atomic(str(candidates.path(candidates.CATEGORY_SCOPE)), cache, backup=False)
+    with _cache_lock:
+        cache = load_json_safe(path, default={})
+        if not isinstance(cache, dict):
+            cache = {}
+        cache[portal] = {
+            "profile_fp": profile_fp,
+            "catalog_fp": catalog_fp,
+            "picked": picked,
+            "probabilities": {catalog[c]: round(p, 3) for c, p in sorted(probs.items(), key=lambda x: -x[1])},
+            "picked_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        save_json_atomic(path, cache, backup=False)
     logger.info(f"{portal}: {len(picked)}/{len(catalog)} kategorii pasuje do CV: "
                 + ", ".join(catalog[c] for c in picked))
     return picked

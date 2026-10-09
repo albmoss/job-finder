@@ -31,6 +31,7 @@ from scrapers import (
     IndeedScraper,        # Playwright - Cloudflare
 )
 
+from utils import stop, telemetry
 from utils.data_models import JobDatabase, ScraperStatusManager
 
 logging.basicConfig(
@@ -137,6 +138,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
         AplikujScraper(scraper_config),           # 📄 ld+json - dużo entry-level
         GoWorkScraper(scraper_config),            # 📄 ld+json - dużo entry-level
         ATSFeedsScraper(scraper_config),          # 🏢 publiczne feedy ATS firm
+        LinkedInScraper(scraper_config),          # publiczne punkty końcowe gościa (HTTP)
     ]
 
     # Scrapery wymagające kluczy API - dołączane tylko gdy klucz jest ustawiony,
@@ -160,7 +162,6 @@ def run_all_scrapers(only=None, force=False, refresh=False):
     # === Etap 2: scrapery przeglądarkowe - wolniejsze, wymagają Playwrighta ===
     browser_scrapers = [
         OLXScraper(scraper_config),
-        LinkedInScraper(scraper_config),
         # Indeed sam robi sobie długie przerwy między słowami kluczowymi
         # (zabezpieczenia portalu), więc jest najwolniejszym źródłem w przebiegu.
         # Domyślnie wyłączony - patrz "enabled" w SCRAPER_CONFIG["indeed"].
@@ -221,10 +222,15 @@ def run_all_scrapers(only=None, force=False, refresh=False):
 
     def _scrape_source(scraper):
         source_name = scraper.get_source_name()
-        
+
+        if stop.requested():
+            telemetry.emit("source", name=source_name, state="stopped")
+            return {'source': source_name, 'success': True, 'jobs': [], 'status': 'stopped'}
+
         if not force and status_manager.is_scraped_today(source_name):
             logger.info(f"\n{'='*60}")
             logger.info(f"Skipping {source_name} - Already scraped SUCCESSFULLY today")
+            telemetry.emit("source", name=source_name, state="skipped")
             return {
                 'source': source_name,
                 'success': True,
@@ -242,10 +248,16 @@ def run_all_scrapers(only=None, force=False, refresh=False):
         logger.info(f"\n{'='*60}")
         logger.info(f"Running {source_name} scraper...")
         logger.info(f"{'='*60}")
-        
+        telemetry.emit("source", name=source_name, state="running")
+
         try:
             jobs = scraper.run()
-            
+
+            if stop.requested():
+                logger.info(f"{source_name}: stopped on request after {len(jobs)} offers - not marking as completed")
+                telemetry.emit("source", name=source_name, state="stopped", found=len(jobs))
+                return {'source': source_name, 'success': True, 'jobs': jobs, 'status': 'stopped'}
+
             # Za sukces uznajemy dopiero sensowną liczbę ofert, nie sam brak wyjątku
             MIN_JOBS_THRESHOLD = 5
             listed = len(jobs) + len(getattr(scraper, "seen_again_links", None) or ())
@@ -266,6 +278,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 logger.warning(f"{source_name}: Only {listed} jobs found (Threshold: {MIN_JOBS_THRESHOLD}) - NOT marking as completed")
             
             logger.info(f"✓ {source_name}: Successfully scraped {len(jobs)} jobs")
+            telemetry.emit("source", name=source_name, state="done", found=len(jobs))
             
             return {
                 'source': source_name,
@@ -277,6 +290,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
             
         except Exception as e:
             logger.error(f"✗ {source_name}: Failed - {e}")
+            telemetry.emit("source", name=source_name, state="failed", error=str(e)[:300])
             return {
                 'source': source_name,
                 'success': False,
@@ -299,6 +313,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                     result = future.result()
                 except Exception as e:
                     logger.error(f"✗ {source}: Thread crashed - {e}")
+                    telemetry.emit("source", name=source, state="failed", error=str(e)[:300])
                     scraper_results[source] = {'success': False, 'error': str(e), 'status': 'crashed'}
                     continue
 
@@ -343,10 +358,16 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                     added, touched = db.record_scrape(new_jobs, seen_again)
                     logger.info(f"{source}: saved {added} new offers, "
                                 f"{touched} still listed")
+                    telemetry.emit("source_saved", name=source, added=added, seen=touched)
 
     _collect(api_scrapers, 5, "Phase 1 (API/HTTP)")
     # Playwright nie znosi wielu instancji naraz - stąd ostrzejszy limit
     _collect(browser_scrapers, 2, "Phase 2 (browser)")
+
+    if stop.requested():
+        stopped = sorted(s for s, r in scraper_results.items() if r.get('status') == 'stopped')
+        logger.info(f"Scraping stopped on request; unfinished sources: {', '.join(stopped) or 'none'}")
+        return all_jobs
 
     print("\n" + "="*60)
     print("SCRAPING SUMMARY")
@@ -423,6 +444,7 @@ def _report_health(scraper_results, db, skipped_no_key, disabled):
 
         if finding:
             findings.append(finding)
+            telemetry.emit("source_health", name=source, verdict=finding["verdict"], detail=finding["detail"][:300])
 
     report = scraper_health.format_report(findings, skipped_no_key, disabled)
     if report:

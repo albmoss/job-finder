@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from utils import candidates
+from utils import candidates, telemetry
 from utils.links import canonical_link as normalize
 from utils.safe_io import load_json_safe, save_json_atomic
 
@@ -57,6 +57,7 @@ def migrate_jobs():
 
     merged = list(by_link.values())
     print(f"  {JOBS_DB}: {len(jobs)} -> {len(merged)} (scalono {len(jobs) - len(merged)})")
+    telemetry.emit("stage_stats", id="phase1_5", links=len(merged), merged=len(jobs) - len(merged))
     # Zapis tylko przy realnej zmianie: przy juz znormalizowanej bazie
     # ten etap przepisywal caly plik razem z kopia zapasowa, zeby
     # odtworzyc go bajt w bajt.
@@ -88,7 +89,8 @@ def _migrate_decisions(path):
             merged[key] = val
 
     print(f"  {label}: {len(decisions)} -> {len(merged)} (kolizje: {collisions})")
-    save_json_atomic(path, merged, backup=True)
+    if list(merged) != list(decisions):
+        save_json_atomic(path, merged, backup=True)
 
 
 def main():

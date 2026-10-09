@@ -33,6 +33,7 @@ from typing import List, Optional
 
 from bs4 import BeautifulSoup
 
+from utils import stop, telemetry
 from utils.candidate_scope import city_slug, scope_city, scope_levels
 from utils.data_models import Job
 from utils.links import canonical_link, logo_url
@@ -270,6 +271,7 @@ class PracujOptimizedScraper:
                         wait = (5 * (2 ** attempt)) + random.random() * 2
                     wait = min(wait, 120)
                     logger.warning(f"Pracuj.pl: HTTP 429 on {url[:60]} - cooldown {wait:.0f}s (attempt {attempt+1}/{max_attempts})")
+                    telemetry.emit("throttled", name=self.get_source_name())
                     self._trigger_cooldown(wait)
                     continue
 
@@ -430,7 +432,7 @@ class PracujOptimizedScraper:
         current_page = 2
 
         with ThreadPoolExecutor(max_workers=self.parallel_threads) as executor:
-            while current_page <= total_pages and consecutive_empty < 3:
+            while current_page <= total_pages and consecutive_empty < 3 and not stop.requested():
                 batch_size = self.parallel_threads
                 page_batch = list(range(current_page, min(current_page + batch_size, total_pages + 1)))
 
@@ -624,6 +626,8 @@ class PracujOptimizedScraper:
             return []
 
         def _fetch_one_detail(link: str) -> tuple[str, Optional[dict]]:
+            if stop.requested():
+                return link, None
             html = self.fetch_html(link, max_attempts=2, is_detail=True)
             detail = self.extract_detail_from_html(html) if html else None
             return link, detail
@@ -642,6 +646,7 @@ class PracujOptimizedScraper:
                         f"{self.get_source_name()}: {done}/{total} descriptions - "
                         f"{rate * 60:.0f}/min, ~{(total - done) / rate / 60:.0f} min left"
                     )
+                    telemetry.emit("source_details", name=self.get_source_name(), done=done, total=total)
 
                 item = unique_by_link[link]
                 if detail and detail.get('description'):
@@ -691,6 +696,7 @@ class PracujOptimizedScraper:
             f"{self.get_source_name()}: fetched {ok}/{total} descriptions, "
             f"dropped 0 (out of scope) -> {len(jobs)} offers"
         )
+        telemetry.emit("source_details", name=self.get_source_name(), done=total, total=total)
         with self._rate_lock:
             blocked = self._consecutive_blocks
 

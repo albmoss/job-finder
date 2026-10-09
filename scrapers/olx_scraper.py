@@ -21,6 +21,7 @@ import time
 from typing import List
 
 from scrapers.base_scraper import BaseScraper
+from utils import stop, telemetry
 from utils.data_models import Job
 from utils.links import logo_url
 from utils.olx_details import fetch_offer_details, normalize_olx_link
@@ -306,6 +307,8 @@ class OLXScraper(BaseScraper):
         logger.info(f"Loaded {len(completed_categories)} completed categories from previous runs.")
 
         for category in categories:
+            if stop.requested():
+                break
             if category in completed_categories:
                 logger.info(f"Skipping already scraped category: {category}")
                 continue
@@ -349,6 +352,9 @@ class OLXScraper(BaseScraper):
             urwana = False
             
             while page_num <= max_pages:
+                if stop.requested():
+                    urwana = True
+                    break
                 logger.info(f"{self.get_source_name()} | {category}: Scraping page {page_num}")
                 
                 try:
@@ -569,6 +575,7 @@ class OLXScraper(BaseScraper):
             f"bledy: {stats['error']}, blokady: {stats['blocked']}) - "
             f"{tempo * 60:.0f} ofert/min, zostalo ~{zostalo / 60:.0f} min"
         )
+        telemetry.emit("source_details", name=self.get_source_name(), done=zrobione, total=wszystkich)
 
     def _zapisz_opis(self, job, wynik, stats, enriched):
         """Wspolne dla obu drog: co zrobic z rozebranym HTML-em oferty."""
@@ -624,7 +631,7 @@ class OLXScraper(BaseScraper):
         odnowienia = 0
         start = time.monotonic()
         poczatek = 0
-        while poczatek < len(jobs):
+        while poczatek < len(jobs) and not stop.requested():
             paczka = jobs[poczatek:poczatek + PACZKA]
             try:
                 wyniki = page.evaluate(
@@ -702,6 +709,8 @@ class OLXScraper(BaseScraper):
             # pomijany. Pierwsza blokada kasowala odstep, kolejne wejscia szly
             # 20 razy na sekunde i blokada sie utrwalala - przebieg z 1 wrzesnia
             # 2026 zrobil 1164 zapytania w 58 s i skonczyl na 1137 blokadach.
+            if stop.requested():
+                break
             if nr:
                 time.sleep(przerwa)
             html, status_http = "", None

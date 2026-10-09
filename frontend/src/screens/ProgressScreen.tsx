@@ -122,7 +122,7 @@ export function ProgressScreen(_props: ScreenProps) {
       : sources.length
         ? 'scraping'
         : 'profile';
-  const feed = activityFeed(pipeline.logs, 12);
+  const feed = activityFeed(pipeline.events, 12);
   const recent = summary?.recent.slice(0, 3) ?? [];
 
   return (
@@ -291,12 +291,13 @@ function ProfileView({ running }: { running: boolean }) {
   );
 }
 
-const SOURCE_ORDER: Record<SourceTelemetry['state'], number> = { running: 0, failed: 1, done: 2, skipped: 3 };
+const SOURCE_ORDER: Record<SourceTelemetry['state'], number> = { running: 0, failed: 1, done: 2, stopped: 3, skipped: 4 };
 
 function sourceStatus(source: SourceTelemetry): string {
   const problem = sourceProblem(source);
   if (problem) return problem;
   if (source.state === 'skipped') return 'Pominięty';
+  if (source.state === 'stopped') return 'Zatrzymane';
   if (source.state === 'done') return 'Gotowe';
   if (source.details_total) return `Opisy ofert: ${n(source.details_done ?? 0)} z ${n(source.details_total)}`;
   return 'Zbieramy listę ofert';
@@ -338,7 +339,7 @@ function SourcesView({ sources, running }: { sources: SourceTelemetry[]; running
                   {source.state === 'running' && <span className="spinner" aria-hidden="true" />}
                   {source.state === 'done' && (source.health ? <TriangleAlert /> : <Check />)}
                   {source.state === 'failed' && <TriangleAlert />}
-                  {source.state === 'skipped' && <Minus />}
+                  {(source.state === 'skipped' || source.state === 'stopped') && <Minus />}
                 </span>
                 <span className="pg-src-id">
                   <span className="pg-src-name">{source.name}</span>

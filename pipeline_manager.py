@@ -7,23 +7,23 @@ from collections import deque
 import logging
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 import threading
 import time
 
+from utils import stop, telemetry
 from utils.safe_io import load_json_safe, save_json_atomic
 
 logger = logging.getLogger(__name__)
 
 STATE_LOCK_FILE = Path(__file__).parent / "pipeline_run_state.json"
-STOP_FLAG_FILE = Path(__file__).parent / "pipeline_stop_requested.flag"
 CHECKPOINT_FILE = Path(__file__).parent / "pipeline_checkpoint.json"
-# Scrapery nie sprawdzają flagi, więc stop zadziała dopiero po całym pobieraniu;
-# dopasowanie kończy rozpoczęte oceny i wychodzi.
-STOP_REQUESTED_MSG = ("Wysłano żądanie zatrzymania. Pipeline skończy bieżący etap "
-                      "(w dopasowaniu - rozpoczęte oceny) i zapisze wyniki przed wyjściem.")
+STOP_REQUESTED_MSG = ("Wysłano żądanie zatrzymania. Pipeline zapisze oferty pobrane do tej chwili "
+                      "(w dopasowaniu - rozpoczęte oceny) i zakończy pracę.")
+STAGE_OF = {"phase0_5": "phase0"}
+FEED_EVENTS = {"stage", "pipeline", "source", "source_saved", "throttled", "profile", "prefilter",
+               "matching_done"}
 
 
 def _get_process_creation_time(pid):
@@ -183,6 +183,7 @@ class PipelineProcessManager:
         self._thread = None
         self._lock = threading.RLock()
         self._logs = deque(maxlen=300)
+        self._events = deque(maxlen=200)
         self._mode = "full"
         self._stages = []
         self._running = False
@@ -212,12 +213,12 @@ class PipelineProcessManager:
     def _init_stages(self, mode, stage=None):
         stages_def = [
             # Profil z CV (PHASE 0.5) jest częścią etapu 00 - tor ma zostać sześcioetapowy.
-            {"id": "phase0", "num": "00", "title": "Porządki i profil z CV", "pattern": r"PHASE 0(?:\.5)?\b"},
-            {"id": "phase1", "num": "01", "title": "Pobieranie ofert ze źródeł", "pattern": r"PHASE 1\b(?![\.\d])"},
-            {"id": "phase1_5", "num": "1.5", "title": "Normalizacja linków", "pattern": r"PHASE 1\.5\b"},
-            {"id": "phase2", "num": "02", "title": "Deduplikacja bazy ofert", "pattern": r"PHASE 2\b(?![\.\d])"},
-            {"id": "phase2_5", "num": "2.5", "title": "Czyszczenie opisów ofert", "pattern": r"PHASE 2\.5\b"},
-            {"id": "phase3", "num": "03", "title": "Dopasowanie do CV", "pattern": r"PHASE 3\b"},
+            {"id": "phase0", "num": "00", "title": "Porządki i profil z CV"},
+            {"id": "phase1", "num": "01", "title": "Pobieranie ofert ze źródeł"},
+            {"id": "phase1_5", "num": "1.5", "title": "Normalizacja linków"},
+            {"id": "phase2", "num": "02", "title": "Deduplikacja bazy ofert"},
+            {"id": "phase2_5", "num": "2.5", "title": "Czyszczenie opisów ofert"},
+            {"id": "phase3", "num": "03", "title": "Dopasowanie do CV"},
         ]
         self._stages = []
         now = time.time()
@@ -279,136 +280,117 @@ class PipelineProcessManager:
             "stages": {k: dict(v) for k, v in self._telemetry["stages"].items()},
         }
 
-    def _parse_telemetry(self, line: str):
-        # Źródła ofert (scrapery)
-        m = re.search(r"Running\s+(.+?)\s+scraper\.\.\.", line)
-        if m:
-            src = self._get_or_create_source(m.group(1), default_state="running")
-            src["state"] = "running"
-            return
+    def _apply_stage(self, pipeline_id: str, state: str) -> bool:
+        stage_id = STAGE_OF.get(pipeline_id, pipeline_id)
+        idx = next((i for i, s in enumerate(self._stages) if s["id"] == stage_id), None)
+        if idx is None:
+            return False
+        stage = self._stages[idx]
+        now = time.time()
+        changed = False
+        if state == "failed":
+            if stage["status"] != "failed":
+                stage["status"] = "failed"
+                stage["finished_at"] = now
+                changed = True
+            return changed
+        if state == "done":
+            if pipeline_id in STAGE_OF.values():
+                return False
+            if stage["status"] == "running":
+                stage["status"] = "done"
+                stage["finished_at"] = now
+                changed = True
+            return changed
+        for prev in self._stages[:idx]:
+            if prev["status"] not in ("skipped", "failed", "done"):
+                prev["status"] = "done"
+                prev["finished_at"] = now
+                changed = True
+        if stage["status"] in ("skipped", "failed"):
+            return changed
+        if state == "cached":
+            if stage["status"] != "done":
+                stage["status"] = "done"
+                changed = True
+            return changed
+        if stage["status"] != "running":
+            # Etap 00 wraca z „done” do pracy, gdy po etapie z checkpointu rusza
+            # profil z CV - czas liczy się od tej chwili.
+            if stage.get("started_at") is None or stage["status"] == "done":
+                stage["started_at"] = now
+                stage["finished_at"] = None
+            stage["status"] = "running"
+            changed = True
+        if self._active_stage_idx != idx:
+            self._active_stage_idx = idx
+            changed = True
+        return changed
 
-        m = re.search(r"[✓\u2713√]\s*(.+?):\s*Successfully scraped\s+(\d+)\s+jobs", line)
-        if m:
-            src = self._get_or_create_source(m.group(1), default_state="done")
-            src["state"] = "done"
-            src["found"] = int(m.group(2))
-            return
+    def _apply_event(self, ev: dict) -> bool:
+        """Zdarzenie z `utils.telemetry`; zwraca True, gdy zmienił się tor etapów albo wynik."""
+        kind = ev.get("event")
+        if kind in FEED_EVENTS:
+            self._events.append(ev)
+        if kind == "stage":
+            return self._apply_stage(str(ev.get("id") or ""), str(ev.get("state") or ""))
+        if kind == "pipeline":
+            result = ev.get("result")
+            self._pipeline_complete_seen = result == "complete"
+            self._pipeline_incomplete_seen = result == "incomplete"
+            self._pipeline_stopped_seen = result == "stopped"
+            return True
 
-        m = re.search(r"Skipping\s+(.+?)\s*-\s*Already scraped", line)
-        if m:
-            src = self._get_or_create_source(m.group(1), default_state="skipped")
-            src["state"] = "skipped"
-            return
-
-        m = re.search(r"[✗\u2717]\s*(.+?):\s*(?:Failed|Thread crashed)\b(?:\s*-\s*(.+))?", line, re.IGNORECASE)
-        if m:
-            src = self._get_or_create_source(m.group(1), default_state="failed")
-            src["state"] = "failed"
-            src["error"] = (m.group(2) or "").strip()[:300] or None
-            return
-
-        m = re.search(r"^health:\s*(.+?)\s+-\s+(broken|degraded|weak|inconclusive)\s+\((.*)\)\s*$", line.strip())
-        if m:
-            src = self._get_or_create_source(m.group(1), default_state="done")
-            src["health"] = {"verdict": m.group(2), "detail": m.group(3)[:300]}
-            return
-
-        cl = re.sub(r"^.*?-\s*(?:INFO|WARNING|ERROR|DEBUG|CRITICAL)\s*-\s*", "", line).strip()
-        m = re.search(r"^([^:\n\r]+?):\s*saved\s+(\d+)\s+new offers", cl, re.IGNORECASE)
-        if not m:
-            m = re.search(r"(?:^|[-:]\s+)([^:\n\r]+?):\s*saved\s+(\d+)\s+new offers", line, re.IGNORECASE)
-        if m:
-            src = self._get_or_create_source(m.group(1), default_state="done")
-            src["added"] = int(m.group(2))
-            return
-
-        # Postęp pobierania opisów: "aplikuj.pl: 1200/3482 descriptions" (ldjson_scraper_base),
-        # "OLX: 120/500 opisow" (olx_scraper._melduj), podsumowanie "fetched X/Y descriptions".
-        # OLX melduje się krótszą nazwą niż źródło ("OLX Praca"); nieznanych nazw nie zakładamy.
-        m = re.search(r"^([^:\n\r]+?):\s*(fetched\s+)?(\d+)/(\d+)\s+(?:descriptions|opisow)\b", cl)
-        if m:
-            name = m.group(1).strip()
+        name = str(ev.get("name") or "").strip()
+        if kind == "source" and name:
+            state = ev.get("state") or "running"
+            src = self._get_or_create_source(name, default_state=state)
+            src["state"] = state
+            if isinstance(ev.get("found"), int):
+                src["found"] = ev["found"]
+            if state == "failed":
+                src["error"] = (ev.get("error") or "").strip()[:300] or None
+        elif kind == "source_saved" and name:
+            self._get_or_create_source(name, default_state="done")["added"] = ev.get("added")
+        elif kind == "source_details" and name:
             for src in self._telemetry["sources"]:
-                if src["name"] == name or src["name"].startswith(name + " "):
-                    total = int(m.group(4))
-                    src["details_total"] = total
-                    src["details_done"] = total if m.group(2) else int(m.group(3))
+                if src["name"] == name:
+                    src["details_done"] = ev.get("done")
+                    src["details_total"] = ev.get("total")
                     break
-            return
-
-        # Liczby etapów porządkowych (arkusz pipeline'u). Wzorce = treść logów
-        # purge_stale_offers / migrate_normalize_links / deduplicate_db / clean_db;
-        # zmiana tekstu logu wymaga zmiany wzorca.
-        stages = self._telemetry["stages"]
-        m = re.search(r"REMOVED \(stale\):\s*(\d+)", line)
-        if m:
-            stages["phase0"] = {"removed": int(m.group(1))}
-            return
-
-        m = re.search(r"jobs_database\.json:\s*(\d+)\s*->\s*(\d+)\s*\(scalono\s+(\d+)\)", line)
-        if m:
-            stages["phase1_5"] = {"links": int(m.group(2)), "merged": int(m.group(3))}
-            return
-
-        m = re.search(r"jobs_database\.json:\s*(\d+)\s*->\s*(\d+)\s*\(removed\s+(\d+)\)", line)
-        if m:
-            stages["phase2"] = {"removed": int(m.group(3))}
-            return
-
-        m = re.search(r"jobs_database\.json:\s*\d+\s+ofert,\s*brak duplikatow", line)
-        if m:
-            stages["phase2"] = {"removed": 0}
-            return
-
-        # clean_db przycina dwa pliki; sumujemy znaki opisów z obu.
-        m = re.search(r"\bBefore:\s*([\d,]+)\s+chars", line)
-        if m:
-            diet = stages.setdefault("phase2_5", {"chars_before": 0, "chars_after": 0})
-            diet["chars_before"] += int(m.group(1).replace(",", ""))
-            return
-
-        m = re.search(r"\bAfter:\s*([\d,]+)\s+chars", line)
-        if m:
-            diet = stages.setdefault("phase2_5", {"chars_before": 0, "chars_after": 0})
-            diet["chars_after"] += int(m.group(1).replace(",", ""))
-            return
-
-        # Dopasowanie (matching/run.py). Wzorce = treść logów tego modułu.
-        m = re.search(r"Prefilter:\s*(\d+)\s+rejected\s*(\{[^}]*\})?.*\|\s*to score:\s*(\d+)", line)
-        if m:
+        elif kind == "source_health" and name:
+            src = self._get_or_create_source(name, default_state="done")
+            src["health"] = {"verdict": ev.get("verdict"), "detail": (ev.get("detail") or "")[:300]}
+        elif kind == "stage_stats" and ev.get("id"):
+            self._telemetry["stages"][ev["id"]] = {
+                k: v for k, v in ev.items() if k not in ("event", "at", "id")}
+        elif kind == "prefilter":
             sc = self._ensure_scoring()
-            reasons = {k: int(v) for k, v in re.findall(r"['\"](\w+)['\"]:\s*(\d+)", m.group(2) or "")}
-            sc["prefilter_rejected"] = int(m.group(1))
-            sc["prefilter_reasons"] = reasons
-            sc["to_score"] = int(m.group(3))
-            stages["phase3"] = {"prefilter_rejected": int(m.group(1)), "prefilter_reasons": reasons,
-                                "to_score": int(m.group(3))}
-            return
-
-        m = re.search(r"Scored\s+(\d+)/(\d+)\s*\(([\d.]+)/s\)", line)
-        if m:
+            sc["prefilter_rejected"] = ev.get("rejected")
+            sc["prefilter_reasons"] = ev.get("reasons") or {}
+            sc["to_score"] = ev.get("to_score")
+            self._telemetry["stages"]["phase3"] = {
+                "prefilter_rejected": sc["prefilter_rejected"],
+                "prefilter_reasons": sc["prefilter_reasons"],
+                "to_score": sc["to_score"],
+            }
+        elif kind == "scored":
             sc = self._ensure_scoring()
-            sc["scored"] = int(m.group(1))
-            sc["to_score"] = int(m.group(2))
-            sc["rate"] = float(m.group(3))
+            sc["scored"] = ev.get("done") or 0
+            sc["to_score"] = ev.get("total")
+            sc["rate"] = ev.get("rate")
             sc["last_done_at"] = round(time.time(), 1)
-            phase3 = stages.setdefault("phase3", {})
-            phase3.update({"scored": sc["scored"], "total": sc["to_score"], "rate": sc["rate"]})
-            return
-
-        if re.search(r"^\s*Jev error:", line):
+            self._telemetry["stages"].setdefault("phase3", {}).update(
+                {"scored": sc["scored"], "total": sc["to_score"], "rate": sc["rate"]})
+        elif kind == "jev_error":
+            self._ensure_scoring()["errors"] += 1
+        elif kind == "matching_done":
             sc = self._ensure_scoring()
-            sc["errors"] += 1
-            return
-
-        m = re.search(r"Matching done:\s*(\d+)\s+scored now,\s*(\d+)\s+errors,\s*(\d+)\s+offers with a percent", line)
-        if m:
-            sc = self._ensure_scoring()
-            sc["errors"] = int(m.group(2))
-            phase3 = stages.setdefault("phase3", {})
-            phase3.update({"scored_now": int(m.group(1)), "errors": int(m.group(2)),
-                           "with_percent": int(m.group(3))})
-            return
+            sc["errors"] = ev.get("errors") or 0
+            self._telemetry["stages"].setdefault("phase3", {}).update(
+                {"scored_now": ev.get("scored_now"), "errors": sc["errors"],
+                 "with_percent": ev.get("with_percent")})
+        return False
 
     def _release_finished_process(self):
         """
@@ -459,11 +441,7 @@ class PipelineProcessManager:
             if self.is_running():
                 active_pid = self._process.pid if (self._process and self._process.poll() is None) else "inny proces"
                 return False, f"Pipeline jest już uruchomiony (PID: {active_pid})."
-            try:
-                if STOP_FLAG_FILE.exists():
-                    STOP_FLAG_FILE.unlink()
-            except Exception:
-                pass
+            stop.clear()
 
             self._mode = mode
             self._cmd = cmd
@@ -472,6 +450,7 @@ class PipelineProcessManager:
             self._active_stage_idx = next(
                 (i for i, s in enumerate(self._stages) if s["status"] == "running"), 0)
             self._logs.clear()
+            self._events.clear()
             self._started_at = time.time()
             self._finished_at = None
             self._telemetry = {"sources": [], "scoring": None, "stages": {}}
@@ -544,7 +523,7 @@ class PipelineProcessManager:
             pid = proc.pid if proc else None
             create_time = self._process_create_time
         try:
-            STOP_FLAG_FILE.touch()
+            stop.request()
         except Exception as e:
             logger.warning(f"Błąd tworzenia pliku flagi stopu: {e}")
 
@@ -562,11 +541,7 @@ class PipelineProcessManager:
             time.sleep(0.1)
 
         if stopped_cooperatively:
-            try:
-                if STOP_FLAG_FILE.exists():
-                    STOP_FLAG_FILE.unlink()
-            except Exception:
-                pass
+            stop.clear()
             with self._lock:
                 self._running = False
                 self._status = "stopped"
@@ -582,11 +557,7 @@ class PipelineProcessManager:
             proc = self._process
             if not _terminate_process_tree(pid, create_time) and proc is not None and proc.poll() is None:
                 return False, "Nie udało się zakończyć procesu pipeline'u."
-            try:
-                if STOP_FLAG_FILE.exists():
-                    STOP_FLAG_FILE.unlink()
-            except Exception:
-                pass
+            stop.clear()
             with self._lock:
                 self._running = False
                 self._status = "stopped"
@@ -606,10 +577,10 @@ class PipelineProcessManager:
         zostawia flagę stopu, a przy wymuszeniu kończy drzewo procesów.
         Właściciel przebiegu zapisze stan końcowy sam.
         """
-        if STOP_FLAG_FILE.exists():
+        if stop.requested():
             force = True
         try:
-            STOP_FLAG_FILE.touch()
+            stop.request()
         except Exception as e:
             logger.warning(f"Błąd tworzenia pliku flagi stopu: {e}")
             return False, f"Nie udało się zgłosić zatrzymania: {e}"
@@ -639,6 +610,9 @@ class PipelineProcessManager:
                 self._pending_sync.daemon = True
                 self._pending_sync.start()
             return
+        pending, self._pending_sync = self._pending_sync, None
+        if pending is not None:
+            pending.cancel()
         self._last_disk_sync = now
         try:
             with self._lock:
@@ -654,6 +628,7 @@ class PipelineProcessManager:
                     "telemetry": self._telemetry_snapshot(),
                     "stages": [dict(s) for s in self._stages],
                     "logs": list(self._logs),
+                    "events": list(self._events),
                     "current_stage_idx": self._active_stage_idx,
                     "current_stage_title": (self._stages[self._active_stage_idx]["title"]
                                            if self._active_stage_idx < len(self._stages) else ""),
@@ -682,72 +657,28 @@ class PipelineProcessManager:
 
         try:
             for raw_line in proc.stdout:
-                if self._echo:
-                    self._echo(raw_line.rstrip("\r\n"))
                 line = raw_line.rstrip()
+                event = telemetry.parse(line)
+                if event is None and self._echo:
+                    self._echo(raw_line.rstrip("\r\n"))
                 if not line:
                     continue
 
                 with self._lock:
-                    self._logs.append(line)
-                    self._parse_telemetry(line)
-
-                    now = time.time()
-                    stage_changed = False
-                    for s in stages:
-                        if re.search(s["pattern"], line) and ("failed" in line.lower() or "error" in line.lower()):
-                            if s["status"] != "failed":
-                                stage_changed = True
-                                s["finished_at"] = now
-                            s["status"] = "failed"
-
-                    for idx, s in enumerate(stages):
-                        if re.search(s["pattern"], line) and "failed" not in line.lower() and "error" not in line.lower():
-                            for prev_idx in range(idx):
-                                if stages[prev_idx]["status"] not in ("skipped", "failed", "done"):
-                                    stages[prev_idx]["status"] = "done"
-                                    stages[prev_idx]["finished_at"] = now
-                                    stage_changed = True
-                            if s["status"] != "skipped" and s["status"] != "failed":
-                                if "already completed in checkpoint" in line:
-                                    # Etap zrobiony w przerwanym przebiegu: gotowy, bez startu teraz.
-                                    if s["status"] != "done":
-                                        s["status"] = "done"
-                                        stage_changed = True
-                                    break
-                                if s["status"] != "running":
-                                    stage_changed = True
-                                    # Etap 00 wraca z „done” do pracy, gdy po archiwizacji z checkpointu
-                                    # rusza profil z CV - czas liczy się od tej chwili.
-                                    if s.get("started_at") is None or s["status"] == "done":
-                                        s["started_at"] = now
-                                        s["finished_at"] = None
-                                elif self._active_stage_idx != idx:
-                                    stage_changed = True
-                                s["status"] = "running"
-                                self._active_stage_idx = idx
-                            break
-
-                    if "PIPELINE COMPLETE" in line:
-                        self._pipeline_complete_seen = True
-                    elif "PIPELINE INCOMPLETE" in line:
-                        self._pipeline_incomplete_seen = True
-                    elif "PIPELINE STOPPED" in line:
-                        self._pipeline_stopped_seen = True
-
-                    force_sync = stage_changed or self._pipeline_complete_seen or self._pipeline_incomplete_seen or self._pipeline_stopped_seen
-                    self._sync_state_to_disk(force=force_sync)
+                    changed = False
+                    if event is None:
+                        self._logs.append(line)
+                    else:
+                        changed = self._apply_event(event)
+                    self._sync_state_to_disk(force=changed)
             code = proc.wait()
         except Exception as e:
             code = -1
             with self._lock:
                 self._error_message = str(e)
-        stop_requested = STOP_FLAG_FILE.exists()
-        try:
-            if stop_requested:
-                STOP_FLAG_FILE.unlink()
-        except Exception:
-            pass
+        stop_requested = stop.requested()
+        if stop_requested:
+            stop.clear()
 
         with self._lock:
             self._running = False
@@ -853,6 +784,7 @@ class PipelineProcessManager:
                     "stages": [dict(s) for s in self._stages],
                     "telemetry": self._telemetry_snapshot(),
                     "logs": list(self._logs),
+                    "events": list(self._events),
                     "current_stage_idx": self._active_stage_idx,
                     "current_stage_title": current_title,
                     "success": self._success,
@@ -889,7 +821,7 @@ class PipelineProcessManager:
                             else:
                                 status = "idle"
 
-                        if is_alive and status == "running" and STOP_FLAG_FILE.exists():
+                        if is_alive and status == "running" and stop.requested():
                             status = "stopping"
 
                         if not is_alive:
@@ -930,6 +862,7 @@ class PipelineProcessManager:
 
                         disk_state.setdefault("started_at", None)
                         disk_state.setdefault("finished_at", None)
+                        disk_state.setdefault("events", [])
                         disk_state.setdefault("telemetry", {"sources": [], "scoring": None, "stages": {}})
                         disk_state["telemetry"].setdefault("stages", {})
                         for s in disk_state.get("stages", []):
@@ -962,6 +895,7 @@ class PipelineProcessManager:
                 "stages": [dict(s) for s in self._stages],
                 "telemetry": self._telemetry_snapshot(),
                 "logs": list(self._logs),
+                "events": list(self._events),
                 "current_stage_idx": self._active_stage_idx,
                 "current_stage_title": current_title,
                 "success": self._success,

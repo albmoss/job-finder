@@ -27,7 +27,7 @@ export interface PipelineStage {
 
 export interface SourceTelemetry {
   name: string;
-  state: 'running' | 'done' | 'skipped' | 'failed';
+  state: 'running' | 'done' | 'skipped' | 'stopped' | 'failed';
   found: number | null;
   added: number | null;
   /** Postęp pobierania opisów ofert (strony szczegółów), z meldunków scrapera. */
@@ -81,13 +81,29 @@ export interface PipelineTelemetry {
 
 export type PipelineStatus = 'idle' | 'running' | 'stopping' | 'stopped' | 'failed' | 'completed';
 
+export interface PipelineEvent {
+  event: string;
+  at: number;
+  id?: string;
+  state?: string;
+  result?: 'complete' | 'incomplete' | 'stopped';
+  name?: string;
+  found?: number;
+  added?: number;
+  seniority?: string | null;
+  city?: string | null;
+  skills?: number;
+  to_score?: number;
+  scored_now?: number;
+}
+
 export interface PipelineState {
   running: boolean;
   pid: number | null;
   mode: string;
   cmd: string[] | null;
   stages: PipelineStage[];
-  logs: string[];
+  events: PipelineEvent[];
   current_stage_idx: number;
   current_stage_title: string;
   success: boolean | null;

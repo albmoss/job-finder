@@ -29,7 +29,7 @@ import requests
 
 from matching import jev, triage
 from matching.prefilter import reject_reason
-from utils import candidates
+from utils import candidates, stop, telemetry
 from utils.cv_profile import cv_text, ensure_profile, profile_fingerprint, profile_history, remember_profile
 from utils.data_models import Job, JobDatabase
 from utils.links import canonical_link
@@ -38,7 +38,6 @@ from utils.safe_io import load_json_safe, save_json_atomic
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 JOBS_PATH = BASE_DIR / "jobs_database.json"
-STOP_FLAG_FILE = BASE_DIR / "pipeline_stop_requested.flag"
 
 WORKERS = 8
 SAVE_EVERY = 200
@@ -74,7 +73,7 @@ def _triage(todo, results, profile, cv, profile_fp, kept, key, session, now):
     errors, stopped = 0, False
     if ask:
         fresh, tokens, errors, stopped = triage.triage(
-            ask, jev.candidate_state(profile, cv), key, session, STOP_FLAG_FILE.exists)
+            ask, jev.candidate_state(profile, cv), key, session, stop.requested)
         print(f"Triage: {len(fresh)}/{len(ask)} offers checked, {tokens} input tokens, "
               f"{len(known)} cached")
         known.update({link: (p, profile_fp) for link, p in fresh.items()})
@@ -122,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
     history = profile_history()
     print(f"Profile: {profile.get('seniority')} | {profile.get('city')} | "
           f"{len(profile.get('skills') or [])} skills | fp {profile_fp}")
+    telemetry.emit("profile", seniority=profile.get("seniority"), city=profile.get("city"),
+                   skills=len(profile.get("skills") or []))
 
     jobs = JobDatabase(str(JOBS_PATH)).load_jobs()
     # --rescore-all: pełne przeliczenie, np. po zmianie pytań albo wag w matching/jev.py.
@@ -176,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         todo = todo[:limit]
     total = len(todo)
     print(f"Prefilter: {sum(filtered.values())} rejected {filtered} | to score: {total}")
+    telemetry.emit("prefilter", rejected=sum(filtered.values()), reasons=filtered, to_score=total)
     save_json_atomic(str(results_path()), results, backup=True)
 
     done = 0
@@ -204,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
                 except jev.JevError as e:
                     errors += 1
                     print(f"   Jev error: {e}")
+                    telemetry.emit("jev_error")
                     if "klucz" in str(e):
                         stopped = True
                     continue
@@ -220,13 +223,15 @@ def main(argv: list[str] | None = None) -> int:
                     last_report = now_s
                     rate = done / max(now_s - started, 1e-6)
                     print(f"   Scored {done}/{total} ({rate:.1f}/s)")
-            if not stopped and STOP_FLAG_FILE.exists():
+                    telemetry.emit("scored", done=done, total=total, rate=round(rate, 1))
+            if not stopped and stop.requested():
                 print("   Stop requested - finishing in-flight offers.")
                 stopped = True
 
     save_json_atomic(str(results_path()), results, backup=False)
     scored = sum(1 for e in results.values() if e.get("percent") is not None)
     print(f"Matching done: {done} scored now, {errors} errors, {scored} offers with a percent.")
+    telemetry.emit("matching_done", scored_now=done, errors=errors, with_percent=scored)
     # Zatrzymanie (flaga albo odrzucony klucz) to nie sukces: pipeline nie może
     # oznaczyć etapu jako ukończonego, bo reszta ofert czeka na ocenę.
     if stopped:

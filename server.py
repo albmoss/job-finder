@@ -99,12 +99,12 @@ async def origin_check_middleware(request: Request, call_next):
 
 # --- Endpointy API ---
 
-async def api_stats(request: Request) -> JSONResponse:
+def api_stats(request: Request) -> JSONResponse:
     job_data_service.ensure_loaded()
     return JSONResponse(job_data_service.get_stats())
 
 
-async def api_offers(request: Request) -> JSONResponse:
+def api_offers(request: Request) -> JSONResponse:
     """Zwraca stronicowaną listę ofert dla zakładki (Dopasowane, Ukryte, Zapisane)."""
     tab = request.query_params.get("tab", "Dopasowane")
     if tab not in OFFER_TABS:
@@ -146,7 +146,7 @@ async def api_offers(request: Request) -> JSONResponse:
     })
 
 
-async def api_offer_detail(request: Request) -> JSONResponse:
+def api_offer_detail(request: Request) -> JSONResponse:
     """Zwraca pełne szczegóły oferty: dopasowanie, chipy, sformatowany opis i stan decyzji."""
     link = request.query_params.get("link", "")
     if not link:
@@ -165,11 +165,19 @@ async def _json_body(request: Request):
     return body if isinstance(body, dict) else None
 
 
-async def api_decision_update(request: Request) -> JSONResponse:
+def json_endpoint(handler, required: bool = True):
+    async def endpoint(request: Request) -> Response:
+        body = await _json_body(request)
+        if body is None:
+            if required:
+                return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
+            body = {}
+        return await asyncio.to_thread(handler, body)
+    return endpoint
+
+
+def api_decision_update(body: dict) -> JSONResponse:
     """Zapisuje decyzję: zapisana na później, wysłana (z etapem lejka) albo ukryta."""
-    body = await _json_body(request)
-    if body is None:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
     link = body.get("link")
     status = body.get("status")
     stage = body.get("stage") or None
@@ -185,11 +193,8 @@ async def api_decision_update(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "offer": job_data_service.get_offer_detail(link)})
 
 
-async def api_note_update(request: Request) -> JSONResponse:
+def api_note_update(body: dict) -> JSONResponse:
     """Zapisuje notatkę do oferty z decyzją; pusta notatka ją usuwa."""
-    body = await _json_body(request)
-    if body is None:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
     link = body.get("link")
     if not link:
         return JSONResponse({"error": "Pole 'link' jest wymagane"}, status_code=400)
@@ -200,13 +205,8 @@ async def api_note_update(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "offer": job_data_service.get_offer_detail(link)})
 
 
-async def api_decision_restore(request: Request) -> JSONResponse:
+def api_decision_restore(body: dict) -> JSONResponse:
     """Cofa decyzję użytkownika dla danej oferty (oferta wraca na listę bez decyzji)."""
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
-
     link = body.get("link")
     if not link:
         return JSONResponse({"error": "Pole 'link' jest wymagane"}, status_code=400)
@@ -215,13 +215,8 @@ async def api_decision_restore(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "changed": changed, "offer": job_data_service.get_offer_detail(link)})
 
 
-async def api_next_step_update(request: Request) -> JSONResponse:
+def api_next_step_update(body: dict) -> JSONResponse:
     """Zapisuje następny krok aplikacji (`label`, `due`); pusty `label` go usuwa."""
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
-
     link = body.get("link")
     if not link:
         return JSONResponse({"error": "Pole 'link' jest wymagane"}, status_code=400)
@@ -244,33 +239,27 @@ async def api_next_step_update(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "offer": job_data_service.get_offer_detail(link)})
 
 
-async def api_offers_check(request: Request) -> JSONResponse:
+def api_offers_check(body: dict) -> JSONResponse:
     """Sprawdza na portalu, czy oglądane oferty wciąż wiszą; zwraca te zdjęte."""
-    body = await _json_body(request)
-    links = body.get("links") if body else None
+    links = body.get("links")
     if not isinstance(links, list) or not all(isinstance(link, str) and link for link in links):
         return JSONResponse({"error": "Pole 'links' musi być listą linków"}, status_code=400)
     if len(links) > CHECK_LIMIT:
         return JSONResponse({"error": f"Najwyżej {CHECK_LIMIT} linków naraz"}, status_code=400)
-    gone = await asyncio.to_thread(sprawdz_oferty, links)
+    gone = sprawdz_oferty(links)
     if gone:
-        await asyncio.to_thread(job_data_service.oznacz_zdjete, gone)
+        job_data_service.oznacz_zdjete(gone)
     return JSONResponse({"gone": [link for link in links if link in gone]})
 
 
-async def api_applications(request: Request) -> JSONResponse:
+def api_applications(request: Request) -> JSONResponse:
     """Zwraca wysłane aplikacje z etapem lejka (wysłane, rozmowy, oferta pracy, zakończone)."""
     job_data_service.ensure_loaded()
     return JSONResponse(job_data_service.get_applications())
 
 
-async def api_tool_fetch_link(request: Request) -> JSONResponse:
+def api_tool_fetch_link(body: dict) -> JSONResponse:
     """Pobiera dane oferty ze wskazanego adresu URL za pomocą modułu link_fetcher."""
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
-
     url = (body.get("url") or "").strip()
     if not url:
         return JSONResponse({"error": "Podaj prawidłowy adres URL oferty"}, status_code=400)
@@ -283,11 +272,8 @@ async def api_tool_fetch_link(request: Request) -> JSONResponse:
         return JSONResponse({"error": f"Nie udało się odczytać oferty ze wskazanego adresu: {e}"}, status_code=500)
 
 
-async def api_tool_save_manual_job(request: Request) -> JSONResponse:
+def api_tool_save_manual_job(body: dict) -> JSONResponse:
     """Zapisuje ręcznie dodaną ofertę do bazy; ze `status` od razu zapisuje też decyzję."""
-    body = await _json_body(request)
-    if body is None:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
     status = body.get("status") or None
     if status is not None and status not in ("save", "apply"):
         return JSONResponse({"error": "Pole 'status' przyjmuje save albo apply"}, status_code=400)
@@ -304,7 +290,7 @@ async def api_tool_save_manual_job(request: Request) -> JSONResponse:
 
 # --- Pipeline & Narzędzia ---
 
-async def api_pipeline_state(request: Request) -> JSONResponse:
+def api_pipeline_state(request: Request) -> JSONResponse:
     """Zwraca aktualny stan menedżera procesu pipeline'u, etapy i logi."""
     mgr = PipelineProcessManager.get_instance()
     state = mgr.get_state()
@@ -312,17 +298,13 @@ async def api_pipeline_state(request: Request) -> JSONResponse:
     return JSONResponse(state)
 
 
-async def api_pipeline_prerequisites(request: Request) -> JSONResponse:
+def api_pipeline_prerequisites(request: Request) -> JSONResponse:
     """Sprawdza wymagania do uruchomienia pipeline'u (CV, klucze API, Playwright, Chromium)."""
     return JSONResponse(check_pipeline_prerequisites())
 
 
-async def api_pipeline_start(request: Request) -> JSONResponse:
+def api_pipeline_start(body: dict) -> JSONResponse:
     """Uruchamia pełny pipeline lub tryb skip_scraping."""
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
     mode = body.get("mode", "full")
     if mode not in ("full", "skip_scraping"):
         mode = "full"
@@ -336,7 +318,7 @@ async def api_pipeline_start(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "message": msg, "state": state})
 
 
-async def api_pipeline_stop(request: Request) -> JSONResponse:
+def api_pipeline_stop(request: Request) -> JSONResponse:
     """Kooperatywne zatrzymanie pipeline'u na granicy bieżącej paczki."""
     mgr = PipelineProcessManager.get_instance()
     ok, msg = mgr.stop_pipeline(force=False)
@@ -345,7 +327,7 @@ async def api_pipeline_stop(request: Request) -> JSONResponse:
     return JSONResponse({"ok": ok, "message": msg, "state": state})
 
 
-async def api_pipeline_run_summary(request: Request) -> JSONResponse:
+def api_pipeline_run_summary(request: Request) -> JSONResponse:
     """Liczby i najlepsze dopasowania bieżącego (albo ostatniego) wyszukiwania dla ekranu postępu."""
     state = PipelineProcessManager.get_instance().get_state()
     started = state.get("started_at")
@@ -374,11 +356,11 @@ async def api_pipeline_run_summary(request: Request) -> JSONResponse:
 
 # --- CV & API Keys ---
 
-async def api_cv_get(request: Request) -> JSONResponse:
+def api_cv_get(request: Request) -> JSONResponse:
     return JSONResponse(get_cv_info())
 
 
-async def api_cv_file(request: Request) -> Response:
+def api_cv_file(request: Request) -> Response:
     """Bieżące CV w PDF do podglądu w przeglądarce."""
     if not pdf_is_current():
         return JSONResponse({"error": "Brak pliku PDF z CV"}, status_code=404)
@@ -414,22 +396,20 @@ async def api_cv_upload(request: Request) -> JSONResponse:
     if not content_bytes:
         return JSONResponse({"error": "Przesłany plik jest pusty"}, status_code=400)
 
+    return await asyncio.to_thread(_store_uploaded_cv, filename, content_bytes)
+
+
+def _store_uploaded_cv(filename: str, content_bytes: bytes) -> JSONResponse:
     ok, msg = save_uploaded_cv(filename, content_bytes)
     if not ok:
         return JSONResponse({"error": msg}, status_code=400)
-
     return JSONResponse({"ok": True, "message": msg, "cv_info": get_cv_info()})
 
 
-async def api_cv_paste(request: Request) -> JSONResponse:
+def api_cv_paste(body: dict) -> JSONResponse:
     mgr = PipelineProcessManager.get_instance()
     if mgr.is_running():
         return JSONResponse({"error": "Nie można zmieniać CV w trakcie działania pipeline'u"}, status_code=400)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
 
     text = body.get("text", "")
     ok, msg = save_pasted_cv_text(text)
@@ -439,19 +419,14 @@ async def api_cv_paste(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "message": msg, "cv_info": get_cv_info()})
 
 
-async def api_env_keys_get(request: Request) -> JSONResponse:
+def api_env_keys_get(request: Request) -> JSONResponse:
     return JSONResponse({
         "fields": get_env_fields_status(),
         "api_info": get_api_keys_info(),
     })
 
 
-async def api_env_keys_save(request: Request) -> JSONResponse:
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
-
+def api_env_keys_save(body: dict) -> JSONResponse:
     keys = body.get("keys", {})
     if not isinstance(keys, dict):
         return JSONResponse({"error": "Pole 'keys' musi być obiektem JSON"}, status_code=400)
@@ -468,12 +443,7 @@ async def api_env_keys_save(request: Request) -> JSONResponse:
     })
 
 
-async def api_env_keys_llm(request: Request) -> JSONResponse:
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
-
+def api_env_keys_llm(body: dict) -> JSONResponse:
     models, base_url = body.get("models"), body.get("base_url")
     if not all(v is None or isinstance(v, str) for v in (body.get("key"), models, base_url)):
         return JSONResponse({"error": "Pola key, models i base_url muszą być tekstem"}, status_code=400)
@@ -491,7 +461,7 @@ async def api_env_keys_llm(request: Request) -> JSONResponse:
 
 # --- Kandydaci ---
 
-async def api_candidates(request: Request) -> JSONResponse:
+def api_candidates(request: Request) -> JSONResponse:
     return JSONResponse(candidates.listing())
 
 
@@ -503,35 +473,31 @@ def _candidate_change_blocked() -> Optional[JSONResponse]:
     return None
 
 
-async def _candidate_action(request: Request, action, blocking: bool) -> JSONResponse:
-    body = await _json_body(request)
-    if body is None:
-        return JSONResponse({"error": "Niepoprawny format JSON"}, status_code=400)
+def _candidate_action(action, blocking: bool) -> JSONResponse:
     if blocking:
         blocked = _candidate_change_blocked()
         if blocked:
             return blocked
     try:
-        return JSONResponse(action(body))
+        return JSONResponse(action())
     except candidates.CandidateError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
 
-async def api_candidate_create(request: Request) -> JSONResponse:
-    return await _candidate_action(request, lambda b: candidates.create(b.get("name")), True)
+def api_candidate_create(body: dict) -> JSONResponse:
+    return _candidate_action(lambda: candidates.create(body.get("name")), True)
 
 
-async def api_candidate_activate(request: Request) -> JSONResponse:
-    return await _candidate_action(request, lambda b: candidates.activate(str(b.get("id") or "")), True)
+def api_candidate_activate(body: dict) -> JSONResponse:
+    return _candidate_action(lambda: candidates.activate(str(body.get("id") or "")), True)
 
 
-async def api_candidate_rename(request: Request) -> JSONResponse:
-    return await _candidate_action(
-        request, lambda b: candidates.rename(str(b.get("id") or ""), b.get("name")), False)
+def api_candidate_rename(body: dict) -> JSONResponse:
+    return _candidate_action(lambda: candidates.rename(str(body.get("id") or ""), body.get("name")), False)
 
 
-async def api_candidate_delete(request: Request) -> JSONResponse:
-    return await _candidate_action(request, lambda b: candidates.delete(str(b.get("id") or "")), True)
+def api_candidate_delete(body: dict) -> JSONResponse:
+    return _candidate_action(lambda: candidates.delete(str(body.get("id") or "")), True)
 
 
 # --- Routing i obsługa statycznego frontendu ---
@@ -553,31 +519,31 @@ routes = [
     Route("/api/stats", api_stats, methods=["GET"]),
     Route("/api/offers", api_offers, methods=["GET"]),
     Route("/api/offers/detail", api_offer_detail, methods=["GET"]),
-    Route("/api/offers/decision", api_decision_update, methods=["POST"]),
-    Route("/api/offers/restore", api_decision_restore, methods=["POST"]),
-    Route("/api/offers/note", api_note_update, methods=["POST"]),
-    Route("/api/offers/next-step", api_next_step_update, methods=["POST"]),
-    Route("/api/offers/check", api_offers_check, methods=["POST"]),
+    Route("/api/offers/decision", json_endpoint(api_decision_update), methods=["POST"]),
+    Route("/api/offers/restore", json_endpoint(api_decision_restore), methods=["POST"]),
+    Route("/api/offers/note", json_endpoint(api_note_update), methods=["POST"]),
+    Route("/api/offers/next-step", json_endpoint(api_next_step_update), methods=["POST"]),
+    Route("/api/offers/check", json_endpoint(api_offers_check), methods=["POST"]),
     Route("/api/applications", api_applications, methods=["GET"]),
-    Route("/api/tools/fetch-link", api_tool_fetch_link, methods=["POST"]),
-    Route("/api/tools/save-manual-job", api_tool_save_manual_job, methods=["POST"]),
+    Route("/api/tools/fetch-link", json_endpoint(api_tool_fetch_link), methods=["POST"]),
+    Route("/api/tools/save-manual-job", json_endpoint(api_tool_save_manual_job), methods=["POST"]),
     Route("/api/pipeline/state", api_pipeline_state, methods=["GET"]),
     Route("/api/pipeline/prerequisites", api_pipeline_prerequisites, methods=["GET"]),
-    Route("/api/pipeline/start", api_pipeline_start, methods=["POST"]),
+    Route("/api/pipeline/start", json_endpoint(api_pipeline_start, required=False), methods=["POST"]),
     Route("/api/pipeline/stop", api_pipeline_stop, methods=["POST"]),
     Route("/api/pipeline/run-summary", api_pipeline_run_summary, methods=["GET"]),
     Route("/api/cv", api_cv_get, methods=["GET"]),
     Route("/api/cv/file", api_cv_file, methods=["GET"]),
     Route("/api/cv/upload", api_cv_upload, methods=["POST"]),
-    Route("/api/cv/paste", api_cv_paste, methods=["POST"]),
+    Route("/api/cv/paste", json_endpoint(api_cv_paste), methods=["POST"]),
     Route("/api/env-keys", api_env_keys_get, methods=["GET"]),
-    Route("/api/env-keys", api_env_keys_save, methods=["POST"]),
-    Route("/api/env-keys/llm", api_env_keys_llm, methods=["POST"]),
+    Route("/api/env-keys", json_endpoint(api_env_keys_save), methods=["POST"]),
+    Route("/api/env-keys/llm", json_endpoint(api_env_keys_llm), methods=["POST"]),
     Route("/api/candidates", api_candidates, methods=["GET"]),
-    Route("/api/candidates", api_candidate_create, methods=["POST"]),
-    Route("/api/candidates/activate", api_candidate_activate, methods=["POST"]),
-    Route("/api/candidates/rename", api_candidate_rename, methods=["POST"]),
-    Route("/api/candidates/delete", api_candidate_delete, methods=["POST"]),
+    Route("/api/candidates", json_endpoint(api_candidate_create), methods=["POST"]),
+    Route("/api/candidates/activate", json_endpoint(api_candidate_activate), methods=["POST"]),
+    Route("/api/candidates/rename", json_endpoint(api_candidate_rename), methods=["POST"]),
+    Route("/api/candidates/delete", json_endpoint(api_candidate_delete), methods=["POST"]),
     *cv_tailor_routes,
 ]
 

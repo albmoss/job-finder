@@ -22,6 +22,7 @@ from typing import List
 import requests
 
 from scrapers.base_scraper import BaseScraper
+from utils import stop
 from utils.candidate_scope import scope_city, scope_levels
 from utils.portal_categories import pick_categories
 from utils.data_models import Job
@@ -229,6 +230,9 @@ class CandidateAPIScraper(BaseScraper):
             seen_cursors = set()
             query_fetched = 0
             while True:
+                if stop.requested():
+                    complete = False
+                    break
                 params = base_params + [("from", cursor)]
                 try:
                     resp = session.get(self.api_url, params=params, headers=self._headers(), timeout=30)
@@ -509,6 +513,8 @@ class CandidateAPIScraper(BaseScraper):
 
             def worker(off):
                 slug = off["slug"]
+                if stop.requested():
+                    return slug, None
                 d = self._fetch_detail(session, slug)
                 time.sleep(0.35 + random.random() * 0.25)
                 return slug, d

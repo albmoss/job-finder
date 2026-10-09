@@ -23,6 +23,7 @@ from typing import List, Optional
 
 import requests
 
+from utils import stop, telemetry
 from utils.data_models import Job
 from utils.links import canonical_link, logo_url
 from utils.text_cleaner import strip_html
@@ -131,6 +132,7 @@ class LdJsonPortalScraper:
         self._interval = self.MIN_REQUEST_INTERVAL
         self._clean_streak = 0
         self.liveness_scope = None
+        self.listing_complete = False
 
     # --- interfejs do nadpisania ---------------------------------------------
 
@@ -179,9 +181,11 @@ class LdJsonPortalScraper:
             self._interval = min(3.0, max(self.MIN_REQUEST_INTERVAL, self._interval * 1.6))
             self._cooldown_until = max(self._cooldown_until, time.monotonic() + wait)
             logger.warning(f"{self.SOURCE_NAME}: HTTP 429 - cooldown {wait:.0f}s, interval {self._interval:.2f}s")
+        telemetry.emit("throttled", name=self.SOURCE_NAME)
 
-    def _fetch(self, url: str, attempts: int = 3) -> str:
-        """Pobierz stronę. Respektuje Retry-After i wspólny cooldown po 429."""
+    def _fetch(self, url: str, attempts: int = 3) -> Optional[str]:
+        """Pobierz stronę. Respektuje Retry-After i wspólny cooldown po 429.
+        "" = 404 (koniec paginacji), None = strony nie udało się pobrać."""
         for attempt in range(1, attempts + 1):
             self._throttle()
             try:
@@ -207,7 +211,7 @@ class LdJsonPortalScraper:
                 )
                 if attempt < attempts:
                     time.sleep((2 ** attempt) + random.random())
-        return ""
+        return None
 
     # --- parsowanie ----------------------------------------------------------
 
@@ -381,14 +385,22 @@ class LdJsonPortalScraper:
     # --- przebieg ------------------------------------------------------------
 
     def _collect_links(self) -> List[str]:
-        """Przejdź listingi i zbierz kanoniczne linki ofert."""
+        """Przejdź listingi i zbierz kanoniczne linki ofert.
+        `listing_complete` tylko wtedy, gdy paginacja doszła do końca bez błędu i limitu."""
         seen, ordered = set(), []
         empty_streak = 0
+        self.listing_complete = False
 
         for page in range(1, self.max_pages + 1):
+            if stop.requested():
+                break
             html = self._fetch(self.build_listing_url(page))
+            if html is None:
+                logger.warning(f"{self.SOURCE_NAME}: page {page} could not be fetched - listing incomplete")
+                break
             if not html:
                 logger.info(f"{self.SOURCE_NAME}: page {page} empty - end of pagination")
+                self.listing_complete = True
                 break
 
             # Ta sama oferta pojawia się na stronie wielokrotnie (logo, tytuł, "aplikuj"):
@@ -414,6 +426,7 @@ class LdJsonPortalScraper:
                 empty_streak += 1
                 if empty_streak >= 2:
                     logger.info(f"{self.SOURCE_NAME}: no new links - stopping pagination")
+                    self.listing_complete = True
                     break
             else:
                 empty_streak = 0
@@ -425,6 +438,8 @@ class LdJsonPortalScraper:
         return ordered[: self.max_offers]
 
     def _fetch_detail(self, link: str) -> Optional[tuple]:
+        if stop.requested():
+            return None
         html = self._fetch(link, attempts=2)
         if not html:
             return None
@@ -457,7 +472,7 @@ class LdJsonPortalScraper:
             logger.warning(f"{self.SOURCE_NAME}: no offer links found - "
                            f"the board may have changed its listing structure")
             return []
-        if self.REPORTS_LIVENESS:
+        if self.REPORTS_LIVENESS and self.listing_complete:
             self.liveness_scope = f"{self.city_slug}|{self.max_pages}|{self.max_offers}"
 
         # Najpierw odsiew po bazie, dopiero potem po tytule: `seen_again_links`
@@ -494,6 +509,7 @@ class LdJsonPortalScraper:
                         f"{self.SOURCE_NAME}: {done}/{len(links)} descriptions - "
                         f"{rate * 60:.0f}/min, ~{(len(links) - done) / rate / 60:.0f} min left"
                     )
+                    telemetry.emit("source_details", name=self.SOURCE_NAME, done=done, total=len(links))
                 if result is None:
                     no_ldjson += 1
                     continue
@@ -508,6 +524,7 @@ class LdJsonPortalScraper:
             f"{self.SOURCE_NAME}: fetched {len(links) - no_ldjson}/{len(links)} descriptions, "
             f"dropped {out_of_scope} (out of scope) -> {len(jobs)} offers"
         )
+        telemetry.emit("source_details", name=self.SOURCE_NAME, done=len(links), total=len(links))
         if links and (len(links) - no_ldjson) / len(links) < 0.5:
             logger.warning(
                 f"{self.SOURCE_NAME}: only {len(links) - no_ldjson}/{len(links)} pages carried "

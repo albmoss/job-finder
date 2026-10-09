@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { countFormat } from './format';
 import { NEW_ONES, OFFERS, SKILLS, plural } from './plural';
-import type { PipelineState, ScoringTelemetry, SourceTelemetry } from './types';
+import type { PipelineEvent, PipelineState, ScoringTelemetry, SourceTelemetry } from './types';
 
 export type GroupState = 'pending' | 'running' | 'done' | 'failed' | 'stopped';
 export type Phase = 'profile' | 'scraping' | 'matching' | 'done' | 'failed' | 'stopped' | 'idle';
@@ -159,74 +159,80 @@ export interface ActivityItem {
   warn: boolean;
 }
 
-const STAMP = /^\d{4}-\d{2}-\d{2} (\d{2}:\d{2}:\d{2}),\d+ - /;
-const LEVEL = /^.*?-\s*(?:INFO|WARNING|ERROR|DEBUG|CRITICAL)\s*-\s*/;
-
 const PHASE_TEXT: Record<string, string> = {
-  '0': 'Usuwamy oferty, których portale nie pokazują od 14 dni',
-  '0.5': 'Odczytujemy profil z CV',
-  '1': 'Zaczynamy pobieranie ofert z portali',
-  '1.5': 'Ujednolicamy linki ofert',
-  '2': 'Usuwamy duplikaty',
-  '2.5': 'Skracamy opisy ofert',
-  '3': 'Zaczynamy porównywanie ofert z CV',
+  phase0: 'Usuwamy oferty, których portale nie pokazują od 14 dni',
+  phase0_5: 'Odczytujemy profil z CV',
+  phase1: 'Zaczynamy pobieranie ofert z portali',
+  phase1_5: 'Ujednolicamy linki ofert',
+  phase2: 'Usuwamy duplikaty',
+  phase2_5: 'Skracamy opisy ofert',
+  phase3: 'Zaczynamy porównywanie ofert z CV',
+};
+
+const RESULT_TEXT: Record<string, { text: string; warn?: boolean }> = {
+  complete: { text: 'Wyszukiwanie zakończone' },
+  stopped: { text: 'Wyszukiwanie zatrzymane' },
+  incomplete: { text: 'Wyszukiwanie przerwane', warn: true },
 };
 
 const n = (value: number) => countFormat.format(value);
 
-function describeLine(line: string): { text: string; warn?: boolean } | null {
-  let m = /── PHASE ([\d.]+):/.exec(line);
-  if (m) return PHASE_TEXT[m[1]] ? { text: PHASE_TEXT[m[1]] } : null;
-  m = /Running\s+(.+?)\s+scraper\.\.\./.exec(line);
-  if (m) return { text: `${m[1]}: pobieramy listę ofert` };
-  m = /[✓√]\s*(.+?):\s*Successfully scraped\s+(\d+)\s+jobs/.exec(line);
-  if (m) {
-    const found = Number(m[2]);
-    return { text: `${m[1]}: ${n(found)} ${plural(found, OFFERS)} na liście` };
+function describeEvent(ev: PipelineEvent): { text: string; warn?: boolean } | null {
+  const name = ev.name ?? '';
+  switch (ev.event) {
+    case 'stage': {
+      const text = ev.state === 'running' ? PHASE_TEXT[ev.id ?? ''] : undefined;
+      return text ? { text } : null;
+    }
+    case 'pipeline':
+      return RESULT_TEXT[ev.result ?? ''] ?? null;
+    case 'source':
+      if (ev.state === 'running') return { text: `${name}: pobieramy listę ofert` };
+      if (ev.state === 'done') {
+        const found = ev.found ?? 0;
+        return { text: `${name}: ${n(found)} ${plural(found, OFFERS)} na liście` };
+      }
+      if (ev.state === 'failed') return { text: `${name}: nie udało się pobrać ofert`, warn: true };
+      if (ev.state === 'stopped' && ev.found != null) return { text: `${name}: zatrzymane, zapisujemy pobrane` };
+      return null;
+    case 'source_saved': {
+      const added = ev.added ?? 0;
+      return { text: `${name}: ${n(added)} ${plural(added, NEW_ONES)} ${plural(added, OFFERS)} w bazie` };
+    }
+    case 'throttled':
+      return { text: `${name} ogranicza ruch, zwalniamy` };
+    case 'profile': {
+      const skills = ev.skills ?? 0;
+      return { text: `Profil z CV: ${ev.seniority ?? '?'}, ${ev.city ?? '?'}, ${n(skills)} ${plural(skills, SKILLS)}` };
+    }
+    case 'prefilter': {
+      const toScore = ev.to_score ?? 0;
+      return { text: `Po przesiewie do oceny: ${n(toScore)} ${plural(toScore, OFFERS)}` };
+    }
+    case 'matching_done': {
+      const scored = ev.scored_now ?? 0;
+      return { text: `Ocenione: ${n(scored)} ${plural(scored, OFFERS)}` };
+    }
+    default:
+      return null;
   }
-  m = /[✗]\s*(.+?):\s*(?:Failed|Thread crashed)\b/i.exec(line);
-  if (m) return { text: `${m[1]}: nie udało się pobrać ofert`, warn: true };
-  const clean = line.replace(LEVEL, '').trim();
-  m = /^(.+?): saved (\d+) new offers/.exec(clean);
-  if (m) {
-    const added = Number(m[2]);
-    return { text: `${m[1]}: ${n(added)} ${plural(added, NEW_ONES)} ${plural(added, OFFERS)} w bazie` };
-  }
-  m = /^(.+?): HTTP 429\b/.exec(clean);
-  if (m) return { text: `${m[1]} ogranicza ruch, zwalniamy` };
-  m = /^Profile: ([^|]+?) \| ([^|]+?) \| (\d+) skills/.exec(clean);
-  if (m) {
-    const skills = Number(m[3]);
-    return { text: `Profil z CV: ${m[1]}, ${m[2]}, ${n(skills)} ${plural(skills, SKILLS)}` };
-  }
-  m = /^Prefilter: \d+ rejected.*\| to score: (\d+)/.exec(clean);
-  if (m) {
-    const toScore = Number(m[1]);
-    return { text: `Po przesiewie do oceny: ${n(toScore)} ${plural(toScore, OFFERS)}` };
-  }
-  m = /^Matching done: (\d+) scored now/.exec(clean);
-  if (m) {
-    const scored = Number(m[1]);
-    return { text: `Ocenione: ${n(scored)} ${plural(scored, OFFERS)}` };
-  }
-  if (clean.includes('PIPELINE COMPLETE')) return { text: 'Wyszukiwanie zakończone' };
-  if (clean.includes('PIPELINE STOPPED')) return { text: 'Wyszukiwanie zatrzymane' };
-  if (clean.includes('PIPELINE INCOMPLETE')) return { text: 'Wyszukiwanie przerwane', warn: true };
-  return null;
 }
 
-export function activityFeed(logs: string[], limit: number): ActivityItem[] {
+const clock = (at: number) => {
+  const d = new Date(at * 1000);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
+
+export function activityFeed(events: PipelineEvent[], limit: number): ActivityItem[] {
   const items: ActivityItem[] = [];
   const seen = new Map<string, number>();
-  let time: string | null = null;
-  for (const line of logs) {
-    const stamp = STAMP.exec(line);
-    if (stamp) time = stamp[1];
-    const described = describeLine(line);
+  for (const ev of events) {
+    const described = describeEvent(ev);
     if (!described) continue;
     const previous = items[items.length - 1];
     if (previous && previous.text === described.text) continue;
-    const base = `${time ?? ''}|${described.text}`;
+    const time = clock(ev.at);
+    const base = `${time}|${described.text}`;
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
     items.push({ key: `${base}|${count}`, time, text: described.text, warn: Boolean(described.warn) });

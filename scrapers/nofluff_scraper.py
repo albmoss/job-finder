@@ -8,12 +8,15 @@ It may change without notice. If it breaks, check DevTools for updated endpoints
 
 import html
 import logging
+import threading
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from datetime import datetime
 
 from scrapers.base_scraper import BaseScraper
+from utils import stop, telemetry
 from utils.candidate_scope import scope_city, scope_levels
 from utils.portal_categories import pick_categories
 from utils.data_models import Job
@@ -96,6 +99,9 @@ NOFLUFF_CATEGORIES = {
 class NoFluffScraper(BaseScraper):
     """Scraper NoFluffJobs na wewnętrznym API - bez przeglądarki."""
     DEFAULT_MAX_DETAILS = 1500
+    DETAIL_WORKERS = 3
+    DETAIL_INTERVAL = 0.25
+    MAX_DETAIL_INTERVAL = 2.0
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -104,6 +110,26 @@ class NoFluffScraper(BaseScraper):
         self.max_details = portal_cfg.get("max_details", self.DEFAULT_MAX_DETAILS)
         self.seen_again_links = []
         self.liveness_scope = None
+        self._gate = threading.Lock()
+        self._next_request_at = 0.0
+        self._interval = self.DETAIL_INTERVAL
+        self.throttled = 0
+
+    def _wait_turn(self):
+        with self._gate:
+            now = time.monotonic()
+            start = max(now, self._next_request_at)
+            self._next_request_at = start + self._interval
+        if start > now:
+            time.sleep(start - now)
+
+    def _note_throttled(self, wait: float):
+        with self._gate:
+            self.throttled += 1
+            self._interval = min(self.MAX_DETAIL_INTERVAL, self._interval * 2)
+            self._next_request_at = max(self._next_request_at, time.monotonic() + wait)
+        logger.warning(f"NoFluffJobs: HTTP 429 - pause {wait:.0f}s, interval {self._interval:.2f}s")
+        telemetry.emit("throttled", name=self.get_source_name())
 
 
     def get_source_name(self) -> str:
@@ -146,6 +172,9 @@ class NoFluffScraper(BaseScraper):
         complete = True
 
         while True:
+            if stop.requested():
+                complete = False
+                break
             try:
                 resp = session.post(f"{SEARCH_URL}&page={page}", json={"criteriaSearch": criteria},
                                     headers=HEADERS, timeout=30)
@@ -275,14 +304,26 @@ class NoFluffScraper(BaseScraper):
 
     def _fetch_detail(self, session: requests.Session, slug: str) -> dict:
         url = f"{DETAIL_URL}/{slug}"
-        try:
-            resp = session.get(url, headers=HEADERS, timeout=20)
+        for _ in range(3):
+            if stop.requested():
+                return {}
+            self._wait_turn()
+            try:
+                resp = session.get(url, headers=HEADERS, timeout=20)
+            except requests.RequestException as e:
+                logger.debug(f"NFJ API: Detail fetch failed for {slug}: {e}")
+                return {}
+            if resp.status_code == 429:
+                try:
+                    wait = float(resp.headers.get("Retry-After") or 5)
+                except ValueError:
+                    wait = 5.0
+                self._note_throttled(min(wait, 60.0))
+                continue
             if resp.status_code == 200:
                 return resp.json()
-            else:
-                logger.debug(f"NFJ API: Detail for {slug} returned {resp.status_code}")
-        except requests.RequestException as e:
-            logger.debug(f"NFJ API: Detail fetch failed for {slug}: {e}")
+            logger.debug(f"NFJ API: Detail for {slug} returned {resp.status_code}")
+            return {}
         return {}
 
     def _parse_posting(self, posting: dict, detail: dict) -> Job:
@@ -453,27 +494,30 @@ class NoFluffScraper(BaseScraper):
                     f"NoFluffJobs: {len(postings) - max_details} offers over the {max_details} "
                     f"detail limit saved without a description - the next run fetches them"
                 )
+            limit = min(len(postings), max_details)
+            slugs = [posting.get("url", posting.get("slug", posting.get("id", ""))) for posting in postings]
+            details = [{}] * len(postings)
             fetched = 0
-            for i, posting in enumerate(postings):
-                slug = posting.get("url", posting.get("slug", posting.get("id", "")))
+            with ThreadPoolExecutor(max_workers=self.DETAIL_WORKERS) as pool:
+                results = pool.map(lambda slug: self._fetch_detail(session, slug) if slug else {}, slugs[:limit])
+                for i, detail in enumerate(results):
+                    details[i] = detail
+                    fetched += bool(detail)
+                    if (i + 1) % 100 == 0:
+                        logger.info(f"NoFluffJobs: {i + 1}/{limit} descriptions")
+                        telemetry.emit("source_details", name=self.get_source_name(), done=i + 1, total=limit)
+
+            for posting, slug, detail in zip(postings, slugs, details):
                 if not slug:
                     continue
-
-                detail = {}
-                if i < max_details:
-                    detail = self._fetch_detail(session, slug)
-                    fetched += bool(detail)
-                    time.sleep(0.5)
-                    if (i + 1) % 100 == 0:
-                        logger.info(f"NoFluffJobs: {i + 1}/{min(len(postings), max_details)} descriptions")
-
                 try:
-                    job = self._parse_posting(posting, detail)
-                    jobs.append(job)
+                    jobs.append(self._parse_posting(posting, detail))
                 except Exception as e:
                     logger.warning(f"NFJ API: Failed to parse posting {slug}: {e}")
 
-            logger.info(f"NoFluffJobs: fetched {fetched}/{min(len(postings), max_details)} descriptions")
+            logger.info(f"NoFluffJobs: fetched {fetched}/{limit} descriptions"
+                        + (f" | limit portalu: {self.throttled}x" if self.throttled else ""))
+            telemetry.emit("source_details", name=self.get_source_name(), done=limit, total=limit)
         except Exception as e:
             logger.error(f"NFJ API: Scraping failed: {e}")
         finally:

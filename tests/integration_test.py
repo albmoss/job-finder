@@ -1015,6 +1015,108 @@ def test_pipeline_final_status():
           main_scraper._scrape_failed({"pominiety": pominiety}, []) is False)
 
 
+def test_stop_during_scraping():
+    print("\n[14b] Stop during scraping saves collected offers and leaves the source unfinished")
+    from unittest.mock import patch
+    import main_scraper
+    from utils import stop
+
+    temp = Path(tempfile.mkdtemp(prefix="test_stop_scraping_"))
+    flag = temp / "pipeline_stop_requested.flag"
+    ran, saved, status_calls = [], [], []
+
+    def fake_scraper(name, stops=False):
+        class Fake:
+            def __init__(self, config):
+                self.seen_again_links = []
+                self.liveness_scope = "scope"
+
+            def get_source_name(self):
+                return name
+
+            def run(self):
+                ran.append(name)
+                if stops:
+                    flag.touch()
+                return [object()] * 6
+        return Fake
+
+    class Status:
+        def is_scraped_today(self, name): return False
+        def get_history(self, name): return []
+        def record_yield(self, *args): status_calls.append(("yield",) + args)
+        def mark_as_completed(self, *args): status_calls.append(("completed",) + args)
+        def record_liveness_scope(self, *args): status_calls.append(("liveness",) + args)
+
+    class Db:
+        def __init__(self, path): pass
+        def record_scrape(self, jobs, seen): saved.append(len(jobs)); return len(jobs), 0
+        def load_jobs(self): return []
+
+    names = ["PracujOptimizedScraper", "OLXScraper", "RocketJobsScraper", "LinkedInScraper", "NoFluffScraper",
+             "JustJoinScraper", "SolidJobsAPIScraper", "AdzunaAPIScraper", "JoobleAPIScraper",
+             "CareerjetAPIScraper", "PracaPlScraper", "AplikujScraper", "GoWorkScraper", "ATSFeedsScraper",
+             "IndeedScraper"]
+    fakes = {cls: fake_scraper(f"Src {cls}") for cls in names}
+    fakes["PracujOptimizedScraper"] = fake_scraper("Alpha", stops=True)
+    fakes["OLXScraper"] = fake_scraper("Omega")
+    try:
+        with patch.multiple(main_scraper, ScraperStatusManager=Status, JobDatabase=Db, **fakes), \
+             patch.object(stop, "STOP_FLAG_FILE", flag), redirect_stdout(io.StringIO()):
+            jobs = main_scraper.run_all_scrapers(only=["alpha", "omega"])
+    finally:
+        shutil.rmtree(temp, ignore_errors=True)
+    check("stopped scraping returns what it collected instead of failing", len(jobs) == 6, len(jobs))
+    check("sources not started before the stop never run", ran == ["Alpha"], ran)
+    check("offers collected before the stop are saved", saved == [6], saved)
+    check("a stopped source is not marked as scraped today and reports no full listing",
+          status_calls == [], status_calls)
+
+
+def test_listing_completeness():
+    print("\n[14c] ld+json listing counts as full only when pagination ends on its own")
+    from scrapers.gowork_scraper import GoWorkScraper
+
+    def collect(pages, max_pages=5, max_offers=400):
+        scraper = object.__new__(GoWorkScraper)
+        scraper.max_pages, scraper.max_offers = max_pages, max_offers
+        scraper.build_listing_url = lambda page: page
+        scraper.extract_offer_links = lambda html: html.split()
+        scraper._fetch = lambda page: pages[page - 1] if page <= len(pages) else ""
+        links = scraper._collect_links()
+        return scraper.listing_complete, len(links)
+
+    page = lambda *ids: " ".join(f"https://www.gowork.pl/oferta/{i}" for i in ids)
+    check("pagination ending on an empty page is a full listing", collect([page(1, 2), page(3)]) == (True, 3))
+    check("a portal repeating its pages is a full listing", collect([page(1), page(1), page(1)]) == (True, 1))
+    check("a page that failed to load is not a full listing", collect([page(1, 2), None, page(3)]) == (False, 2))
+    check("hitting the offer limit is not a full listing", collect([page(1, 2), page(3, 4)], max_offers=3) == (False, 3))
+    check("hitting the page limit is not a full listing",
+          collect([page(1), page(2), page(3)], max_pages=2) == (False, 2))
+
+
+def test_category_fallback():
+    print("\n[14d] Category pick falls back to the previous choice when Jev fails")
+    from unittest.mock import patch
+    from matching.jev import JevError
+    from utils import candidate_scope, cv_profile, portal_categories
+
+    def fail(*args, **kwargs):
+        raise JevError("HTTP 500")
+
+    catalog = {"it": "IT", "office": "Biuro", "new": "Nowa"}
+    path = candidates.path(candidates.CATEGORY_SCOPE)
+    with patch.object(candidate_scope, "load_profile", return_value={"seniority": "junior", "skills": ["SQL"]}), \
+         patch.object(cv_profile, "cv_text", return_value="CV"), \
+         patch.object(portal_categories, "_ask_jev", fail):
+        path.unlink(missing_ok=True)
+        check("no previous choice: search without a category filter",
+              portal_categories.pick_categories("demo", catalog) is None)
+        path.write_text(json.dumps({"demo": {"profile_fp": "old", "catalog_fp": "old",
+                                             "picked": ["it", "gone"]}}), encoding="utf-8")
+        check("previous choice is reused, minus categories the portal dropped",
+              portal_categories.pick_categories("demo", catalog) == ["it"])
+    path.unlink(missing_ok=True)
 
 
 def test_windows_process_safety():
@@ -1034,12 +1136,13 @@ def test_windows_process_safety():
 def test_pipeline_stop_and_resume_lifecycle():
     print("\n[18] Comprehensive stop-resume lifecycle and edge case regressions")
     import run_final_pipeline as pipeline
-    import matching.run as matching_run
     import pipeline_manager as sapp
+    from utils import stop
     from pipeline_manager import PipelineProcessManager, load_json_safe
     import tempfile, shutil, time, sys, io
     from unittest.mock import patch
     from contextlib import redirect_stdout
+    import matching.run
 
     old_cwd = os.getcwd()
     temp_dir = tempfile.mkdtemp(prefix="test_lifecycle_")
@@ -1052,11 +1155,9 @@ def test_pipeline_stop_and_resume_lifecycle():
 
     patches = [
         patch.object(sapp, "STATE_LOCK_FILE", t_state_lock),
-        patch.object(sapp, "STOP_FLAG_FILE", t_stop_flag),
         patch.object(sapp, "CHECKPOINT_FILE", t_checkpoint),
-        patch.object(pipeline, "STOP_FLAG_FILE", t_stop_flag),
+        patch.object(stop, "STOP_FLAG_FILE", t_stop_flag),
         patch.object(pipeline, "CHECKPOINT_FILE", t_checkpoint),
-        patch.object(matching_run, "STOP_FLAG_FILE", t_stop_flag),
         patch("utils.cv_profile.ensure_profile", return_value={"seniority": "mid", "city": "Warszawa", "skills": ["python"]}),
     ]
 
@@ -1384,7 +1485,7 @@ def test_pipeline_skipped_stage_progress():
     temp_dir = Path(tempfile.mkdtemp(prefix="test_pipeline_progress_"))
     with patch.object(pipeline_manager, "STATE_LOCK_FILE", temp_dir / "pipeline_run_state.json"), \
          patch.object(pipeline_manager, "CHECKPOINT_FILE", temp_dir / "pipeline_checkpoint.json"), \
-         patch.object(pipeline_manager, "STOP_FLAG_FILE", temp_dir / "pipeline_stop_requested.flag"):
+         patch("utils.stop.STOP_FLAG_FILE", temp_dir / "pipeline_stop_requested.flag"):
         _check_skipped_stage_progress(PipelineProcessManager)
     import shutil
     shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1445,84 +1546,74 @@ def _check_skipped_stage_progress(PipelineProcessManager):
     check("stopped pipeline with remaining stages allows resume", state_stopped["can_resume"] is True)
 
 
-def test_pipeline_stage_stats_and_eta():
-    print("\n[23] Stage numbers and scoring pace parsed from the run log")
+def test_pipeline_events():
+    print("\n[23] Stage track and run numbers from utils.telemetry events")
+    import io
+    from contextlib import redirect_stdout
     from pipeline_manager import PipelineProcessManager
+    from utils import telemetry
+
+    out = io.StringIO()
+    with redirect_stdout(out):
+        print("2026-09-23 10:02:12,123 - Pipeline - INFO - ── PHASE 0: Drop offers older than 14 days")
+        telemetry.emit("stage", id="phase0", state="running")
+        telemetry.emit("stage_stats", id="phase0", removed=37)
+        telemetry.emit("stage", id="phase0", state="done")
+        telemetry.emit("stage", id="phase0_5", state="running")
+    lines = out.getvalue().splitlines()
+    check("a human log line is not an event", telemetry.parse(lines[0]) is None)
 
     mgr = PipelineProcessManager()
-    lines = [
-        "   REMOVED (stale):  37",
-        "  jobs_database.json: 1250 -> 1240 (scalono 10)",
-        "2026-09-23 10:02:12,123 - deduplicate_db - INFO - jobs_database.json: 1240 -> 1192 (removed 48)",
-        "2026-09-23 10:02:13,000 - clean_db - INFO -    Before: 1,000,000 chars",
-        "2026-09-23 10:02:13,000 - clean_db - INFO -    After:  1,000,000 chars",
-        "2026-09-23 10:02:14,000 - clean_db - INFO -    Before: 2,000,000 chars",
-        "2026-09-23 10:02:14,000 - clean_db - INFO -    After:  1,070,000 chars",
-    ]
-    for line in lines:
-        mgr._parse_telemetry(line)
-    stages = mgr._telemetry_snapshot()["stages"]
-    check("purge: stale offers removed from the jobs database", stages.get("phase0") == {"removed": 37})
-    check("normalisation: links and merged count",
-          stages.get("phase1_5") == {"links": 1240, "merged": 10}, stages.get("phase1_5"))
-    check("dedup: jobs database count, purge line ignored",
-          stages.get("phase2") == {"removed": 48}, stages.get("phase2"))
-    check("token diet: characters summed over every Before/After pair",
-          stages.get("phase2_5") == {"chars_before": 3_000_000, "chars_after": 2_070_000}, stages.get("phase2_5"))
+    mgr._init_stages("full")
+    for line in lines[1:]:
+        mgr._apply_event(telemetry.parse(line))
+    by_id = {s["id"]: s for s in mgr._stages}
+    check("stage 00 keeps running from the purge into the CV profile",
+          by_id["phase0"]["status"] == "running" and mgr._active_stage_idx == 0, by_id["phase0"])
+    check("stage numbers land on their stage", mgr._telemetry_snapshot()["stages"].get("phase0") == {"removed": 37})
 
-    mgr._parse_telemetry("2026-09-23 10:02:15,000 - deduplicate_db - INFO - jobs_database.json: 1192 ofert, brak duplikatow - plik bez zmian")
-    check("dedup without duplicates reports zero", mgr._telemetry_snapshot()["stages"]["phase2"] == {"removed": 0})
+    for ev in [{"event": "stage", "id": "phase0_5", "state": "done"},
+               {"event": "stage", "id": "phase1", "state": "cached"},
+               {"event": "stage", "id": "phase1_5", "state": "running"},
+               {"event": "stage", "id": "phase1_5", "state": "failed"}]:
+        mgr._apply_event(ev)
+    check("stage 00 ends with the CV profile", by_id["phase0"]["status"] == "done")
+    check("a stage done in an earlier run is done without a start time",
+          by_id["phase1"]["status"] == "done" and by_id["phase1"]["started_at"] is None, by_id["phase1"])
+    check("a failed stage is failed and active",
+          by_id["phase1_5"]["status"] == "failed" and mgr._active_stage_idx == 2, by_id["phase1_5"])
 
-    mgr._parse_telemetry("Prefilter: 12 rejected {'miasto': 10, 'poziom': 2} | to score: 38")
-    check("scoring: prefilter rejected, reasons and to_score parsed",
-          mgr._telemetry_snapshot()["stages"]["phase3"]
-          == {"prefilter_rejected": 12, "prefilter_reasons": {"miasto": 10, "poziom": 2}, "to_score": 38})
-    check("scoring: prefilter records to_score and total",
-          mgr._telemetry["scoring"]["to_score"] == 38 and mgr._telemetry["scoring"]["prefilter_rejected"] == 12)
-
-    mgr._parse_telemetry("   Scored 10/38 (5.0/s)")
-    check("scoring: progress line sets rate, scored and report time",
-          mgr._telemetry["scoring"]["last_done_at"] is not None
-          and mgr._telemetry["scoring"]["rate"] == 5.0 and mgr._telemetry["scoring"]["scored"] == 10)
-
-    mgr._parse_telemetry("   Scored 25/38 (5.2/s)")
+    for ev in [{"event": "prefilter", "rejected": 12, "reasons": {"miasto": 10, "poziom": 2}, "to_score": 38},
+               {"event": "scored", "done": 10, "total": 38, "rate": 5.0},
+               {"event": "jev_error"},
+               {"event": "scored", "done": 25, "total": 38, "rate": 5.2}]:
+        mgr._apply_event(ev)
     sc = mgr._telemetry_snapshot()["scoring"]
-    check("scoring: progress update updates scored and rate",
-          sc["scored"] == 25 and sc["rate"] == 5.2)
-    mgr._parse_telemetry("   Jev error: HTTP 500")
-    check("scoring: Jev errors are counted live", mgr._telemetry["scoring"]["errors"] == 1)
-    mgr._parse_telemetry("Matching done: 36 scored now, 2 errors, 140 offers with a percent.")
+    check("scoring: progress, pace and live Jev errors",
+          (sc["scored"], sc["to_score"], sc["rate"], sc["errors"], sc["prefilter_rejected"]) == (25, 38, 5.2, 1, 12)
+          and sc["last_done_at"] is not None, sc)
+    mgr._apply_event({"event": "matching_done", "scored_now": 36, "errors": 2, "with_percent": 140})
     phase3 = mgr._telemetry_snapshot()["stages"]["phase3"]
     check("scoring: final summary sets errors and offers with a percent",
           (phase3["errors"], phase3["with_percent"], mgr._telemetry["scoring"]["errors"]) == (2, 140, 2), phase3)
 
-    for line in [
-        "2026-09-25 18:14:00,000 - main_scraper - INFO - Running aplikuj.pl scraper...",
-        "2026-09-25 18:14:01,000 - main_scraper - INFO - Running OLX Praca scraper...",
-        "2026-09-25 18:20:00,000 - scrapers.ldjson_scraper_base - INFO - aplikuj.pl: 1200/3482 descriptions - 240/min, ~10 min left",
-        "2026-09-25 18:20:01,000 - scrapers.olx_scraper - INFO - OLX: 50/300 opisow (ok: 48, wygasle: 2, bledy: 0, blokady: 0) - 30 ofert/min, zostalo ~8 min",
-        "2026-09-25 18:20:02,000 - scrapers.ldjson_scraper_base - INFO - GoWork.pl: 100/200 descriptions - 60/min, ~2 min left",
-    ]:
-        mgr._parse_telemetry(line)
+    for ev in [{"event": "source", "name": "aplikuj.pl", "state": "running"},
+               {"event": "source_details", "name": "aplikuj.pl", "done": 1200, "total": 3482},
+               {"event": "source_details", "name": "GoWork.pl", "done": 100, "total": 200},
+               {"event": "source", "name": "GoWork.pl", "state": "failed", "error": "403 Client Error: Forbidden"},
+               {"event": "source_health", "name": "GoWork.pl", "verdict": "inconclusive", "detail": "portal odmówił"}]:
+        mgr._apply_event(ev)
     by_name = {s["name"]: s for s in mgr._telemetry_snapshot()["sources"]}
-    check("details: ld+json progress lands on its source",
+    check("details: progress lands on its source",
           (by_name["aplikuj.pl"]["details_done"], by_name["aplikuj.pl"]["details_total"]) == (1200, 3482))
-    check("details: OLX short log name maps to the OLX Praca source",
-          (by_name["OLX Praca"]["details_done"], by_name["OLX Praca"]["details_total"]) == (50, 300))
-    check("details: progress of an unannounced source creates no row", "GoWork.pl" not in by_name)
-    mgr._parse_telemetry("2026-09-25 18:29:00,000 - scrapers.ldjson_scraper_base - INFO - "
-                         "aplikuj.pl: fetched 3400/3482 descriptions, dropped 12 (out of scope) -> 966 offers")
-    src = next(s for s in mgr._telemetry_snapshot()["sources"] if s["name"] == "aplikuj.pl")
-    check("details: final summary fills the tile even when some pages had no JobPosting",
-          src["details_done"] == src["details_total"] == 3482, src)
-
-    mgr._parse_telemetry("2026-09-25 18:30:00,000 - main_scraper - ERROR - ✗ GoWork.pl: Failed - 403 Client Error: Forbidden")
-    mgr._parse_telemetry("health: GoWork.pl - inconclusive (portal odmówił obsługi (403 Client Error: Forbidden))")
-    src = next(s for s in mgr._telemetry_snapshot()["sources"] if s["name"] == "GoWork.pl")
+    check("details: progress of an unannounced source creates no row",
+          by_name["GoWork.pl"]["details_done"] is None, by_name["GoWork.pl"])
     check("failed source keeps its error and the health verdict",
-          src["state"] == "failed" and src["error"] == "403 Client Error: Forbidden"
-          and src["health"] == {"verdict": "inconclusive",
-                                "detail": "portal odmówił obsługi (403 Client Error: Forbidden)"}, src)
+          by_name["GoWork.pl"]["state"] == "failed" and by_name["GoWork.pl"]["error"] == "403 Client Error: Forbidden"
+          and by_name["GoWork.pl"]["health"] == {"verdict": "inconclusive", "detail": "portal odmówił"})
+    kinds = [ev["event"] for ev in mgr._events]
+    check("progress events stay out of the activity feed",
+          "scored" not in kinds and "source_details" not in kinds and "source" in kinds and "stage" in kinds, kinds)
 
 
 def test_offer_api_contract():
@@ -1640,6 +1731,7 @@ def test_foreign_run_visible_to_server():
     from unittest.mock import patch
     import pipeline_manager as pm
     from pipeline_manager import PipelineProcessManager, load_json_safe
+    from utils import stop, telemetry
 
     temp_path = Path(tempfile.mkdtemp(prefix="test_foreign_run_"))
     state_file = temp_path / "pipeline_run_state.json"
@@ -1647,22 +1739,25 @@ def test_foreign_run_visible_to_server():
     # Nazwa jak prawdziwy punkt wejścia: menedżer rozpoznaje po niej przebieg pipeline'u.
     child = temp_path / "run_final_pipeline.py"
     child.write_text(
-        "import sys, time\n"
+        "import json, sys, time\n"
         "from pathlib import Path\n"
         "flag = Path(sys.argv[1])\n"
+        f"event = lambda **e: print({telemetry.PREFIX!r} + json.dumps(e), flush=True)\n"
         "print('── PHASE 3: Matching (prefilter + Jev)', flush=True)\n"
-        "print('Prefilter: 10 rejected {\"tech\": 10} | to score: 150', flush=True)\n"
-        "print('   Scored 1/150 (2.5/s)', flush=True)\n"
+        "event(event='stage', at=0, id='phase3', state='running')\n"
+        "event(event='prefilter', at=0, rejected=10, reasons={'tech': 10}, to_score=150)\n"
+        "event(event='scored', at=0, done=1, total=150, rate=2.5)\n"
         "deadline = time.time() + 15\n"
         "while not flag.exists() and time.time() < deadline:\n"
         "    time.sleep(0.05)\n"
         "print('PIPELINE STOPPED', flush=True)\n"
+        "event(event='pipeline', at=0, result='stopped')\n"
         "sys.exit(1)\n",
         encoding="utf-8",
     )
 
     with patch.object(pm, "STATE_LOCK_FILE", state_file), \
-         patch.object(pm, "STOP_FLAG_FILE", stop_flag), \
+         patch.object(stop, "STOP_FLAG_FILE", stop_flag), \
          patch.object(pm, "CHECKPOINT_FILE", temp_path / "pipeline_checkpoint.json"):
         try:
             server = PipelineProcessManager()
@@ -1705,7 +1800,8 @@ def test_foreign_run_visible_to_server():
             check("terminal run exits after the stop flag", code == 1)
             check("server shows the terminal run as stopped", final["running"] is False and final["status"] == "stopped")
             check("stopped terminal run can be resumed from the server", final["can_resume"] is True)
-            check("terminal output is echoed", "PIPELINE STOPPED" in echoed)
+            check("terminal output is echoed without event lines",
+                  "PIPELINE STOPPED" in echoed and not any(line.startswith(telemetry.PREFIX) for line in echoed))
         finally:
             shutil.rmtree(temp_path, ignore_errors=True)
 
@@ -1957,7 +2053,7 @@ def test_candidates():
               after[jobs[0]["link"]]["percent"] == 81 and after[jobs[0]["link"]]["profile_fp"] == old_fp)
         check("new offers are scored with the current profile",
               after[jobs[1]["link"]]["percent"] == 55
-              and after[jobs[1]["link"]]["profile_fp"] == profile_fingerprint(changed))
+              and after[jobs[1]["link"]]["profile_fp"] == profile_fingerprint(changed), after[jobs[1]["link"]])
 
         removed = client.post("/api/candidates/delete", json={"id": "k2"}).json()
         check("deleting an inactive candidate removes its data",
@@ -1980,14 +2076,15 @@ def main():
                  test_record_scrape, test_scraper_health,
                  test_idempotent_writes, test_olx_tempo_przy_blokadzie,
                  test_zdjete_z_portalu, test_sprawdzenie_ofert, test_olx_fetch_rownolegly,
-                 test_olx_opis_z_listingu, test_pipeline_final_status,
+                 test_olx_opis_z_listingu, test_pipeline_final_status, test_stop_during_scraping,
+                 test_listing_completeness, test_category_fallback,
                  test_windows_process_safety,
                  test_pipeline_stop_and_resume_lifecycle,
                  test_http_security_and_dns_rebinding_protection,
                  test_external_data_change_automatic_invalidation,
                  test_playwright_chromium_prerequisites,
                  test_pipeline_skipped_stage_progress,
-                 test_pipeline_stage_stats_and_eta,
+                 test_pipeline_events,
                  test_offer_api_contract,
                  test_foreign_run_visible_to_server,
                  test_company_logos,

@@ -15,6 +15,7 @@ from typing import List
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils import stop
 from utils.candidate_scope import scope_city, scope_levels
 from utils.portal_categories import pick_categories
 from utils.data_models import Job
@@ -149,7 +150,7 @@ class SolidJobsAPIScraper:
         page = 0
         max_pages = 20  # Bezpiecznik - twardy limit stron
 
-        while page < max_pages:
+        while page < max_pages and not stop.requested():
             url = f"{BASE_URL}/{division}?campaign={CAMPAIGN_ID}&pageIndex={page}&pageSize={PAGE_SIZE}"
             data = None
             

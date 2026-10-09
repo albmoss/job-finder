@@ -310,7 +310,8 @@
   color: var(--warn);
 }
 
-.pg-src.is-skipped .pg-src-mark svg {
+.pg-src.is-skipped .pg-src-mark svg,
+.pg-src.is-stopped .pg-src-mark svg {
   color: var(--faint);
 }
 
@@ -365,7 +366,8 @@
   color: var(--warn);
 }
 
-.pg-src.is-skipped .pg-src-name {
+.pg-src.is-skipped .pg-src-name,
+.pg-src.is-stopped .pg-src-name {
   color: var(--muted);
 }
 

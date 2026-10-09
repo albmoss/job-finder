@@ -30,6 +30,7 @@ import re
 import time
 from datetime import datetime
 from typing import List, Optional
+from utils import stop
 from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
 from utils.links import canonical_link
@@ -328,10 +329,14 @@ class IndeedScraper:
             )
             try:
                 for i, keyword in enumerate(self.keywords):
+                    if stop.requested():
+                        break
                     if i:
                         pause = random.uniform(*self.pause_range)
                         logger.info(f"Indeed: przerwa {pause:.0f}s przed '{keyword}'")
                         time.sleep(pause)
+                    if stop.requested():
+                        break
 
                     jobs, blocked = self._scrape_keyword(browser, keyword)
 

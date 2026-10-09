@@ -8,6 +8,7 @@ rekrutacji) oraz tagi HTML. Zachowuje wymagania, zadania i stack technologiczny.
 import logging
 from pathlib import Path
 
+from utils import telemetry
 from utils.safe_io import load_json_safe, save_json_atomic
 from utils.text_cleaner import clean_job_description
 
@@ -62,6 +63,7 @@ def reduce_file(filepath):
     logger.info(f"   Before: {initial_chars:,} chars")
     logger.info(f"   After:  {final_chars:,} chars")
     logger.info(f"   Reduction: {reduction:.1f}%")
+    telemetry.emit("stage_stats", id="phase2_5", chars_before=initial_chars, chars_after=final_chars)
 
 def run():
     logger.info("Starting Token Diet Procedure...")

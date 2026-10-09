@@ -23,6 +23,7 @@ from typing import List, Optional
 import requests
 from bs4 import BeautifulSoup
 
+from utils import stop
 from utils.links import canonical_link, logo_url
 
 logger = logging.getLogger(__name__)
@@ -163,7 +164,7 @@ class AplikujScraper(LdJsonPortalScraper):
 
         ordered, seen = [], set()
         for cat in self.categories:
-            if len(ordered) >= self.max_offers:
+            if len(ordered) >= self.max_offers or stop.requested():
                 break
             for page in range(1, self.max_pages + 1):
                 url = self.build_category_url(cat, page)

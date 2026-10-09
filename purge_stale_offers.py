@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from utils import candidates
+from utils import candidates, telemetry
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
 from utils.console import force_utf8
@@ -80,10 +80,14 @@ def main():
     print(f"   Kept (decided):   {kept_decided}")
     print(f"   Kept (seen in last 14d): {kept_recent}")
     print(f"   REMOVED (stale):  {removed_count}")
+    telemetry.emit("stage_stats", id="phase0", removed=removed_count)
     print(f"   Final DB size:    {len(kept_jobs)}")
 
-    save_json(JOBS_DB, kept_jobs)
-    print(f"Saved cleaned {JOBS_DB}")
+    if removed_count:
+        save_json(JOBS_DB, kept_jobs)
+        print(f"Saved cleaned {JOBS_DB}")
+    else:
+        print(f"{JOBS_DB}: nothing stale - file unchanged")
 
     # match_results.json nie trzeba tu czyścić: matching/run.py usuwa wyniki ofert,
     # których nie ma już w bazie.

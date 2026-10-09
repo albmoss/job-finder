@@ -24,6 +24,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import USER_AGENTS
+from utils import stop
 from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
 from utils.links import canonical_link, logo_url
@@ -142,6 +143,8 @@ class LinkedInScraper:
             "category": None,
         }
         for attempt in range(1, 3):
+            if stop.requested():
+                return out
             try:
                 time.sleep(random.uniform(*self.detail_delay_range))
                 resp = self.session.get(url, headers=self._headers(), timeout=15)
@@ -219,7 +222,7 @@ class LinkedInScraper:
         step = 10
         empty_pages = 0
 
-        while len(jobs) < self.max_offers and empty_pages < 2:
+        while len(jobs) < self.max_offers and empty_pages < 2 and not stop.requested():
             search_url = self.build_search_url(start=start)
             logger.debug(f"LinkedIn: fetching search page start={start}")
 

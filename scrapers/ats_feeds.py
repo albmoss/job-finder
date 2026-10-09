@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from scrapers.base_scraper import BaseScraper
+from utils import stop, telemetry
 from utils.candidate_scope import scope_city
 from utils.data_models import Job
 from utils.offer_fields import (
@@ -817,6 +818,8 @@ class ATSFeedsScraper(BaseScraper):
             handler = handlers.get(ats)
             if not handler:
                 return ats, slug, [], False
+            if stop.requested():
+                return ats, slug, [], True
 
             # Uprzejme tempo zapytań
             if self.delay_between_requests > 0:
@@ -850,6 +853,7 @@ class ATSFeedsScraper(BaseScraper):
                 # "ATS Feeds: X/Y descriptions"
                 if completed_count % 25 == 0 or completed_count == total_items:
                     logger.info(f"{self.SOURCE_NAME}: {completed_count}/{total_items} descriptions")
+                    telemetry.emit("source_details", name=self.SOURCE_NAME, done=completed_count, total=total_items)
 
                 # Sprawdzenie budżetu czasowego
                 elapsed = time.time() - start_time

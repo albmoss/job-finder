@@ -37,7 +37,7 @@ import logging
 import re
 from pathlib import Path
 
-from utils import candidates
+from utils import candidates, telemetry
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
 
@@ -318,6 +318,7 @@ def _apply(path: Path, keep: set, provenance: dict, decided: set, data=None):
         logger.info(f"{path.name}: {initial} -> {len(final)} (removed {initial - len(final)})")
     else:
         logger.info(f"{path.name}: {initial} ofert, brak duplikatow - plik bez zmian")
+    telemetry.emit("stage_stats", id="phase2", removed=initial - len(final))
 
 
 def run():

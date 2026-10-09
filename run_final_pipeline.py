@@ -26,7 +26,7 @@ from main_scraper import run_all_scrapers
 from utils.data_models import JobDatabase
 from utils.safe_io import load_json_safe, save_json_atomic
 from config import JOBS_DATABASE_PATH
-from utils import candidates
+from utils import candidates, stop, telemetry
 import clean_db
 import purge_stale_offers
 import deduplicate_db
@@ -39,19 +39,6 @@ logging.basicConfig(
 logger = logging.getLogger("Pipeline")
 
 CHECKPOINT_FILE = Path(__file__).resolve().parent / "pipeline_checkpoint.json"
-STOP_FLAG_FILE = Path(__file__).resolve().parent / "pipeline_stop_requested.flag"
-
-
-def is_stop_requested() -> bool:
-    return STOP_FLAG_FILE.exists()
-
-
-def clear_stop_flag():
-    try:
-        if STOP_FLAG_FILE.exists():
-            STOP_FLAG_FILE.unlink()
-    except Exception:
-        pass
 
 
 def load_checkpoint() -> dict:
@@ -103,7 +90,8 @@ def _finish(phase_results, stopped=False):
         print("PIPELINE STOPPED")
         print("=" * 60)
         logger.info("Pipeline stopped by user request.")
-        clear_stop_flag()
+        telemetry.emit("pipeline", result="stopped")
+        stop.clear()
         return False
     failed = [name for name, ok in phase_results.items() if not ok]
     complete = not failed
@@ -111,6 +99,7 @@ def _finish(phase_results, stopped=False):
     print("\n" + "=" * 60)
     print("PIPELINE COMPLETE" if complete else "PIPELINE INCOMPLETE")
     print("=" * 60)
+    telemetry.emit("pipeline", result="complete" if complete else "incomplete")
 
     if failed:
         logger.error("Failed phases: %s", ", ".join(failed))
@@ -146,31 +135,40 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
         clear_checkpoint()
         save_checkpoint(completed_stages, options, current_stage="phase0")
 
-    # Do not clear STOP_FLAG_FILE here: the manager unlinks stale tokens before Popen,
+    # Do not clear the stop flag here: the manager unlinks stale tokens before Popen,
     # so any existing token represents an immediate user stop request for this run.
     phase_results = {}
 
     def _execute_stage(stage_id, stage_name, fn, critical=False):
-        if is_stop_requested():
+        if stop.requested():
             logger.info(f"Stop requested before {stage_name} - halting.")
             save_checkpoint(completed_stages, options, current_stage=stage_id, stopped=True)
             return False, True
 
         if stage_id in completed_stages:
             logger.info(f"── {stage_name} (skipped: already completed in checkpoint)")
+            telemetry.emit("stage", id=stage_id, state="cached")
             phase_results[stage_name] = True
             return True, False
 
-        ok = _phase(stage_name, fn, critical=critical)
+        telemetry.emit("stage", id=stage_id, state="running")
+        try:
+            ok = _phase(stage_name, fn, critical=critical)
+        except Exception:
+            telemetry.emit("stage", id=stage_id, state="failed")
+            raise
         phase_results[stage_name] = ok
-        if ok:
+        stopped = stop.requested()
+        if ok and not stopped:
             completed_stages.add(stage_id)
             save_checkpoint(completed_stages, options, current_stage=stage_id)
+            telemetry.emit("stage", id=stage_id, state="done")
             return True, False
-        else:
-            stopped = is_stop_requested()
-            save_checkpoint(completed_stages, options, failed_stage=stage_id, stopped=stopped)
-            return False, stopped
+        save_checkpoint(completed_stages, options, current_stage=stage_id,
+                        failed_stage=None if ok else stage_id, stopped=stopped)
+        if not ok:
+            telemetry.emit("stage", id=stage_id, state="failed")
+        return False, stopped
 
     # 0. Usuń przeterminowane oferty
     ok, stopped = _execute_stage(
@@ -255,7 +253,7 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
         return _finish(phase_results, stopped=stopped)
 
     # Walidacja bazy przed dopasowaniem
-    if is_stop_requested():
+    if stop.requested():
         save_checkpoint(completed_stages, options, stopped=True)
         return _finish(phase_results, stopped=True)
 
