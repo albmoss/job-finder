@@ -5,10 +5,9 @@ Modele danych: oferta, ocena dopasowania, baza ofert, stan scraperów.
 from dataclasses import dataclass, fields as dc_fields
 from pathlib import Path
 from typing import Optional
-import json
 import re
 import threading
-from utils.safe_io import save_json_atomic
+from utils.safe_io import load_json_safe, save_json_atomic
 from utils.offer_fields import STRUCTURED_FIELDS
 from utils.sqlite_store import RecordStore
 
@@ -289,7 +288,7 @@ class ScraperStatusManager:
     """Pilnuje, które źródła zostały dziś poprawnie zescrapowane."""
     _lock = threading.Lock()
 
-    def __init__(self, filepath: str = "scraper_status.json"):
+    def __init__(self, filepath: str = str(Path(__file__).resolve().parent.parent / "scraper_status.json")):
         self.filepath = filepath
 
     def load_status(self) -> dict:
@@ -379,11 +378,8 @@ class ScraperStatusManager:
     # --- jedyne miejsce dotykające pliku -------------------------------------
 
     def _read(self) -> dict:
-        try:
-            with open(self.filepath, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {}
+        data = load_json_safe(self.filepath, default={})
+        return data if isinstance(data, dict) else {}
 
     def _write(self, data: dict):
         save_json_atomic(self.filepath, data, backup=False)

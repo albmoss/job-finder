@@ -24,6 +24,15 @@ async def _body(request: Request) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def _with_body(handler):
+    async def endpoint(request: Request):
+        data = await _body(request)
+        if data is None:
+            return _error("Niepoprawny format JSON")
+        return await asyncio.to_thread(handler, request, data)
+    return endpoint
+
+
 def _detail(v: dict) -> dict:
     return review.detail(v, store.to_summary(v))
 
@@ -32,15 +41,12 @@ def _missing() -> JSONResponse:
     return _error("Nie znaleziono tej wersji CV.", 404)
 
 
-async def list_versions(request: Request) -> JSONResponse:
+def list_versions(request: Request) -> JSONResponse:
     link = request.query_params.get("link")
     return JSONResponse({"items": store.list_versions(link or None)})
 
 
-async def create_version(request: Request) -> JSONResponse:
-    data = await _body(request)
-    if data is None:
-        return _error("Niepoprawny format JSON")
+def create_version(request: Request, data: dict) -> JSONResponse:
     if data.get("consent") is not True:
         return _error("Potwierdź zgodę na wysłanie CV i oferty do modelu.")
     link = str(data.get("link") or "").strip()
@@ -54,7 +60,7 @@ async def create_version(request: Request) -> JSONResponse:
     settings = llm_settings()
     if not settings.api_keys:
         return _error(settings.error or "Brak klucza modelu. Dodaj go w ustawieniach.")
-    offer = await asyncio.to_thread(tailor.load_offer, link)
+    offer = tailor.load_offer(link)
     if offer is None:
         return _error("Oferta nie została znaleziona w bazie", 404)
     description = offer["description"].strip()
@@ -70,17 +76,17 @@ async def create_version(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "version": store.summary(v["id"])})
 
 
-async def get_version(request: Request) -> JSONResponse:
+def get_version(request: Request) -> JSONResponse:
     v = store.get(request.path_params["id"])
     return JSONResponse(_detail(v)) if v else _missing()
 
 
-async def cancel_version(request: Request) -> JSONResponse:
+def cancel_version(request: Request) -> JSONResponse:
     v = tailor.cancel(request.path_params["id"])
     return JSONResponse({"ok": True, "version": store.to_summary(v)}) if v else _missing()
 
 
-async def retry_version(request: Request) -> JSONResponse:
+def retry_version(request: Request) -> JSONResponse:
     version_id = request.path_params["id"]
     v = store.get(version_id)
     if v is None:
@@ -96,10 +102,7 @@ async def retry_version(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "version": store.to_summary(v)})
 
 
-async def _review_op(request: Request, op) -> JSONResponse:
-    data = await _body(request)
-    if data is None:
-        return _error("Niepoprawny format JSON")
+def _review_op(request: Request, data: dict, op) -> JSONResponse:
     errors: list[str] = []
 
     def fn(v: dict):
@@ -117,12 +120,12 @@ async def _review_op(request: Request, op) -> JSONResponse:
     return JSONResponse(_detail(v))
 
 
-async def change(request: Request) -> JSONResponse:
-    return await _review_op(request, review.apply_change)
+def change(request: Request, data: dict) -> JSONResponse:
+    return _review_op(request, data, review.apply_change)
 
 
-async def number(request: Request) -> JSONResponse:
-    return await _review_op(request, review.apply_number)
+def number(request: Request, data: dict) -> JSONResponse:
+    return _review_op(request, data, review.apply_number)
 
 
 def _html(v: dict, which: str, marks: bool) -> str:
@@ -131,7 +134,7 @@ def _html(v: dict, which: str, marks: bool) -> str:
     return render_html(cv, v.get("language") or "pl", order, title=f"CV {v.get('company') or ''}".strip())
 
 
-async def finalize(request: Request) -> JSONResponse:
+def finalize(request: Request) -> JSONResponse:
     version_id = request.path_params["id"]
     v = store.get(version_id)
     if v is None:
@@ -142,7 +145,7 @@ async def finalize(request: Request) -> JSONResponse:
     if pending:
         return _error(f"Przed pobraniem sprawdź liczby do potwierdzenia ({pending}).")
     try:
-        await asyncio.to_thread(render_pdf, _html(v, "tailored", False), store.pdf_path(version_id))
+        render_pdf(_html(v, "tailored", False), store.pdf_path(version_id))
     except Exception as e:
         return _error(f"Nie udało się utworzyć PDF: {type(e).__name__}: {str(e)[:200]}", 500)
     file_name = f"cv_{store.slug(v.get('company') or '')}_v{v['version']}.pdf"
@@ -156,7 +159,7 @@ async def finalize(request: Request) -> JSONResponse:
     return JSONResponse(_detail(v))
 
 
-async def pdf(request: Request):
+def pdf(request: Request):
     version_id = request.path_params["id"]
     v = store.get(version_id)
     if v is None:
@@ -167,7 +170,7 @@ async def pdf(request: Request):
     return FileResponse(path, media_type="application/pdf", filename=v["file_name"])
 
 
-async def html_preview(request: Request):
+def html_preview(request: Request):
     v = store.get(request.path_params["id"])
     if v is None:
         return _missing()
@@ -179,36 +182,33 @@ async def html_preview(request: Request):
     return HTMLResponse(_html(v, which, request.query_params.get("marks") == "1"))
 
 
-async def get_instructions(request: Request) -> JSONResponse:
+def get_instructions(request: Request) -> JSONResponse:
     return JSONResponse(tailor.instructions())
 
 
-async def save_instructions(request: Request) -> JSONResponse:
-    data = await _body(request)
-    if data is None:
-        return _error("Niepoprawny format JSON")
+def save_instructions(request: Request, data: dict) -> JSONResponse:
     text = data.get("text")
     if not isinstance(text, str) or not text.strip():
         return _error("Instrukcje nie mogą być puste.")
     return JSONResponse(tailor.save_instructions(text))
 
 
-async def reset_instructions(request: Request) -> JSONResponse:
+def reset_instructions(request: Request) -> JSONResponse:
     return JSONResponse(tailor.reset_instructions())
 
 
 routes = [
     Route("/api/cv-versions", list_versions, methods=["GET"]),
-    Route("/api/cv-versions", create_version, methods=["POST"]),
+    Route("/api/cv-versions", _with_body(create_version), methods=["POST"]),
     Route("/api/cv-versions/{id}", get_version, methods=["GET"]),
     Route("/api/cv-versions/{id}/cancel", cancel_version, methods=["POST"]),
     Route("/api/cv-versions/{id}/retry", retry_version, methods=["POST"]),
-    Route("/api/cv-versions/{id}/change", change, methods=["POST"]),
-    Route("/api/cv-versions/{id}/number", number, methods=["POST"]),
+    Route("/api/cv-versions/{id}/change", _with_body(change), methods=["POST"]),
+    Route("/api/cv-versions/{id}/number", _with_body(number), methods=["POST"]),
     Route("/api/cv-versions/{id}/finalize", finalize, methods=["POST"]),
     Route("/api/cv-versions/{id}/pdf", pdf, methods=["GET"]),
     Route("/api/cv-versions/{id}/html", html_preview, methods=["GET"]),
     Route("/api/cv-tailor/instructions", get_instructions, methods=["GET"]),
-    Route("/api/cv-tailor/instructions", save_instructions, methods=["POST"]),
+    Route("/api/cv-tailor/instructions", _with_body(save_instructions), methods=["POST"]),
     Route("/api/cv-tailor/instructions/reset", reset_instructions, methods=["POST"]),
 ]

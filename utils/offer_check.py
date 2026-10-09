@@ -20,7 +20,7 @@ import requests
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
 
-OFFER_CHECKS_PATH = Path("offer_checks.json")
+OFFER_CHECKS_PATH = Path(__file__).resolve().parent.parent / "offer_checks.json"
 WAZNOSC = timedelta(hours=24)
 LIMIT_CZASU = 10
 WATKI = 4
@@ -141,7 +141,7 @@ def sprawdz_oferty(links: Iterable[str], teraz: Optional[datetime] = None) -> Se
             wyniki = dict(zip(do_sprawdzenia, pula.map(check_offer, do_sprawdzenia)))
         sprawdzono = teraz.isoformat(timespec="seconds")
         with _blokada:
-            pamiec = _wczytaj()
+            pamiec = {kan: wpis for kan, wpis in _wczytaj().items() if aktualny(wpis, teraz)}
             for kan, stan in wyniki.items():
                 if (pamiec.get(kan) or {}).get("state") != GONE:
                     pamiec[kan] = {"state": stan, "checked_at": sprawdzono}

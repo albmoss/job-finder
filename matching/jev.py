@@ -14,6 +14,7 @@ Klucz: TYPESAFE_API_KEY w .env. API: https://docs.typesafe.ai/api
 from __future__ import annotations
 
 import os
+import random
 import time
 
 import requests
@@ -135,6 +136,7 @@ def ask(state: dict, key: str, session: requests.Session | None = None,
     http = session or requests
     delay = 1.0
     for attempt in range(retries):
+        wait = delay * random.uniform(0.5, 1.5)
         try:
             resp = http.post(
                 API_URL,
@@ -154,7 +156,12 @@ def ask(state: dict, key: str, session: requests.Session | None = None,
                 raise JevError(f"TypeSafe odrzucił klucz ({resp.status_code})")
             if resp.status_code not in (429, 529) and resp.status_code < 500:
                 raise JevError(f"TypeSafe {resp.status_code}: {resp.text[:300]}")
-        time.sleep(delay)
+            try:
+                wait = max(wait, min(float(resp.headers.get("Retry-After") or 0), 60.0))
+            except ValueError:
+                pass
+        if attempt < retries - 1:
+            time.sleep(wait)
         delay = min(delay * 2, 30)
     raise JevError("TypeSafe nie odpowiedział po ponowieniach")
 

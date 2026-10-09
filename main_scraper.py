@@ -4,6 +4,7 @@ Runs all job scrapers and saves results to the jobs database (config.JOBS_DATABA
 """
 
 import logging
+import logging.handlers
 import sys
 import concurrent.futures
 from pathlib import Path
@@ -39,7 +40,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('scraper.log', encoding='utf-8')
+        logging.handlers.RotatingFileHandler(Path(__file__).resolve().parent / 'scraper.log',
+                                             maxBytes=5 * 1024 * 1024, backupCount=2, encoding='utf-8')
     ]
 )
 

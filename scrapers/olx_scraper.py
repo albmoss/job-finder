@@ -279,7 +279,8 @@ class OLXScraper(BaseScraper):
         logger.info(f"OLX Praca: {len(categories)}/{len(all_categories)} categories from CV")
         
         import os, json
-        state_file = "olx_category_state.json"
+        from pathlib import Path
+        state_file = Path(__file__).resolve().parent.parent / "olx_category_state.json"
         
         completed_categories = []
         if getattr(self, "force", False) and os.path.exists(state_file):
