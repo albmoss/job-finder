@@ -5,8 +5,8 @@ Powód istnienia: `JobDatabase.record_scrape` nigdy nie nadpisuje istniejącego
 rekordu (od tego jest --refresh), więc pobranie strony oferty, którą już mamy,
 jest czystym kosztem czasu. Przy pełnym pokryciu portalu to 60-90% listingu.
 
-Dlaczego jeden wspólny snapshot, a nie cache per scraper: `jobs_database.json`
-ma ~27 MB, a scrapery startują równolegle - każdy wczytywał go osobno. Snapshot
+Dlaczego jeden wspólny snapshot, a nie cache per scraper: baza ma dziesiątki tysięcy ofert,
+a scrapery startują równolegle - każdy wczytywał ją osobno. Snapshot
 robimy raz na proces i celowo go NIE odświeżamy w trakcie przebiegu: gdyby
 scraper A dopisał ofertę, którą chwilę później zobaczy scraper B, chcemy żeby
 B i tak ją pobrał (cross-posting bywa jedynym źródłem pełnego opisu).
@@ -33,10 +33,9 @@ def _load():
     described, stored = set(), set()
     try:
         from config import JOBS_DATABASE_PATH
-        from utils.data_models import is_placeholder_description
-        from utils.safe_io import load_json_safe
+        from utils.data_models import JobDatabase, is_placeholder_description
 
-        for record in load_json_safe(str(JOBS_DATABASE_PATH), default=[]):
+        for record in JobDatabase(JOBS_DATABASE_PATH).load_records():
             link = canonical_link(record.get("link", ""))
             if not link:
                 continue

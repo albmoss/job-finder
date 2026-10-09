@@ -8,6 +8,7 @@ from pathlib import Path
 
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
+from utils.sqlite_store import RecordStore
 
 ROOT = Path(__file__).resolve().parent.parent / "candidates"
 INDEX_NAME = "candidates.json"
@@ -18,7 +19,8 @@ CV_DOCX = "cv.docx"
 CV_TEXT = "final_cv_text.txt"
 PROFILE = "candidate_profile.json"
 PROFILE_HISTORY = "profile_history.json"
-MATCH_RESULTS = "match_results.json"
+MATCH_RESULTS = "match_results.db"
+LEGACY_MATCH_RESULTS = "match_results.json"
 DECISIONS = "user_decisions.json"
 CATEGORY_SCOPE = "category_scope.json"
 LAST_SCRAPE_RUN = "last_scrape_run.json"
@@ -27,7 +29,7 @@ CV_VERSIONS = "cv_versions.json"
 CV_VERSIONS_DIR = "cv_versions"
 TAILOR_INSTRUCTIONS = "cv_tailor_instructions.md"
 
-LEGACY_NAMES = (CV_PDF, CV_DOCX, CV_TEXT, PROFILE, MATCH_RESULTS, DECISIONS, CATEGORY_SCOPE,
+LEGACY_NAMES = (CV_PDF, CV_DOCX, CV_TEXT, PROFILE, LEGACY_MATCH_RESULTS, DECISIONS, CATEGORY_SCOPE,
                 LAST_SCRAPE_RUN, BASE_CV, CV_VERSIONS, CV_VERSIONS_DIR, TAILOR_INSTRUCTIONS)
 NAME_MAX = 60
 
@@ -90,6 +92,11 @@ def active_dir() -> Path:
 
 def path(name: str) -> Path:
     return active_dir() / name
+
+
+def match_results(directory: Path | None = None) -> RecordStore:
+    directory = directory or active_dir()
+    return RecordStore(directory / MATCH_RESULTS, directory / LEGACY_MATCH_RESULTS)
 
 
 def dirs() -> list[Path]:

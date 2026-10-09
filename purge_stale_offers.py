@@ -1,7 +1,7 @@
 """
 Purge Stale Offers
 ==================
-Usuwa z jobs_database.json oferty, których portal od 14 dni nie pokazuje.
+Usuwa z bazy ofert oferty, których portal od 14 dni nie pokazuje.
 
 Zachowuje:
   - WSZYSTKIE oferty z decyzją użytkownika (zapisane, ukryte, wysłane)
@@ -20,16 +20,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import config
 from utils import candidates, telemetry
+from utils.data_models import JobDatabase
 from utils.links import canonical_link
-from utils.safe_io import load_json_safe, save_json_atomic
 from utils.console import force_utf8
-
-JOBS_DB = "jobs_database.json"
-
-
-def save_json(filepath, data):
-    save_json_atomic(filepath, data, backup=True)
 
 
 def main():
@@ -40,7 +35,9 @@ def main():
     print(f"PURGE STALE OFFERS (keeping from {cutoff_date.isoformat()} onwards + decided)")
     print("=" * 60)
 
-    jobs = load_json_safe(JOBS_DB, default=[])
+    db = JobDatabase(config.JOBS_DATABASE_PATH)
+    db.backup()
+    jobs = db.load_records()
     decided_links = candidates.decided_links()
     print(f"Loaded {len(jobs)} jobs from DB")
     print(f"{len(decided_links)} jobs have user decisions (protected)")
@@ -48,6 +45,7 @@ def main():
     # Determine which jobs to keep
     kept_jobs = []
     removed_count = 0
+    removed_links = []
     kept_decided = 0
     kept_recent = 0
 
@@ -75,6 +73,7 @@ def main():
 
         # W przeciwnym razie leci z bazy
         removed_count += 1
+        removed_links.append(job.get("link"))
 
     print("\nResults:")
     print(f"   Kept (decided):   {kept_decided}")
@@ -84,12 +83,12 @@ def main():
     print(f"   Final DB size:    {len(kept_jobs)}")
 
     if removed_count:
-        save_json(JOBS_DB, kept_jobs)
-        print(f"Saved cleaned {JOBS_DB}")
+        db.delete_links(removed_links)
+        print(f"Removed {removed_count} offers from {db.filepath.name}")
     else:
-        print(f"{JOBS_DB}: nothing stale - file unchanged")
+        print(f"{db.filepath.name}: nothing stale - no change")
 
-    # match_results.json nie trzeba tu czyścić: matching/run.py usuwa wyniki ofert,
+    # Wyników dopasowania nie trzeba tu czyścić: matching/run.py usuwa wyniki ofert,
     # których nie ma już w bazie.
 
     print("\nPurge complete!")

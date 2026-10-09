@@ -35,11 +35,11 @@ serializuje się do JSON-a jako gołe `NaN`, czego nie da się potem wczytać.
 import hashlib
 import logging
 import re
-from pathlib import Path
 
+import config
 from utils import candidates, telemetry
+from utils.data_models import JobDatabase
 from utils.links import canonical_link
-from utils.safe_io import load_json_safe, save_json_atomic
 
 logging.basicConfig(
     level=logging.INFO,
@@ -265,20 +265,18 @@ def _plan(all_jobs: dict, decided: set) -> tuple:
     return keep, provenance, stats
 
 
-def _apply(path: Path, keep: set, provenance: dict, decided: set, data=None):
+def _apply(db: JobDatabase, keep: set, provenance: dict, decided: set, data=None):
     """
-    Zapisz plik zachowując wyłącznie rekordy wskazane przez plan.
+    Zapisz bazę zachowując wyłącznie rekordy wskazane przez plan.
 
-    `data` to zawartość wczytana już przez wołającego (plik ma ~30 MB).
+    `data` to zawartość wczytana już przez wołającego.
     """
+    name = db.filepath.name
     if data is None:
-        if not path.exists():
-            logger.warning(f"File not found: {path}")
-            return
-        data = load_json_safe(path, default=[])
+        data = db.load_records()
 
     if not data:
-        logger.info(f"{path.name} is empty - skipping.")
+        logger.info(f"{name} is empty - skipping.")
         return
 
     initial = len(data)
@@ -303,38 +301,34 @@ def _apply(path: Path, keep: set, provenance: dict, decided: set, data=None):
     if after < before:
         logger.error(
             f"Deduplication would remove {before - after} offers with a decision "
-            f"- aborting the write to {path.name}."
+            f"- aborting the write to {name}."
         )
         return
 
     if nan_fixed:
-        logger.info(f"   {path.name}: fixed {nan_fixed} NaN fields (invalid JSON) -> null")
+        logger.info(f"   {name}: fixed {nan_fixed} NaN fields -> null")
 
-    # Zapis tylko przy realnej zmianie. Przy bazie bez duplikatow ten etap
-    # przepisywal caly plik razem z kopia zapasowa, zeby odtworzyc go bajt
-    # w bajt - a rotacja i tak kasowala te kopie w tym samym przebiegu.
     if len(final) != initial or nan_fixed or scalone:
-        save_json_atomic(path, final, backup=True)
-        logger.info(f"{path.name}: {initial} -> {len(final)} (removed {initial - len(final)})")
+        db.save_records(final)
+        logger.info(f"{name}: {initial} -> {len(final)} (removed {initial - len(final)})")
     else:
-        logger.info(f"{path.name}: {initial} ofert, brak duplikatow - plik bez zmian")
+        logger.info(f"{name}: {initial} ofert, brak duplikatow - baza bez zmian")
     telemetry.emit("stage_stats", id="phase2", removed=initial - len(final))
 
 
 def run():
     """
-    Deduplikacja jobs_database.json. Wyniki dopasowania (match_results.json)
-    nie wymagają osobnego przejścia: matching/run.py usuwa wyniki ofert,
-    których nie ma już w bazie.
+    Deduplikacja bazy ofert. Wyniki dopasowania nie wymagają osobnego przejścia:
+    matching/run.py usuwa wyniki ofert, których nie ma już w bazie.
     """
     logger.info("Starting Highlander Protocol v3...")
 
-    path = Path("jobs_database.json")
+    db = JobDatabase(config.JOBS_DATABASE_PATH)
     decided = _decided_links()
 
     # Dla każdego linku bierzemy wariant z najdłuższym opisem, żeby decyzja
     # opierała się na najlepszej dostępnej wersji rekordu.
-    data = load_json_safe(path, default=[]) if path.exists() else []
+    data = db.load_records()
     all_jobs = {}
     for job in data:
         _sanitize_nan(job)
@@ -357,7 +351,7 @@ def run():
             f"(duplicates, but merging would orphan the decision)"
         )
 
-    _apply(path, keep, provenance, decided, data=data)
+    _apply(db, keep, provenance, decided, data=data)
 
     logger.info("Protocol v3 Complete. Your data is safe.")
 

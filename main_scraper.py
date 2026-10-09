@@ -1,6 +1,6 @@
 """
 Main Scraper Orchestrator
-Runs all job scrapers and saves results to jobs_database.json
+Runs all job scrapers and saves results to the jobs database (config.JOBS_DATABASE_PATH)
 """
 
 import logging
@@ -72,14 +72,13 @@ def refresh_sources(source_names):
     istniejącego rekordu. Po poprawce scrapera (np. lepsze wydobywanie opisu) samo
     ponowne uruchomienie nic by nie dało - stare, ubogie rekordy zostałyby na stałe.
 
-    Wyniki dopasowania (match_results.json) nie wymagają czyszczenia: interfejs
-    łączy je z bazą ofert, a matching/run.py usuwa wyniki ofert spoza bazy.
+    Wyniki dopasowania nie wymagają czyszczenia: interfejs łączy je z bazą ofert,
+    a matching/run.py usuwa wyniki ofert spoza bazy.
 
     Oferty z decyzją użytkownika są zachowywane - nie kasujemy tego, co oceniłeś.
     """
     from utils import candidates
     from utils.links import canonical_link
-    from utils.safe_io import load_json_safe, save_json_atomic
 
     decided = candidates.decided_links()
     targets = {s.lower() for s in source_names}
@@ -88,23 +87,18 @@ def refresh_sources(source_names):
         src = (record_source or "").lower()
         return any(t in src for t in targets)
 
-    # 1. Baza surowa
-    jobs = load_json_safe(str(JOBS_DATABASE_PATH), default=[])
-    kept_jobs, removed, protected = [], 0, 0
-    for job in jobs:
+    db = JobDatabase(str(JOBS_DATABASE_PATH))
+    doomed, removed, protected = [], 0, 0
+    for job in db.load_records():
         if matches(job.get("source")):
             if canonical_link(job.get("link", "")) in decided:
-                kept_jobs.append(job)
                 protected += 1
             else:
+                doomed.append(job.get("link"))
                 removed += 1
-            continue
-        kept_jobs.append(job)
 
     if removed:
-        save_json_atomic(str(JOBS_DATABASE_PATH), kept_jobs, backup=True)
-
-    if removed:
+        db.delete_links(doomed)
         logger.info(f"Refresh: removed {removed} offers ({protected} carrying a decision were kept)")
     return removed
 

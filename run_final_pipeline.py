@@ -257,9 +257,9 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
         save_checkpoint(completed_stages, options, stopped=True)
         return _finish(phase_results, stopped=True)
 
-    jobs = JobDatabase(str(JOBS_DATABASE_PATH)).load_jobs()
-    logger.info(f"The database holds {len(jobs)} offers.")
-    if not jobs:
+    offers = JobDatabase(str(JOBS_DATABASE_PATH)).count()
+    logger.info(f"The database holds {offers} offers.")
+    if not offers:
         logger.error("Database empty - aborting before matching.")
         phase_results["Database validation"] = False
         save_checkpoint(completed_stages, options, failed_stage="phase3")

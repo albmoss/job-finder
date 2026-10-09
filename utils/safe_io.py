@@ -20,18 +20,10 @@ logger = logging.getLogger(__name__)
 BACKUP_DIR_NAME = "backups"
 DEFAULT_KEEP = 10
 
-# Głębokość historii zależy od tego, czy plik da się odtworzyć.
-# jobs_database.json i match_results.json odtwarza pipeline, a baza waży ~30 MB
-# i jest przepisywana przez kilka etapów każdego przebiegu - dziesięć
-# pokoleń to setki MB kopii danych, które i tak umie
-# wyprodukować `run_final_pipeline.py`. Zostawiamy poprzednią wersję (jest po co
-# cofnąć nieudany etap) i na tym koniec. Reszta - z user_decisions.json na czele -
-# trzyma pełne dziesięć, bo tych danych nie odtworzy nic.
+# Bazy SQLite odtwarzalne przez pipeline (oferty, wyniki dopasowania) trzymają dwie
+# kopie (utils/sqlite_store.py). Pliki JSON - z user_decisions.json na czele -
+# trzymają pełne dziesięć, bo tych danych nie odtworzy nic.
 REGENERABLE_KEEP = 2
-_KEEP_BY_NAME = {
-    "jobs_database.json": REGENERABLE_KEEP,
-    "match_results.json": REGENERABLE_KEEP,
-}
 
 
 def _backup_dir(filepath: Path) -> Path:
@@ -47,7 +39,7 @@ def rotate_backup(filepath, keep: int = None):
         return
 
     if keep is None:
-        keep = _KEEP_BY_NAME.get(filepath.name, DEFAULT_KEEP)
+        keep = DEFAULT_KEEP
 
     bdir = _backup_dir(filepath)
     # Milisekundy w stemplu, bo etapy pipeline'u potrafią przepisać ten sam plik

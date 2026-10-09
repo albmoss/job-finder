@@ -1,7 +1,7 @@
 """
 Etap dopasowania: CV -> profil, przesiew w kodzie, ocena Jev, procent.
 
-Wynik trafia do `match_results.json`: słownik kanoniczny link -> wpis
+Wynik trafia do `match_results.db` kandydata (utils/sqlite_store.py): kanoniczny link -> wpis
     {"percent": int | None, "filtered": powód | None, "answers": {...} | None,
      "offer_fp": str, "profile_fp": str, "model": str | None, "scored_at": ISO}
 `percent` jest None dla ofert odrzuconych przez przesiew (`filtered`).
@@ -23,7 +23,6 @@ import json
 import sys
 import time
 from datetime import datetime
-from pathlib import Path
 
 import requests
 
@@ -34,19 +33,14 @@ from utils.cv_profile import cv_text, ensure_profile, profile_fingerprint, profi
 from utils.data_models import Job, JobDatabase
 from utils.links import canonical_link
 from utils.offer_fields import STRUCTURED_FIELDS, text_features
-from utils.safe_io import load_json_safe, save_json_atomic
+from config import JOBS_DATABASE_PATH
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-JOBS_PATH = BASE_DIR / "jobs_database.json"
+JOBS_PATH = JOBS_DATABASE_PATH
 
 WORKERS = 8
-SAVE_EVERY = 200
+SAVE_EVERY = 50
 # Linia postępu co tyle sekund (i na końcu): arkusz pipeline'u liczy z niej postęp i ETA.
 PROGRESS_EVERY_S = 2.0
-
-
-def results_path() -> Path:
-    return candidates.path(candidates.MATCH_RESULTS)
 
 
 def offer_fingerprint(job: Job) -> str:
@@ -54,11 +48,6 @@ def offer_fingerprint(job: Job) -> str:
     body.update({name: getattr(job, name) for name in STRUCTURED_FIELDS})
     return hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True, default=str)
                           .encode("utf-8")).hexdigest()[:16]
-
-
-def load_results() -> dict:
-    data = load_json_safe(str(results_path()), default={})
-    return data if isinstance(data, dict) else {}
 
 
 def _triage(todo, results, profile, cv, profile_fp, kept, key, session, now):
@@ -92,9 +81,12 @@ def _triage(todo, results, profile, cv, profile_fp, kept, key, session, now):
             passed.append((link, job, fp))
         else:
             rejected += 1
-            results[link] = {"percent": None, "filtered": "kierunek", "answers": None,
-                             "offer_fp": fp, "profile_fp": basis_fp, "model": None,
-                             "scored_at": now, "triage": mark}
+            fresh = {"percent": None, "filtered": "kierunek", "answers": None,
+                     "offer_fp": fp, "profile_fp": basis_fp, "model": None,
+                     "scored_at": now, "triage": mark}
+            entry = results.get(link)
+            if entry is None or dict(entry, scored_at=now) != fresh:
+                results[link] = fresh
     return passed, rejected, errors, stopped
 
 
@@ -125,8 +117,11 @@ def main(argv: list[str] | None = None) -> int:
                    skills=len(profile.get("skills") or []))
 
     jobs = JobDatabase(str(JOBS_PATH)).load_jobs()
+    store = candidates.match_results()
+    store.backup()
+    loaded = store.load()
     # --rescore-all: pełne przeliczenie, np. po zmianie pytań albo wag w matching/jev.py.
-    results = {} if "--rescore-all" in args else load_results()
+    results = {} if "--rescore-all" in args else loaded
     live_links = set()
     kept: set[str] = set()
     todo: list[tuple[str, Job, str]] = []
@@ -153,9 +148,10 @@ def main(argv: list[str] | None = None) -> int:
         reason = reject_reason(job, history.get(basis_fp, profile))
         if reason:
             filtered[reason] = filtered.get(reason, 0) + 1
-            results[link] = {"percent": None, "filtered": reason, "answers": None,
-                             "offer_fp": fp, "profile_fp": basis_fp, "model": None,
-                             "scored_at": now}
+            fresh = {"percent": None, "filtered": reason, "answers": None,
+                     "offer_fp": fp, "profile_fp": basis_fp, "model": None, "scored_at": now}
+            if entry is None or dict(entry, scored_at=now) != fresh:
+                results[link] = fresh
             continue
         if link in kept and entry.get("percent") is not None:
             continue
@@ -178,9 +174,10 @@ def main(argv: list[str] | None = None) -> int:
     total = len(todo)
     print(f"Prefilter: {sum(filtered.values())} rejected {filtered} | to score: {total}")
     telemetry.emit("prefilter", rejected=sum(filtered.values()), reasons=filtered, to_score=total)
-    save_json_atomic(str(results_path()), results, backup=True)
+    store.sync(results)
 
     done = 0
+    unsaved: dict[str, dict] = {}
     started = last_report = time.monotonic()
 
     def score(item):
@@ -210,14 +207,15 @@ def main(argv: list[str] | None = None) -> int:
                     if "klucz" in str(e):
                         stopped = True
                     continue
-                results[link] = {
+                results[link] = unsaved[link] = {
                     "percent": jev.percent(reply["answers"]), "filtered": None,
                     "answers": reply["answers"], "offer_fp": fp, "profile_fp": profile_fp,
                     "model": reply.get("model"), "scored_at": datetime.now().isoformat(timespec="seconds"),
                 }
                 done += 1
-                if done % SAVE_EVERY == 0:
-                    save_json_atomic(str(results_path()), results, backup=False)
+                if len(unsaved) >= SAVE_EVERY:
+                    store.put(unsaved)
+                    unsaved.clear()
                 now_s = time.monotonic()
                 if now_s - last_report >= PROGRESS_EVERY_S or done == total:
                     last_report = now_s
@@ -228,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("   Stop requested - finishing in-flight offers.")
                 stopped = True
 
-    save_json_atomic(str(results_path()), results, backup=False)
+    store.put(unsaved)
     scored = sum(1 for e in results.values() if e.get("percent") is not None)
     print(f"Matching done: {done} scored now, {errors} errors, {scored} offers with a percent.")
     telemetry.emit("matching_done", scored_now=done, errors=errors, with_percent=scored)

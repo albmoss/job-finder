@@ -6,10 +6,10 @@ rekrutacji) oraz tagi HTML. Zachowuje wymagania, zadania i stack technologiczny.
 """
 
 import logging
-from pathlib import Path
 
+import config
 from utils import telemetry
-from utils.safe_io import load_json_safe, save_json_atomic
+from utils.data_models import JobDatabase
 from utils.text_cleaner import clean_job_description
 
 logging.basicConfig(
@@ -18,17 +18,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("TokenDiet")
 
-def reduce_file(filepath):
-    path = Path(filepath)
-    if not path.exists():
-        logger.warning(f"File not found: {path}")
-        return
+def reduce_db(db: JobDatabase):
+    logger.info(f"Implementing Token Diet for {db.filepath.name}...")
 
-    logger.info(f"Implementing Token Diet for {path}...")
-
-    data = load_json_safe(path, default=[])
+    data = db.load_records()
     if not data:
-        logger.info(f"{path.name} is empty - skipping.")
+        logger.info(f"{db.filepath.name} is empty - skipping.")
         return
 
     initial_chars = 0
@@ -46,20 +41,16 @@ def reduce_file(filepath):
 
         final_chars += len(cleaned)
 
-    # Zapis tylko wtedy, gdy cokolwiek faktycznie sie zmienilo. Przy juz
-    # przyciętej bazie ten etap przepisywał 64 MB i robił do tego kopię
-    # zapasową, żeby odtworzyć plik bajt w bajt - a rotacja kopii i tak
-    # kasowała ją w tym samym przebiegu.
     if zmienione:
-        save_json_atomic(path, data, backup=True)
+        db.save_records(data)
     else:
-        logger.info(f"   {path.name}: nic do przyciecia, plik bez zmian")
+        logger.info(f"   {db.filepath.name}: nic do przyciecia, baza bez zmian")
 
     reduction = 0
     if initial_chars > 0:
         reduction = ((initial_chars - final_chars) / initial_chars) * 100
         
-    logger.info(f"Diet Complete for {path.name}")
+    logger.info(f"Diet Complete for {db.filepath.name}")
     logger.info(f"   Before: {initial_chars:,} chars")
     logger.info(f"   After:  {final_chars:,} chars")
     logger.info(f"   Reduction: {reduction:.1f}%")
@@ -67,7 +58,7 @@ def reduce_file(filepath):
 
 def run():
     logger.info("Starting Token Diet Procedure...")
-    reduce_file("jobs_database.json")
+    reduce_db(JobDatabase(config.JOBS_DATABASE_PATH))
     logger.info("Token Diet Complete. Ready for efficient analysis.")
 
 if __name__ == "__main__":

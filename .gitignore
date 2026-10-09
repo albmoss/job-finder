@@ -9,6 +9,8 @@ __pycache__/
 *.log
 
 # Duze pliki generowane - odtwarzalne przez scrapery
+jobs.db
+jobs.db-*
 jobs_database.json
 analyzed_jobs_waterfall.json
 ranked_jobs.json

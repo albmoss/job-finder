@@ -3,12 +3,14 @@ Modele danych: oferta, ocena dopasowania, baza ofert, stan scraperów.
 """
 
 from dataclasses import dataclass, fields as dc_fields
+from pathlib import Path
 from typing import Optional
 import json
 import re
 import threading
 from utils.safe_io import save_json_atomic
 from utils.offer_fields import STRUCTURED_FIELDS
+from utils.sqlite_store import RecordStore
 
 # Zaślepka, którą scraper zapisuje, gdy portal nie oddał treści ogłoszenia:
 # „Oferta z JustJoinIT: Tytuł”, „Oferta z OLX (kategoria: …)”. Jedna linia, sam tytuł.
@@ -108,32 +110,29 @@ class JobMatch:
     match_percentage: Optional[int] = None
 
 
+LEGACY_JOBS_JSON = "jobs_database.json"
+
+
+def job_key(record: dict) -> str:
+    from utils.links import canonical_link
+    return canonical_link(record.get("link") or "")
+
+
 class JobDatabase:
     """
-    Prosta baza ofert trzymana w pliku JSON.
+    Baza ofert w pliku SQLite (`utils/sqlite_store.py`): wiersz na ofertę, klucz to
+    kanoniczny link, treść to rekord `Job.to_dict()` w JSON.
 
-    Trzyma wczytaną zawartość w pamięci razem z indeksem po kanonicznym linku.
-    Powód: `main_scraper` woła `record_scrape` po każdym z 14 źródeł, a plik ma
-    ~27 MB - poprzednia wersja parsowała go i budowała indeks od nowa przy
-    każdym wywołaniu. Cache jest unieważniany, gdy plik zmieni się pod spodem
-    (inny proces, ręczna edycja), więc nie da się nim nadpisać cudzych zmian.
+    Zapis dotyka tylko zmienionych wierszy. Cache wczytanej listy jest ważny, dopóki
+    licznik zmian bazy (`meta.rev`) się nie przesunie, więc inny proces nie zostanie nadpisany.
     """
 
-    def __init__(self, filepath: str):
-        self.filepath = filepath
+    def __init__(self, filepath):
+        self.filepath = Path(filepath)
+        self._store = RecordStore(self.filepath, self.filepath.with_name(LEGACY_JOBS_JSON), job_key)
         self._jobs = None
         self._by_link = None
-        self._stamp = None
-
-    # --- cache ---------------------------------------------------------------
-
-    def _file_stamp(self):
-        import os
-        try:
-            st = os.stat(self.filepath)
-            return (st.st_mtime_ns, st.st_size)
-        except FileNotFoundError:
-            return None
+        self._rev = None
 
     def _index(self) -> dict:
         """Mapa kanoniczny link -> Job dla aktualnie wczytanej listy."""
@@ -142,38 +141,59 @@ class JobDatabase:
             self._by_link = {canonical_link(job.link): job for job in self._jobs}
         return self._by_link
 
-    # --- odczyt/zapis --------------------------------------------------------
+    def revision(self) -> int:
+        return self._store.revision()
+
+    def count(self) -> int:
+        return self._store.count()
+
+    def backup(self):
+        return self._store.backup()
 
     def load_jobs(self) -> list[Job]:
-        if self._jobs is not None and self._stamp == self._file_stamp():
+        if self._jobs is not None and self._rev == self._store.revision():
             return self._jobs
-
-        try:
-            with open(self.filepath, 'r', encoding='utf-8') as f:
-                jobs_data = json.load(f)
-            self._jobs = [Job.from_dict(d) for d in jobs_data]
-        except FileNotFoundError:
-            self._jobs = []
-
+        records = self._store.load()
+        self._jobs = [Job.from_dict(r) for r in records.values()]
         self._by_link = None
-        self._stamp = self._file_stamp()
+        self._rev = self._store.rev
         return self._jobs
 
-    def save_jobs(self, jobs: list[Job]):
-        """Zapis atomowy - przerwany zapis nie zostawia obciętego pliku."""
+    def load_records(self) -> list[dict]:
+        return list(self._store.load().values())
+
+    def save_records(self, records) -> tuple[int, int]:
+        by_key = {}
+        for record in records:
+            key = job_key(record)
+            if key:
+                by_key[key] = record
+        result = self._store.sync(by_key)
+        self._jobs = None
+        self._by_link = None
+        return result
+
+    def put_jobs(self, jobs: list[Job]) -> None:
         from datetime import datetime
-        from utils.safe_io import save_json_atomic
 
         now = datetime.now().isoformat()
+        rows = {}
         for job in jobs:
-            if not job.scraped_at:
-                job.scraped_at = now
-
-        save_json_atomic(self.filepath, [job.to_dict() for job in jobs], indent=2)
-
-        self._jobs = jobs
+            job.scraped_at = job.scraped_at or now
+            record = job.to_dict()
+            key = job_key(record)
+            if key:
+                rows[key] = record
+        self._store.put(rows)
+        self._jobs = None
         self._by_link = None
-        self._stamp = self._file_stamp()
+
+    def delete_links(self, links) -> int:
+        from utils.links import canonical_link
+        removed = self._store.delete({canonical_link(link) for link in links if link})
+        self._jobs = None
+        self._by_link = None
+        return removed
 
     # --- operacje ------------------------------------------------------------
 
@@ -196,9 +216,8 @@ class JobDatabase:
 
         Jeden zapis na źródło, nie dwa. Scrapery zwracają OBIE rzeczy naraz -
         pobrane oferty i linki, których stron celowo nie pobierały, bo już je
-        mamy (`skip_known_details`, 60-90% listingu). Osobne przebiegi po
-        jednym i po drugim przepisywały plik ~27 MB dwa razy na każde z 14
-        źródeł, a i tak kończyły się tym samym stanem.
+        mamy (`skip_known_details`, 60-90% listingu). Zapis obejmuje tylko
+        dopisane i odświeżone wiersze.
 
         Istniejące rekordy NIE są nadpisywane (od tego jest --refresh);
         uzupełniamy tylko daty i cechy, których poprzedni przebieg nie znał,
@@ -213,7 +232,7 @@ class JobDatabase:
         by_link = self._index()
         now = datetime.now().isoformat()
 
-        added, touched = [], 0
+        added, touched, changed = [], 0, {}
 
         for job in new_jobs:
             link = canonical_link(job.link)
@@ -224,6 +243,7 @@ class JobDatabase:
                 job.last_seen = job.last_seen or now
                 added.append(job)
                 by_link[link] = job
+                changed[link] = job
                 continue
 
             # Ofertę pobraną ponownie liczymy jako zobaczoną - inaczej źródło,
@@ -231,6 +251,7 @@ class JobDatabase:
             # śladu i zapis zostałby pominięty razem z uzupełnionymi datami.
             self._mark_seen(known, now)
             touched += 1
+            changed[link] = known
             # Uzupełnij daty i cechy, których poprzedni przebieg nie znał, a ten zna
             if job.posted_date and not known.posted_date:
                 known.posted_date = job.posted_date
@@ -247,16 +268,19 @@ class JobDatabase:
                     setattr(known, name, value)
 
         for link in seen_again:
-            job = by_link.get(canonical_link(link)) if link else None
+            key = canonical_link(link) if link else None
+            job = by_link.get(key) if key else None
             if job is None:
                 continue
             self._mark_seen(job, now)
             touched += 1
+            changed[key] = job
 
-        if added or touched:
-            # save_jobs zeruje indeks, a mamy go już aktualnego - odtwarzamy po zapisie
-            self.save_jobs(jobs + added)
+        if changed:
+            self._store.put({key: job.to_dict() for key, job in changed.items()})
+            self._jobs = jobs + added
             self._by_link = by_link
+            self._rev = self._store.rev
 
         return len(added), touched
 

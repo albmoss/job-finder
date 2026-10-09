@@ -150,7 +150,10 @@ goes in `GEMINI_MODELS`, `OPENAI_MODELS` or `ANTHROPIC_MODELS`, comma-separated.
   list, so only clear mismatches are dropped there.
 - **Stopping is safe.** A stop lands between stages or between scored offers; saved scores
   are never redone.
-- **The database is JSON files** with atomic writes and backup rotation. Postgres is the
-  obvious next step.
+- **The database is SQLite.** Offers live in `jobs.db` and each candidate's scores in
+  `candidates/<id>/match_results.db`, one row per offer, so a write touches only the rows
+  that changed. Decisions stay in a JSON file with atomic writes and backup rotation. An
+  older `jobs_database.json` or `match_results.json` is imported on first start. Postgres
+  is the obvious next step.
 - **Personal data stays local.** Keys live in `.env`; each candidate's CV, profile, CV
   versions, scores and decisions live in `candidates/`, which is gitignored.

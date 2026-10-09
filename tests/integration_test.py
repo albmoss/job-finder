@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import config
 from utils import candidates
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
@@ -28,6 +29,7 @@ from utils.text_cleaner import clean_job_description, strip_html
 ROOT = Path(__file__).parent.parent
 PASSED, FAILED = [], []
 candidates.ROOT = Path(tempfile.mkdtemp(prefix="test_candidates_")) / "candidates"
+config.JOBS_DATABASE_PATH = candidates.ROOT.parent / "jobs.db"
 
 
 def check(name, condition, detail=""):
@@ -200,7 +202,7 @@ def test_record_scrape():
     from utils.data_models import Job, JobDatabase
 
     tmp = Path(tempfile.mkdtemp(prefix="test_record_scrape_"))
-    path = tmp / "jobs.json"
+    path = tmp / "jobs.db"
 
     def job(link, **kw):
         return Job(title="Tytuł", company="Firma", link=link,
@@ -208,7 +210,7 @@ def test_record_scrape():
                    source="test", **kw)
 
     def on_disk():
-        return load_json_safe(path, default=[])
+        return JobDatabase(str(path)).load_records()
 
     try:
         db = JobDatabase(str(path))
@@ -274,6 +276,24 @@ def test_record_scrape():
             kl.reset_cache()
         check("offers with a placeholder are not known, so scrapers fetch them again",
               "https://a.pl/5" not in known and "https://a.pl/4" in known, sorted(known))
+
+        fresh = JobDatabase(str(path))
+        records = fresh.load_records()
+        records[0]["title"] = "Zmieniony tytuł"
+        check("saving the list rewrites only the changed row",
+              fresh.save_records(records) == (1, 0))
+        check("a record missing from the saved list is deleted",
+              fresh.save_records(records[1:]) == (0, 1) and len(on_disk()) == len(records) - 1)
+
+        legacy_dir = tmp / "legacy"
+        legacy_dir.mkdir()
+        (legacy_dir / "jobs_database.json").write_text(json.dumps([
+            job("https://b.pl/1").to_dict(), job("https://b.pl/2?utm_source=x").to_dict()]), encoding="utf-8")
+        imported = JobDatabase(str(legacy_dir / "jobs.db")).load_jobs()
+        check("the old JSON database is imported once and moved to backups",
+              len(imported) == 2 and not (legacy_dir / "jobs_database.json").exists()
+              and (legacy_dir / "backups" / "jobs_database.json.pre_sqlite.bak").exists(),
+              str([j.link for j in imported]))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -364,62 +384,50 @@ def test_scraper_health():
 
 def test_idempotent_writes():
     """
-    Etapy bazodanowe nie przepisują pliku, gdy nie mają czego zmienić.
+    Etapy bazodanowe nie zmieniają bazy, gdy nie mają czego zmienić.
 
-    Przed poprawką `clean_db`, `migrate_normalize_links` i `deduplicate_db`
-    zapisywały oba pliki (63,7 MB) razem z kopią zapasową przy KAŻDYM
-    przebiegu, także wtedy, gdy liczba zmian wynosiła zero - czyli ~380 MB
-    ruchu na dysku po to, żeby odtworzyć pliki bajt w bajt.
+    W wersji na plikach JSON `clean_db`, `migrate_normalize_links` i `deduplicate_db`
+    przepisywały 63,7 MB z kopią przy każdym przebiegu, także przy zerze zmian.
     """
     print("\n[9] Zapis tylko przy realnej zmianie")
     import clean_db
     import deduplicate_db
     import migrate_normalize_links as migrate
+    from utils.data_models import JobDatabase
 
     tmp = Path(tempfile.mkdtemp(prefix="test_idempotent_"))
-    path = tmp / "jobs.json"
-    bdir = tmp / "backups"
+    path = tmp / "jobs.db"
+    db = JobDatabase(str(path))
 
-    def kopie():
-        return len(list(bdir.glob(f"{path.name}.*.bak"))) if bdir.exists() else 0
-
-    # Rekordy już czyste i już znormalizowane - nie ma czego poprawiać.
     czyste = [{"link": "https://a.pl/of/1", "title": "A", "company": "F",
                "location": "Warszawa", "description": "Opis oferty bez smieci."},
               {"link": "https://a.pl/of/2", "title": "B", "company": "G",
                "location": "Kraków", "description": "Drugi opis, tez czysty."}]
+    stara_baza = config.JOBS_DATABASE_PATH
     try:
-        save_json_atomic(path, czyste)
-        przed = kopie()
+        config.JOBS_DATABASE_PATH = path
+        db.save_records(czyste)
+        przed = db.revision()
 
-        clean_db.reduce_file(path)
-        check("clean_db nie przepisuje juz czystego pliku", kopie() == przed,
-              f"kopii przybylo: {kopie() - przed}")
+        clean_db.reduce_db(db)
+        check("clean_db nie zmienia juz czystej bazy", db.revision() == przed)
 
-        stare_jobs = migrate.JOBS_DB
-        migrate.JOBS_DB = str(path)
-        try:
-            migrate.migrate_jobs()
-        finally:
-            migrate.JOBS_DB = stare_jobs
-        check("migrate nie przepisuje znormalizowanych linkow", kopie() == przed,
-              f"kopii przybylo: {kopie() - przed}")
+        migrate.migrate_jobs()
+        check("migrate nie zmienia znormalizowanych linkow", db.revision() == przed)
 
         keep = {canonical_link(j["link"]) for j in czyste}
-        deduplicate_db._apply(path, keep, {}, set())
-        check("deduplicate nie przepisuje pliku bez duplikatow", kopie() == przed,
-              f"kopii przybylo: {kopie() - przed}")
+        deduplicate_db._apply(db, keep, {}, set())
+        check("deduplicate nie zmienia bazy bez duplikatow", db.revision() == przed)
 
-        # A gdy zmiana JEST, zapis ma nastąpić.
-        brudne = list(czyste) + [{"link": "https://a.pl/of/1?utm_source=x", "title": "A",
-                                  "company": "F", "location": "Warszawa",
-                                  "description": "Duplikat tej samej oferty."}]
-        save_json_atomic(path, brudne)
-        przed = kopie()
-        deduplicate_db._apply(path, keep, {}, set())
-        check("deduplicate zapisuje, gdy duplikat faktycznie jest", kopie() > przed)
-        check("duplikat zniknal z pliku", len(load_json_safe(path, default=[])) == 2)
+        duplikat = {"link": "https://b.pl/of/9", "title": "A", "company": "F",
+                    "location": "Warszawa", "description": "Ta sama oferta na innym portalu."}
+        db.save_records(czyste + [duplikat])
+        przed = db.revision()
+        deduplicate_db._apply(db, keep, {}, set())
+        check("deduplicate usuwa duplikat z bazy",
+              db.revision() > przed and sorted(r["link"] for r in db.load_records()) == sorted(keep))
     finally:
+        config.JOBS_DATABASE_PATH = stara_baza
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -1360,14 +1368,14 @@ def test_external_data_change_automatic_invalidation():
     temp_dir = tempfile.mkdtemp(prefix="test_auto_inval_")
     temp_path = Path(temp_dir)
 
-    t_jobs = temp_path / "jobs_database.json"
+    from utils.data_models import JobDatabase
+    t_jobs = temp_path / "jobs.db"
 
     orig_jobs = app_services.JOBS_DATABASE_PATH
     orig_root = candidates.ROOT
 
     app_services.JOBS_DATABASE_PATH = t_jobs
     candidates.ROOT = temp_path / "candidates"
-    t_matches = candidates.path(candidates.MATCH_RESULTS)
     t_decisions = candidates.path(candidates.DECISIONS)
     try:
         # Initial disk state: 1 job, 1 match, 0 decisions
@@ -1375,8 +1383,8 @@ def test_external_data_change_automatic_invalidation():
                 "description": "Python backend microservices experience required over 20 chars", "source": "Test"}
         match1 = {"percent": 88, "reason": "Good Python fit"}
 
-        t_jobs.write_text(json.dumps([job1], ensure_ascii=False), encoding="utf-8")
-        t_matches.write_text(json.dumps({job1["link"]: match1}, ensure_ascii=False), encoding="utf-8")
+        JobDatabase(str(t_jobs)).save_records([job1])
+        candidates.match_results().put({job1["link"]: match1})
         t_decisions.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
 
         client = TestClient(server.app, base_url="http://127.0.0.1:8501")
@@ -1394,8 +1402,8 @@ def test_external_data_change_automatic_invalidation():
                 "description": "React TypeScript full stack role over 20 chars", "source": "Test"}
         match2 = {"percent": 94, "reason": "High React fit"}
 
-        t_jobs.write_text(json.dumps([job1, job2], ensure_ascii=False), encoding="utf-8")
-        t_matches.write_text(json.dumps({job1["link"]: match1, job2["link"]: match2}, ensure_ascii=False), encoding="utf-8")
+        JobDatabase(str(t_jobs)).save_records([job1, job2])
+        candidates.match_results().put({job2["link"]: match2})
 
         # 3. Next consumer poll without manual reload: observes updated 2 offers automatically
         res2 = client.get("/api/offers?tab=Dopasowane", headers={"host": "127.0.0.1:8501"})
@@ -1626,11 +1634,10 @@ def test_offer_api_contract():
 
     temp_path = Path(tempfile.mkdtemp(prefix="test_offer_api_"))
     orig_jobs, orig_root = app_services.JOBS_DATABASE_PATH, candidates.ROOT
-    app_services.JOBS_DATABASE_PATH = temp_path / "jobs_database.json"
+    app_services.JOBS_DATABASE_PATH = temp_path / "jobs.db"
     candidates.ROOT = temp_path / "candidates"
+    from utils.data_models import JobDatabase
     paths = {
-        "JOBS_DATABASE_PATH": app_services.JOBS_DATABASE_PATH,
-        "MATCH_RESULTS_PATH": candidates.path(candidates.MATCH_RESULTS),
         "USER_DECISIONS_PATH": candidates.path(candidates.DECISIONS),
         "LAST_SCRAPE_RUN_PATH": candidates.path(candidates.LAST_SCRAPE_RUN),
     }
@@ -1653,8 +1660,8 @@ def test_offer_api_contract():
     }
     decisions = {jobs[0]["link"]: "save", jobs[2]["link"]: "reject",
                  jobs[3]["link"]: {"status": "rated", "rating": 7}}
-    paths["JOBS_DATABASE_PATH"].write_text(json.dumps(jobs), encoding="utf-8")
-    paths["MATCH_RESULTS_PATH"].write_text(json.dumps(matches), encoding="utf-8")
+    JobDatabase(str(app_services.JOBS_DATABASE_PATH)).save_records(jobs)
+    candidates.match_results().put(matches)
     paths["USER_DECISIONS_PATH"].write_text(json.dumps(decisions), encoding="utf-8")
     paths["LAST_SCRAPE_RUN_PATH"].write_text(json.dumps({"started_at": "2026-09-20T19:00:00"}), encoding="utf-8")
 
@@ -1950,9 +1957,11 @@ def test_candidates():
     import server
     from utils import cv_profile
     from utils.cv_profile import profile_fingerprint
+    from utils.data_models import JobDatabase
 
     temp_path = Path(tempfile.mkdtemp(prefix="test_candidates_flow_"))
-    orig_jobs, orig_root, old_cwd = app_services.JOBS_DATABASE_PATH, candidates.ROOT, os.getcwd()
+    orig_jobs, orig_config_jobs, orig_root = app_services.JOBS_DATABASE_PATH, config.JOBS_DATABASE_PATH, candidates.ROOT
+    db_path = temp_path / "jobs.db"
     cv = "Analityk danych. SQL, Python, raporty dla zarządu. Warszawa."
     profile = {"city": "Warszawa", "seniority": "junior", "years_experience": 1.0, "skills": ["SQL"],
                "languages": [{"name": "polish", "level": "C2"}], "roles": ["Analityk"],
@@ -1971,13 +1980,17 @@ def test_candidates():
     (temp_path / "match_results.json").write_text(json.dumps({jobs[0]["link"]: {"percent": 81}}), encoding="utf-8")
 
     try:
-        app_services.JOBS_DATABASE_PATH = temp_path / "jobs_database.json"
+        app_services.JOBS_DATABASE_PATH = config.JOBS_DATABASE_PATH = db_path
         candidates.ROOT = temp_path / "candidates"
         listing = candidates.listing()
         check("existing single-user data becomes the first candidate",
               listing["active"] == "k1" and listing["items"][0]["has_cv"]
               and (candidates.ROOT / "k1" / "user_decisions.json").exists()
               and not (temp_path / "user_decisions.json").exists(), listing)
+        check("old JSON scores and offers are imported into SQLite",
+              candidates.match_results().load() == {jobs[0]["link"]: {"percent": 81}}
+              and len(JobDatabase(str(db_path)).load_records()) == 3
+              and not (candidates.ROOT / "k1" / "match_results.json").exists())
 
         client = TestClient(server.app, base_url="http://127.0.0.1:8501")
         app_services.job_data_service.reload()
@@ -2002,10 +2015,9 @@ def test_candidates():
 
         (candidates.ROOT / "k1" / "user_decisions.json").write_text(
             json.dumps({jobs[0]["link"]: "save", jobs[2]["link"]: "reject"}), encoding="utf-8")
-        os.chdir(temp_path)
         with redirect_stdout(io.StringIO()):
             purge_stale_offers.main()
-        kept = [j["link"] for j in load_json_safe(temp_path / "jobs_database.json", default=[])]
+        kept = [j["link"] for j in JobDatabase(str(db_path)).load_records()]
         check("a stale offer decided by an inactive candidate survives the purge",
               jobs[2]["link"] in kept and jobs[0]["link"] in kept, kept)
 
@@ -2024,12 +2036,11 @@ def test_candidates():
         check("after a manual rename the CV name no longer overrides it",
               candidates.listing()["items"][0]["name"] == "Ania")
 
-        results_path = candidates.path(candidates.MATCH_RESULTS)
-        loaded = {j.link: j for j in matching_run.JobDatabase(str(temp_path / "jobs_database.json")).load_jobs()}
+        loaded = {j.link: j for j in JobDatabase(str(db_path)).load_jobs()}
         old_fp = profile_fingerprint(profile)
-        results_path.write_text(json.dumps({jobs[0]["link"]: {
+        candidates.match_results().sync({jobs[0]["link"]: {
             "percent": 81, "filtered": None, "answers": {}, "offer_fp": matching_run.offer_fingerprint(loaded[jobs[0]["link"]]),
-            "profile_fp": old_fp, "model": "m", "scored_at": "2026-09-20T10:00:00"}}), encoding="utf-8")
+            "profile_fp": old_fp, "model": "m", "scored_at": "2026-09-20T10:00:00"}})
         changed = dict(profile, skills=["SQL", "Power BI"])
         candidates.path(candidates.PROFILE).write_text(json.dumps(changed), encoding="utf-8")
 
@@ -2040,13 +2051,13 @@ def test_candidates():
             return {link: 1.0 for link, _ in items}, 0, 0, False
 
         with patch.object(matching_run.jev, "api_key", return_value="test"), \
-             patch.object(matching_run, "JOBS_PATH", temp_path / "jobs_database.json"), \
+             patch.object(matching_run, "JOBS_PATH", db_path), \
              patch.object(matching_run.triage, "triage", fake_triage), \
              patch.object(matching_run.jev, "ask", return_value={"answers": {}, "model": "m"}), \
              patch.object(matching_run.jev, "percent", return_value=55), \
              redirect_stdout(io.StringIO()):
             code = matching_run.main([])
-        after = json.loads(results_path.read_text(encoding="utf-8"))
+        after = candidates.match_results().load()
         check("after a CV change only unscored offers go to Jev",
               code == 0 and sorted(asked) == sorted([jobs[1]["link"], jobs[2]["link"]]), asked)
         check("the offer scored with the previous CV keeps its score and profile",
@@ -2059,8 +2070,7 @@ def test_candidates():
         check("deleting an inactive candidate removes its data",
               [c["id"] for c in removed["items"]] == ["k1"] and not (candidates.ROOT / "k2").exists())
     finally:
-        os.chdir(old_cwd)
-        app_services.JOBS_DATABASE_PATH = orig_jobs
+        app_services.JOBS_DATABASE_PATH, config.JOBS_DATABASE_PATH = orig_jobs, orig_config_jobs
         candidates.ROOT = orig_root
         app_services.job_data_service.reload()
         shutil.rmtree(temp_path, ignore_errors=True)

@@ -33,10 +33,6 @@ def decisions_path() -> Path:
     return candidates.path(candidates.DECISIONS)
 
 
-def match_results_path() -> Path:
-    return candidates.path(candidates.MATCH_RESULTS)
-
-
 OFFER_TABS = ("Dopasowane", "Ukryte", "Zapisane")
 SAVED_STATUSES = frozenset({"save", "aspirational"})
 HIDDEN_STATUSES = frozenset({"reject"})
@@ -181,7 +177,7 @@ class JobDataService:
         self.user_decisions: Dict[str, Any] = {}
         self.data_loaded = False
         self._rev = 0
-        self._signatures: Dict[str, Optional[Tuple[str, Optional[int], Optional[int]]]] = {
+        self._signatures: Dict[str, Any] = {
             "decisions": None,
             "matches": None,
             "jobs": None,
@@ -207,10 +203,11 @@ class JobDataService:
     def ensure_loaded(self, force=False):
         with self._lock:
             dec_path = decisions_path()
-            mat_path = match_results_path()
+            mat_store = candidates.match_results()
+            jobs_db = JobDatabase(str(JOBS_DATABASE_PATH))
             sig_dec = _file_signature(dec_path)
-            sig_mat = _file_signature(mat_path)
-            sig_jobs = _file_signature(JOBS_DATABASE_PATH)
+            sig_mat = (str(mat_store.path), mat_store.revision())
+            sig_jobs = (str(jobs_db.filepath), jobs_db.revision())
 
             if (
                 self.data_loaded
@@ -232,30 +229,23 @@ class JobDataService:
                 self._signatures["decisions"] = sig_dec
             # 2. Match results
             if needs_mat:
-                match_results = {}
-                if mat_path.exists():
-                    try:
-                        data = load_json_safe(mat_path, default={})
-                        if isinstance(data, dict):
-                            match_results = data
-                    except Exception as e:
-                        logger.error(f"Błąd ładowania match_results.json: {e}")
-                self.match_results = match_results
+                try:
+                    self.match_results = mat_store.load()
+                except Exception as e:
+                    logger.error(f"Błąd ładowania wyników dopasowania: {e}")
+                    self.match_results = {}
                 self._signatures["matches"] = sig_mat
             # 3. Raw jobs from JobDatabase
             if needs_jobs:
                 raw_jobs = []
-                if JOBS_DATABASE_PATH.exists():
-                    try:
-                        db = JobDatabase(str(JOBS_DATABASE_PATH))
-                        all_jobs = db.load_jobs()
-                        seen_raw = set()
-                        for j in all_jobs:
-                            if j.link not in seen_raw:
-                                raw_jobs.append(j)
-                                seen_raw.add(j.link)
-                    except Exception as e:
-                        logger.error(f"Błąd ładowania bazy surowej: {e}")
+                try:
+                    seen_raw = set()
+                    for j in jobs_db.load_jobs():
+                        if j.link not in seen_raw:
+                            raw_jobs.append(j)
+                            seen_raw.add(j.link)
+                except Exception as e:
+                    logger.error(f"Błąd ładowania bazy surowej: {e}")
                 self.raw_jobs = raw_jobs
                 self._signatures["jobs"] = sig_jobs
             if needs_mat or needs_jobs:
@@ -1017,11 +1007,7 @@ def save_manual_job(data: Dict[str, Any]) -> Tuple[bool, str]:
         return False, "Tytuł, firma i link są wymagane."
 
     try:
-        db = JobDatabase(str(JOBS_DATABASE_PATH))
-        target = canonical_link(job.link)
-        jobs = [j for j in db.load_jobs() if j.link != job.link and canonical_link(j.link) != target]
-        jobs.append(job)
-        db.save_jobs(jobs)
+        JobDatabase(str(JOBS_DATABASE_PATH)).put_jobs([job])
 
         # Update in-memory
         existing = job_data_service.job_lookup.get(job.link)
