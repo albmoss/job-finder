@@ -336,6 +336,14 @@
   stroke-width: 1.75;
 }
 
+.ap-card-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 17px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .ap-editor {
   display: flex;
   flex-direction: column;

@@ -10,6 +10,7 @@ import {
   FileText,
   LoaderCircle,
   Plus,
+  Send,
 } from 'lucide-react';
 import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
@@ -345,8 +346,8 @@ function SavedDetail({ item, onMarkSent, onNoteSaved }: SavedDetailProps) {
 
       <div className="sv-actions">
         <button type="button" className="btn" onClick={() => onMarkSent(item)}>
-          <Check />
-          Oznacz jako wysłane
+          <Send />
+          Wysłane
         </button>
         <a className="btn btn-primary" href={item.link} target="_blank" rel="noreferrer">
           <ArrowUpRight />

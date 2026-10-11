@@ -3,7 +3,6 @@ import {
   ArrowUpRight,
   Bookmark,
   BookmarkCheck,
-  Check,
   Download,
   Ellipsis,
   FilePenLine,
@@ -11,6 +10,7 @@ import {
   Link,
   LoaderCircle,
   RotateCcw,
+  Send,
   Sparkles,
   X,
 } from 'lucide-react';
@@ -206,8 +206,8 @@ export function MatchedDetail({
           </button>
         )}
         <button type="button" className="btn" disabled={busy} onClick={onMarkSent}>
-          <Check />
-          Oznacz jako wysłane
+          <Send />
+          Wysłane
         </button>
         {!hidden && (
           <button type="button" className="btn" disabled={busy} onClick={onHide}>

@@ -4,22 +4,20 @@ import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { formatDayLong } from '../format';
 import { CompanyLogo } from '../screens/offer/CompanyLogo';
-import { STAGES } from '../stages';
-import type { DecisionStatus, OfferDetail, Stage } from '../types';
+import type { DecisionStatus, OfferDetail } from '../types';
 import { Modal } from './Modal';
 
 export interface MarkSentState {
   offer: OfferDetail;
   /** Status sprzed oznaczenia; „Cofnij oznaczenie” go przywraca. */
   previousStatus: DecisionStatus | null;
-  cvVersionId: string | undefined;
   onChange?: (offer: OfferDetail) => void;
 }
 
 export function MarkSentModal({ state, onClose }: { state: MarkSentState; onClose: () => void }) {
   const { toast, bumpData } = useApp();
-  const { offer, previousStatus, cvVersionId, onChange } = state;
-  const [stage, setStage] = useState<Stage>(offer.stage ?? 'apply');
+  const { offer, previousStatus, onChange } = state;
+  const [note, setNote] = useState(offer.note);
   const [label, setLabel] = useState(offer.next_step?.label ?? '');
   const [due, setDue] = useState(offer.next_step?.due?.slice(0, 10) ?? '');
   const [busy, setBusy] = useState(false);
@@ -35,8 +33,8 @@ export function MarkSentModal({ state, onClose }: { state: MarkSentState; onClos
     setBusy(true);
     try {
       let updated = offer;
-      if (stage !== (offer.stage ?? 'apply')) {
-        updated = (await api.updateDecision(offer.link, 'apply', stage, cvVersionId)).offer;
+      if (note.trim() !== offer.note) {
+        updated = (await api.saveNote(offer.link, note.trim())).offer;
       }
       const prevLabel = offer.next_step?.label ?? '';
       const prevDue = offer.next_step?.due?.slice(0, 10) ?? '';
@@ -91,25 +89,18 @@ export function MarkSentModal({ state, onClose }: { state: MarkSentState; onClos
       </div>
 
       <section className="ms-section">
-        <span id="ms-stage-label" className="ms-section-label">
-          Etap rekrutacji
-        </span>
-        <div className="ms-stages" role="radiogroup" aria-labelledby="ms-stage-label">
-          {STAGES.map(({ id, label: stageLabel, icon: Icon }) => (
-            <button
-              key={id}
-              type="button"
-              role="radio"
-              aria-checked={stage === id}
-              className="ms-stage"
-              disabled={busy}
-              onClick={() => setStage(id)}
-            >
-              <Icon />
-              {stageLabel}
-            </button>
-          ))}
-        </div>
+        <label className="ms-section-label" htmlFor="ms-note">
+          Notatka
+          <span className="ms-optional">opcjonalnie</span>
+        </label>
+        <textarea
+          id="ms-note"
+          className="field ms-note"
+          value={note}
+          placeholder="Np. wysłane przez formularz, odpowiedź do dwóch tygodni"
+          disabled={busy}
+          onChange={(e) => setNote(e.target.value)}
+        />
       </section>
 
       <section className="ms-section">

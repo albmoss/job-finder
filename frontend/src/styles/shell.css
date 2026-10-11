@@ -206,56 +206,12 @@
   color: var(--faint);
 }
 
-.ms-stages {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 2px;
-  padding: 3px;
-  border-radius: 14px;
-  outline: 1px solid rgba(255, 255, 255, 0.09);
-  outline-offset: -0.5px;
-  background: rgba(255, 255, 255, 0.028);
-}
-
-.ms-stage {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-width: 0;
-  height: 36px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 11px;
-  background: none;
-  color: var(--muted);
+.ms-section textarea.ms-note {
+  min-height: 80px;
+  height: 80px;
+  resize: vertical;
   font-size: 13px;
-  white-space: nowrap;
-  transition:
-    background-color 150ms ease,
-    color 150ms ease;
-}
-
-.ms-stage svg {
-  flex: none;
-  width: 15px;
-  height: 15px;
-  stroke-width: 1.75;
-}
-
-.ms-stage:hover:not(:disabled) {
-  color: var(--ink);
-}
-
-.ms-stage[aria-checked='true'] {
-  outline: 1px solid rgba(255, 255, 255, 0.137);
-  outline-offset: -0.5px;
-  background: rgba(255, 255, 255, 0.094);
-  color: var(--ink);
-}
-
-.ms-stage:disabled {
-  cursor: default;
+  line-height: 18px;
 }
 
 .ms-next {

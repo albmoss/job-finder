@@ -198,7 +198,7 @@ export function App() {
           bumpData();
           opts.onChange?.(detail);
         }
-        setMarkSent({ offer: detail, previousStatus, cvVersionId: readyCv?.id, onChange: opts.onChange });
+        setMarkSent({ offer: detail, previousStatus, onChange: opts.onChange });
       } catch (err) {
         toast(`Nie udało się oznaczyć: ${errorMessage(err)}`, { icon: TriangleAlert });
       }

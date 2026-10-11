@@ -464,6 +464,7 @@ function ApplicationCard(props: ApplicationCardProps) {
               )}
             </p>
           )}
+          {!editing && item.note && <p className="ap-card-note">{item.note}</p>}
         </div>
       )}
     </article>
