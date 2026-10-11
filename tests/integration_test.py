@@ -266,6 +266,10 @@ def test_record_scrape():
         import utils.known_links as kl
         db.record_scrape([Job(title="Tytuł", company="Firma", link="https://a.pl/5",
                               description="Oferta z OLX (kategoria: sprzedaz)", source="test")])
+        db.record_scrape([job("https://a.pl/7", also_on=[
+            {"source": "test", "link": "https://a.pl/7-krakow"},
+            {"source": "inny", "link": "https://b.pl/7"},
+        ])])
         real_path = config.JOBS_DATABASE_PATH
         try:
             config.JOBS_DATABASE_PATH = path
@@ -276,6 +280,14 @@ def test_record_scrape():
             kl.reset_cache()
         check("offers with a placeholder are not known, so scrapers fetch them again",
               "https://a.pl/5" not in known and "https://a.pl/4" in known, sorted(known))
+        check("links merged into also_on are known, so their pages are not fetched again",
+              {"https://a.pl/7-krakow", "https://b.pl/7"} <= known, sorted(known))
+
+        rows = len(on_disk())
+        _, touched = JobDatabase(str(path)).record_scrape([], ["https://a.pl/7-krakow", "https://b.pl/7"])
+        rec = [r for r in on_disk() if r["link"] == "https://a.pl/7"][0]
+        check("a same-portal alias refreshes the kept offer, another portal's alias does not",
+              touched == 1 and len(on_disk()) == rows and rec["times_seen"] == 2, f"{touched}, {rec['times_seen']}")
 
         fresh = JobDatabase(str(path))
         records = fresh.load_records()
@@ -429,6 +441,44 @@ def test_idempotent_writes():
     finally:
         config.JOBS_DATABASE_PATH = stara_baza
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_dedup_winner_and_years():
+    print("\n[9b] Dedup keeps the assessed record; company age is not a requirement")
+    import deduplicate_db
+    from utils.offer_fields import years_from_text
+
+    stary = {"link": "https://a.pl/x", "title": "Analityk", "company": "Acme", "location": "Warszawa",
+             "source": "A", "description": "Opis " * 60,
+             "also_on": [{"source": "B", "link": "https://b.pl/x"}]}
+    nowy = {"link": "https://c.pl/x", "title": "Analityk", "company": "Acme", "location": "Warszawa",
+            "source": "C", "description": "Dłuższy opis " * 60}
+    jobs = {"https://a.pl/x": stary, "https://c.pl/x": nowy}
+    keep, provenance, _ = deduplicate_db._plan(jobs, set(), frozenset({"https://a.pl/x"}))
+    check("an already assessed duplicate stays the kept record", keep == {"https://a.pl/x"}, keep)
+    check("without an assessment the longer description wins",
+          deduplicate_db._plan(jobs, set())[0] == {"https://c.pl/x"})
+
+    przegrany = dict(nowy, also_on=[{"source": "D", "link": "https://d.pl/x"}])
+    keep, provenance, _ = deduplicate_db._plan({"https://a.pl/x": stary, "https://c.pl/x": przegrany},
+                                               set(), frozenset({"https://a.pl/x"}))
+    zwyciezca = dict(stary)
+    deduplicate_db._merge_provenance(zwyciezca, provenance["https://a.pl/x"])
+    check("aliases of the dropped record move to the kept one",
+          {e["link"] for e in zwyciezca["also_on"]} == {"https://b.pl/x", "https://c.pl/x", "https://d.pl/x"},
+          zwyciezca["also_on"])
+
+    for text, expected in [
+        ("Andersen is a global software development company with over 18 years of experience.", None),
+        ("Nad wszystkim czuwa nasz CTO, który ma 20 lat doświadczenia w programowaniu.", None),
+        ("Doświadczenie: aktywność na rynku od 2018 roku.", None),
+        ("Zatrudnimy pana w wieku 19-25 lat z doświadczeniem.", None),
+        ("Masz minimum 3 lata doświadczenia w sprzedaży.", 3),
+        ("5+ years of experience as a functional consultant.", 5),
+        ("We are open to all experience levels, ranging from 2 years to over 10 years.", 2),
+    ]:
+        check(f"years from text: {text[:40]}", years_from_text(text) == expected, years_from_text(text))
+
 
 
 def test_olx_tempo_przy_blokadzie():
@@ -1127,6 +1177,46 @@ def test_category_fallback():
     path.unlink(missing_ok=True)
 
 
+def test_scope_rejects():
+    print("\n[14e] Offers out of scope are not fetched again on the next run")
+    from unittest.mock import patch
+    from scrapers.gowork_scraper import GoWorkScraper
+    from utils import scope_rejects
+    from utils.data_models import Job
+
+    tmp = Path(tempfile.mkdtemp(prefix="test_scope_rejects_"))
+    fetched = []
+
+    def make():
+        scraper = object.__new__(GoWorkScraper)
+        scraper.location_filter, scraper.skip_senior, scraper.skip_known_details = "warszawa", False, False
+        scraper.seen_again_links, scraper.listing_complete = [], False
+        scraper._collect_links = lambda: ["https://gw.pl/1", "https://gw.pl/2"]
+        scraper._in_scope = lambda job, posting: job.link.endswith("/1")
+        def detail(link):
+            fetched.append(link)
+            return Job(title="T", company="F", link=link, description="Opis", source="GoWork.pl"), {}
+        scraper._fetch_detail = detail
+        return scraper
+
+    try:
+        with patch.object(scope_rejects, "PATH", tmp / "scope_rejects.json"):
+            first = make().run()
+            fetched.clear()
+            second = make().run()
+            check("an out-of-scope page is fetched once, then skipped",
+                  [j.link for j in first] == ["https://gw.pl/1"] and fetched == ["https://gw.pl/1"]
+                  and [j.link for j in second] == ["https://gw.pl/1"], fetched)
+            forced = make()
+            forced.force = True
+            fetched.clear()
+            forced.run()
+            check("--force fetches rejected pages again", sorted(fetched) == ["https://gw.pl/1", "https://gw.pl/2"], fetched)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+
 def test_windows_process_safety():
     print("\n[17] Windows process identity and child management")
     from pipeline_manager import _get_process_creation_time, _is_pid_alive
@@ -1309,11 +1399,13 @@ def test_pipeline_stop_and_resume_lifecycle():
 
         mgr_fa = PipelineProcessManager()
         fa_cmd = [sys.executable, "-c", "import sys; sys.exit(1)"]
-        ok_fa, _ = mgr_fa.start_pipeline(mode="full", cmd=fa_cmd)
+        ok_fa, _ = mgr_fa.start_pipeline(mode="standalone", cmd=fa_cmd, stage="phase3")
         if mgr_fa._thread:
             mgr_fa._thread.join(timeout=3.0)
         fa_state = mgr_fa.get_state()
-        check("standalone exit code 1 marked as failed", fa_state.get("status") == "failed")
+        check("standalone exit code 1 marked as failed",
+              ok_fa is True and fa_state.get("status") == "failed"
+              and next(s for s in fa_state["stages"] if s["id"] == "phase3")["status"] == "failed")
 
     finally:
         for p in patches:
@@ -2084,10 +2176,10 @@ def main():
     for test in (test_canonical_link, test_text_cleaning,
                  test_safe_io, test_llm_providers,
                  test_record_scrape, test_scraper_health,
-                 test_idempotent_writes, test_olx_tempo_przy_blokadzie,
+                 test_idempotent_writes, test_dedup_winner_and_years, test_olx_tempo_przy_blokadzie,
                  test_zdjete_z_portalu, test_sprawdzenie_ofert, test_olx_fetch_rownolegly,
                  test_olx_opis_z_listingu, test_pipeline_final_status, test_stop_during_scraping,
-                 test_listing_completeness, test_category_fallback,
+                 test_listing_completeness, test_category_fallback, test_scope_rejects,
                  test_windows_process_safety,
                  test_pipeline_stop_and_resume_lifecycle,
                  test_http_security_and_dns_rebinding_protection,

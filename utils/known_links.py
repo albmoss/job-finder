@@ -42,6 +42,10 @@ def _load():
             stored.add(link)
             if not is_placeholder_description(record.get("description")):
                 described.add(link)
+                for entry in record.get("also_on") or ():
+                    alias = entry.get("link") if isinstance(entry, dict) else None
+                    if alias:
+                        described.add(canonical_link(alias))
     except Exception as e:
         # Pusty zbiór = scrapery pobiorą wszystko. Wolniej, ale poprawnie.
         logger.warning(f"Could not read the known links ({e}) - fetching every offer")

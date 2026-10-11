@@ -64,16 +64,18 @@ export function MatchedScreen({ route }: ScreenProps) {
   const selectedRef = useRef(selectedLink);
   selectedRef.current = selectedLink;
 
+  const pageSizeRef = useRef<number | null>(null);
   useLayoutEffect(() => {
     const el = cardsRef.current;
     if (!el) return;
     const measure = () => {
       const fits = Math.floor((el.clientHeight - PAGER_SPACE + CARD_GAP) / (CARD_HEIGHT + CARD_GAP));
-      setPageSize((prev) => {
-        const next = Math.max(3, fits);
-        if (prev !== null && prev !== next) setPage((p) => Math.floor(((p - 1) * prev) / next) + 1);
-        return next;
-      });
+      const next = Math.max(3, fits);
+      const prev = pageSizeRef.current;
+      if (prev === next) return;
+      pageSizeRef.current = next;
+      if (prev !== null) setPage((p) => Math.floor(((p - 1) * prev) / next) + 1);
+      setPageSize(next);
     };
     measure();
     const observer = new ResizeObserver(measure);

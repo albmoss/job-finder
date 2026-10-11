@@ -13,6 +13,7 @@ from base64 import b64encode
 
 import requests
 
+from utils import stop
 from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
 from utils.offer_fields import (
@@ -146,7 +147,7 @@ class CareerjetAPIScraper:
             page = 1
             max_pages = 10
             
-            while page <= max_pages:
+            while page <= max_pages and not stop.requested():
                 data = self._fetch_page(keywords, page)
                 jobs_data = data.get("jobs", data.get("results", []))
                 

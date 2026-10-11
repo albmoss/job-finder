@@ -13,6 +13,7 @@ from typing import List
 
 import requests
 
+from utils import stop
 from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
 from utils.offer_fields import (
@@ -144,7 +145,7 @@ class AdzunaAPIScraper:
         page = 1
         max_pages = 20  # Bezpiecznik - twardy limit stron
 
-        while page <= max_pages:
+        while page <= max_pages and not stop.requested():
             data = self._fetch_page(page)
             results = data.get("results", [])
             

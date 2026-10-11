@@ -207,11 +207,15 @@ def main(argv: list[str] | None = None) -> int:
                     if "klucz" in str(e):
                         stopped = True
                     continue
-                results[link] = unsaved[link] = {
+                fresh = {
                     "percent": jev.percent(reply["answers"]), "filtered": None,
                     "answers": reply["answers"], "offer_fp": fp, "profile_fp": profile_fp,
                     "model": reply.get("model"), "scored_at": datetime.now().isoformat(timespec="seconds"),
                 }
+                mark = (results.get(link) or {}).get("triage")
+                if mark:
+                    fresh["triage"] = mark
+                results[link] = unsaved[link] = fresh
                 done += 1
                 if len(unsaved) >= SAVE_EVERY:
                     store.put(unsaved)

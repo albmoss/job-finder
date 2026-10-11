@@ -91,12 +91,15 @@ class RecordStore:
             self.rev = conn.execute("SELECT value FROM meta WHERE name = 'rev'").fetchone()[0]
         return self.rev
 
-    def load(self) -> dict[str, dict]:
+    def load_raw(self) -> dict[str, str]:
         with closing(self._connect()) as conn:
             rows = conn.execute("SELECT key, data FROM records ORDER BY rowid").fetchall()
             self.rev = conn.execute("SELECT value FROM meta WHERE name = 'rev'").fetchone()[0]
         self._raw = dict(rows)
-        return {key: json.loads(text) for key, text in rows}
+        return dict(self._raw)
+
+    def load(self) -> dict[str, dict]:
+        return {key: json.loads(text) for key, text in self.load_raw().items()}
 
     def keys(self) -> list[str]:
         with closing(self._connect()) as conn:

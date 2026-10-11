@@ -515,6 +515,7 @@ class NoFluffScraper(BaseScraper):
                 except Exception as e:
                     logger.warning(f"NFJ API: Failed to parse posting {slug}: {e}")
 
+            self.enrich_stats = {"ok": fetched, "error": limit - fetched, "blocked": 0}
             logger.info(f"NoFluffJobs: fetched {fetched}/{limit} descriptions"
                         + (f" | limit portalu: {self.throttled}x" if self.throttled else ""))
             telemetry.emit("source_details", name=self.get_source_name(), done=limit, total=limit)

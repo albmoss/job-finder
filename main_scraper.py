@@ -125,16 +125,16 @@ def run_all_scrapers(only=None, force=False, refresh=False):
     
     # === Etap 1: scrapery API - szybkie, bez przeglądarki ===
     api_scrapers = [
-        SolidJobsAPIScraper(scraper_config),  # publiczne API - bez klucza
-        PracujOptimizedScraper(scraper_config),  # HTTP + __NEXT_DATA__
-        NoFluffScraper(scraper_config),  # wewnętrzne API
-        JustJoinScraper(scraper_config),  # candidate-api
-        RocketJobsScraper(scraper_config),        # 🚀 candidate-api (był browser + 0 ofert)
-        PracaPlScraper(scraper_config),           # 📄 ld+json - portal ogólny
-        AplikujScraper(scraper_config),           # 📄 ld+json - dużo entry-level
         GoWorkScraper(scraper_config),            # 📄 ld+json - dużo entry-level
-        ATSFeedsScraper(scraper_config),          # 🏢 publiczne feedy ATS firm
+        AplikujScraper(scraper_config),           # 📄 ld+json - dużo entry-level
+        RocketJobsScraper(scraper_config),        # 🚀 candidate-api (był browser + 0 ofert)
+        PracujOptimizedScraper(scraper_config),  # HTTP + __NEXT_DATA__
+        PracaPlScraper(scraper_config),           # 📄 ld+json - portal ogólny
+        JustJoinScraper(scraper_config),  # candidate-api
         LinkedInScraper(scraper_config),          # publiczne punkty końcowe gościa (HTTP)
+        NoFluffScraper(scraper_config),  # wewnętrzne API
+        SolidJobsAPIScraper(scraper_config),  # publiczne API - bez klucza
+        ATSFeedsScraper(scraper_config),          # 🏢 publiczne feedy ATS firm
     ]
 
     # Scrapery wymagające kluczy API - dołączane tylko gdy klucz jest ustawiony,

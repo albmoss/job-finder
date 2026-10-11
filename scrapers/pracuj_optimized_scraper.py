@@ -259,6 +259,7 @@ class PracujOptimizedScraper:
                                 "Pracuj.pl: HTTP 429 on offer pages - stopping detail fetch "
                                 "and falling back to listing summaries"
                             )
+                            telemetry.emit("throttled", name=self.get_source_name())
                     return ""
 
                 if e.code == 429:
@@ -640,7 +641,7 @@ class PracujOptimizedScraper:
 
         with ThreadPoolExecutor(max_workers=self.detail_threads) as executor:
             for done, (link, detail) in enumerate(executor.map(_fetch_one_detail, links_to_fetch), 1):
-                if done % self.PROGRESS_EVERY == 0 and done < total:
+                if done % self.PROGRESS_EVERY == 0 and done < total and not self._detail_aborted:
                     rate = done / max(time.monotonic() - started, 1e-6)
                     logger.info(
                         f"{self.get_source_name()}: {done}/{total} descriptions - "

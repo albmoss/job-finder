@@ -65,8 +65,8 @@ def clear_checkpoint():
         pass
 
 
-def _phase(name, fn, critical=False):
-    """Uruchom etap; niekrytyczny błąd nie zatrzymuje pipeline'u."""
+def _phase(name, fn):
+    """Uruchom etap; błąd daje False, a przebieg kończy się na nim z PIPELINE INCOMPLETE."""
     logger.info(f"── {name}")
     try:
         result = fn()
@@ -78,8 +78,6 @@ def _phase(name, fn, critical=False):
         return True
     except Exception as e:
         logger.error(f"{name} failed: {e}")
-        if critical:
-            raise
         return False
 
 
@@ -139,7 +137,7 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
     # so any existing token represents an immediate user stop request for this run.
     phase_results = {}
 
-    def _execute_stage(stage_id, stage_name, fn, critical=False):
+    def _execute_stage(stage_id, stage_name, fn):
         if stop.requested():
             logger.info(f"Stop requested before {stage_name} - halting.")
             save_checkpoint(completed_stages, options, current_stage=stage_id, stopped=True)
@@ -152,11 +150,7 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
             return True, False
 
         telemetry.emit("stage", id=stage_id, state="running")
-        try:
-            ok = _phase(stage_name, fn, critical=critical)
-        except Exception:
-            telemetry.emit("stage", id=stage_id, state="failed")
-            raise
+        ok = _phase(stage_name, fn)
         phase_results[stage_name] = ok
         stopped = stop.requested()
         if ok and not stopped:
@@ -221,7 +215,6 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
             "phase1",
             "PHASE 1: Scrape sources",
             _scrape,
-            critical=True,
         )
         if not ok:
             return _finish(phase_results, stopped=stopped)

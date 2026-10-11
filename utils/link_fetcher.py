@@ -19,6 +19,9 @@ def extract_job_info_from_url(url: str) -> Dict[str, str]:
     """
     import random
     import json
+
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        raise ValueError("Adres oferty musi zaczynać się od http:// albo https://")
     
     result = {
         "title": "",

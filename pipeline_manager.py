@@ -601,19 +601,20 @@ class PipelineProcessManager:
         return self._exit_code
 
     def _sync_state_to_disk(self, force=False):
-        now = time.time()
-        if not force and (now - self._last_disk_sync) < 0.35:
-            # Odroczony zapis: inaczej ostatnia linia przed dłuższą ciszą (np. start scrapera
-            # albo wolne zapytanie do Jev) nie trafia na dysk, a stamtąd czyta go serwer.
-            if self._pending_sync is None:
-                self._pending_sync = threading.Timer(0.4, self._flush_pending_sync)
-                self._pending_sync.daemon = True
-                self._pending_sync.start()
-            return
-        pending, self._pending_sync = self._pending_sync, None
-        if pending is not None:
-            pending.cancel()
-        self._last_disk_sync = now
+        with self._lock:
+            now = time.time()
+            if not force and (now - self._last_disk_sync) < 0.35:
+                # Odroczony zapis: inaczej ostatnia linia przed dłuższą ciszą (np. start scrapera
+                # albo wolne zapytanie do Jev) nie trafia na dysk, a stamtąd czyta go serwer.
+                if self._pending_sync is None:
+                    self._pending_sync = threading.Timer(0.4, self._flush_pending_sync)
+                    self._pending_sync.daemon = True
+                    self._pending_sync.start()
+                return
+            pending, self._pending_sync = self._pending_sync, None
+            if pending is not None:
+                pending.cancel()
+            self._last_disk_sync = now
         try:
             with self._lock:
                 state = {

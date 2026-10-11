@@ -344,8 +344,18 @@ _NO_EXPERIENCE_RE = re.compile(
 )
 _YEARS_RE = re.compile(
     r"(?:min(?:imum|\.)?|co najmniej|at least|od|powyzej|ponad|over)?\s*"
-    r"(?P<low>\d{1,2})(?:\s*(?:-|–|do|to)\s*(?P<high>\d{1,2}))?\s*\+?\s*"
+    r"(?<!\d)(?P<low>\d{1,2})(?:\s*(?:-|–|do|to)\s*(?P<high>\d{1,2}))?\s*\+?\s*"
     r"(?:lat[a]?|rok(?:u|i)?|years?|yrs?)\b"
+)
+_AGE_RE = re.compile(r"(?:w wieku|wiek\w*|ukonczon\w*|pelnolet\w*|aged?)\s*(?:od\s*)?$")
+_ABOUT_COMPANY_RE = re.compile(
+    r"\b(?:eksper(?:ci|tow|tami)|experts|nasz\w*|na rynku|on the market|cto|ceo|realizujac\w*"
+    r"|dzialamy|istniejemy|laczymy|zrealizowal\w*)\b"
+    r"|\bcompany\b.*\b(?:over|more than|ponad)\s+\d"
+)
+_CANDIDATE_RE = re.compile(
+    r"\b(?:masz|posiadasz|you|your|wymag\w*|required|requirements?|must|kandydat\w*|candidate"
+    r"|minimum|min|co najmniej|at least|oczekuj\w*|szukamy|poszukujemy)\b"
 )
 
 
@@ -366,7 +376,11 @@ def years_from_text(text: str | None) -> int | None:
     for sentence in re.split(r"[.\n;•·●▪]+", folded):
         if "doswiadcz" not in sentence and "experience" not in sentence and "stazu pracy" not in sentence:
             continue
+        if _ABOUT_COMPANY_RE.search(sentence) and not _CANDIDATE_RE.search(sentence):
+            continue
         for match in _YEARS_RE.finditer(sentence):
+            if _AGE_RE.search(sentence[max(0, match.start("low") - 20):match.start("low")]):
+                continue
             years = int(match.group("low"))
             if 0 < years <= 20:
                 best = years if best is None else min(best, years)

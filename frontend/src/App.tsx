@@ -38,9 +38,28 @@ export function App() {
 
   const bumpData = useCallback(() => setDataVersion((v) => v + 1), []);
 
+  const pipelineText = useRef('');
+  const applyPipeline = useCallback((next: PipelineState) => {
+    const text = JSON.stringify(next);
+    if (text === pipelineText.current) return;
+    pipelineText.current = text;
+    setPipeline(next);
+  }, []);
+
+  const summaryText = useRef('');
+  const applySummary = useCallback((next: RunSummary | null) => {
+    const text = next ? JSON.stringify(next) : '';
+    if (next && text === summaryText.current) return;
+    summaryText.current = text;
+    setRunSummary(next);
+  }, []);
+
+  const cvRequest = useRef(0);
   const loadCv = useCallback(async () => {
+    const request = ++cvRequest.current;
     try {
       const info = await api.getCV();
+      if (request !== cvRequest.current) return null;
       setCv(info);
       return info;
     } catch {
@@ -76,13 +95,18 @@ export function App() {
     return info;
   }, [loadCv, refreshCandidates]);
 
+  const summaryInFlight = useRef(false);
   const refreshRunSummary = useCallback(async () => {
+    if (summaryInFlight.current) return;
+    summaryInFlight.current = true;
     try {
-      setRunSummary(await api.getRunSummary());
+      applySummary(await api.getRunSummary());
     } catch {
-      setRunSummary(null);
+      applySummary(null);
+    } finally {
+      summaryInFlight.current = false;
     }
-  }, []);
+  }, [applySummary]);
 
   useEffect(() => {
     refreshCv();
@@ -91,23 +115,35 @@ export function App() {
   useEffect(() => {
     let timer = 0;
     let cancelled = false;
+    let inFlight = false;
     const tick = async () => {
+      window.clearTimeout(timer);
+      if (inFlight) return;
+      inFlight = true;
       let next: PipelineState | null = null;
       try {
         next = await api.getPipelineState();
       } catch {
         next = null;
       }
+      inFlight = false;
       if (cancelled) return;
-      if (next) setPipeline(next);
-      timer = window.setTimeout(tick, isBusy(next) ? POLL_BUSY_MS : POLL_IDLE_MS);
+      if (next) applyPipeline(next);
+      if (document.visibilityState === 'visible') {
+        timer = window.setTimeout(tick, isBusy(next) ? POLL_BUSY_MS : POLL_IDLE_MS);
+      }
     };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     tick();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, []);
+  }, [applyPipeline]);
 
   const watchSummary = pipelineBusy || route.name === 'postep';
   useEffect(() => {
@@ -132,7 +168,7 @@ export function App() {
         const finished = pipeline;
         api.getRunSummary().then(
           (summary) => {
-            setRunSummary(summary);
+            applySummary(summary);
             setRunDone({ pipeline: finished, summary });
           },
           () => setRunDone({ pipeline: finished, summary: null }),
@@ -142,7 +178,7 @@ export function App() {
       }
     }
     wasBusy.current = busy;
-  }, [pipeline, bumpData, refreshCv, toast]);
+  }, [pipeline, bumpData, refreshCv, toast, applySummary]);
 
   const cvMissing = cv !== null && !cv.ready;
   useEffect(() => {
@@ -152,8 +188,8 @@ export function App() {
   const startSearch = useCallback(async () => {
     try {
       const res = await api.startPipeline('full');
-      setPipeline(res.state);
-      setRunSummary(null);
+      applyPipeline(res.state);
+      applySummary(null);
       setRunDone(null);
       navigate(paths.progress);
       return true;
@@ -161,15 +197,15 @@ export function App() {
       toast(`Nie udało się uruchomić wyszukiwania: ${errorMessage(err)}`, { icon: TriangleAlert });
       return false;
     }
-  }, [toast]);
+  }, [toast, applyPipeline, applySummary]);
 
   const stopSearch = useCallback(async () => {
     try {
-      setPipeline((await api.stopPipeline()).state);
+      applyPipeline((await api.stopPipeline()).state);
     } catch (err) {
       toast(`Nie udało się zatrzymać: ${errorMessage(err)}`, { icon: TriangleAlert });
     }
-  }, [toast]);
+  }, [toast, applyPipeline]);
 
   const openLaunch = useCallback(() => {
     if (pipelineBusy) navigate(paths.progress);

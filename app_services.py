@@ -6,6 +6,7 @@ Niezależna warstwa usługowa dla backendu HTTP.
 from datetime import date, datetime
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -181,9 +182,15 @@ class JobDataService:
             "decisions": None,
             "matches": None,
             "jobs": None,
+            "liveness": None,
         }
         self._decisions_path: Optional[Path] = None
         self._matched_cache: Dict[str, Tuple[int, List[Tuple[Job, Dict[str, Any]]]]] = {}
+        self._derived_cache: Dict[str, Tuple[Any, Any]] = {}
+        self._match_rows: Dict[str, Tuple[int, int]] = {}
+        self._jobs_rows: Dict[str, Tuple[int, int]] = {}
+        self._jobs_by_key: Dict[str, Job] = {}
+        self._zdjete_base: Set[str] = set()
 
     def fresh_since(self) -> Optional[str]:
         """Start ostatniego pobierania (ISO, czas lokalny) albo None, gdy nigdy nie zapisany."""
@@ -230,22 +237,34 @@ class JobDataService:
             # 2. Match results
             if needs_mat:
                 try:
-                    self.match_results = mat_store.load()
+                    old_rows, old = self._match_rows, self.match_results
+                    rows, results = {}, {}
+                    for k, text in mat_store.load_raw().items():
+                        row = rows[k] = (len(text), hash(text))
+                        results[k] = old[k] if old_rows.get(k) == row and k in old else json.loads(text)
+                    self.match_results, self._match_rows = results, rows
                 except Exception as e:
                     logger.error(f"Błąd ładowania wyników dopasowania: {e}")
-                    self.match_results = {}
+                    self.match_results, self._match_rows = {}, {}
                 self._signatures["matches"] = sig_mat
             # 3. Raw jobs from JobDatabase
             if needs_jobs:
                 raw_jobs = []
                 try:
+                    old_rows, old = self._jobs_rows, self._jobs_by_key
+                    rows, by_key = {}, {}
                     seen_raw = set()
-                    for j in jobs_db.load_jobs():
+                    for k, text in jobs_db.raw_records().items():
+                        row = rows[k] = (len(text), hash(text))
+                        j = old.get(k) if old_rows.get(k) == row else None
+                        j = by_key[k] = j or Job.from_dict(json.loads(text))
                         if j.link not in seen_raw:
                             raw_jobs.append(j)
                             seen_raw.add(j.link)
+                    self._jobs_rows, self._jobs_by_key = rows, by_key
                 except Exception as e:
                     logger.error(f"Błąd ładowania bazy surowej: {e}")
+                    self._jobs_rows, self._jobs_by_key = {}, {}
                 self.raw_jobs = raw_jobs
                 self._signatures["jobs"] = sig_jobs
             if needs_mat or needs_jobs:
@@ -290,13 +309,17 @@ class JobDataService:
                 self.filtered_count = filtered_count
                 self.pending_count = pending_count
 
-                try:
-                    self.zdjete = zdjete_z_portalu(self.raw_jobs, ScraperStatusManager().load_status())
-                    self.zdjete |= wygasle(self.raw_jobs, date.today().isoformat())
-                except Exception as e:
-                    logger.warning(f"Błąd wykrywania ofert zdjętych: {e}")
-                    self.zdjete = set()
-                self.zdjete |= self._zdjete_linki(zdjete_ze_sprawdzen())
+                status_mgr = ScraperStatusManager()
+                sig_live = (sig_jobs, _file_signature(Path(status_mgr.filepath)), date.today().isoformat())
+                if sig_live != self._signatures["liveness"]:
+                    try:
+                        self._zdjete_base = zdjete_z_portalu(self.raw_jobs, status_mgr.load_status())
+                        self._zdjete_base |= wygasle(self.raw_jobs, date.today().isoformat())
+                    except Exception as e:
+                        logger.warning(f"Błąd wykrywania ofert zdjętych: {e}")
+                        self._zdjete_base = set()
+                    self._signatures["liveness"] = sig_live
+                self.zdjete = self._zdjete_base | self._zdjete_linki(zdjete_ze_sprawdzen())
             self.data_loaded = True
             self._rev += 1
 
@@ -527,7 +550,26 @@ class JobDataService:
     def hidden_count(self) -> int:
         with self._lock:
             self.ensure_loaded()
-            return len(self.ws_collect("Ukryte"))
+            cached = self._derived_cache.get("hidden")
+            if cached and cached[0] == self._rev:
+                return cached[1]
+            count = len(self.ws_collect("Ukryte"))
+            self._derived_cache["hidden"] = (self._rev, count)
+            return count
+
+    def fresh_count(self, items: List[Tuple[Job, Dict[str, Any]]], fresh_since: Optional[str],
+                    cache_key: Optional[str] = None) -> int:
+        if not fresh_since:
+            return 0
+        with self._lock:
+            stamp = (self._rev, fresh_since)
+            cached = self._derived_cache.get(cache_key) if cache_key else None
+            if cached and cached[0] == stamp:
+                return cached[1]
+            count = sum(1 for job, _ in items if (job.scraped_at or "") >= fresh_since)
+            if cache_key:
+                self._derived_cache[cache_key] = (stamp, count)
+            return count
 
     def list_item(self, job: Job, rec: Dict[str, Any], fresh_since: Optional[str]) -> Dict[str, Any]:
         status = rec["status"]

@@ -524,6 +524,7 @@ class CandidateAPIScraper(BaseScraper):
                     if d:
                         details[slug] = d
 
+            self.enrich_stats = {"ok": len(details), "error": len(to_detail) - len(details), "blocked": 0}
             rate = len(details) / len(to_detail) if to_detail else 0
             msg = (f"{self.SOURCE_NAME}: pobrano {len(details)}/{len(to_detail)} pełnych opisów "
                    f"({rate:.0%})")

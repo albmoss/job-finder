@@ -288,13 +288,19 @@ function CvEntry({ offer }: { offer: OfferDetail }) {
 
   useEffect(() => {
     if (!running) return;
+    let alive = true;
     const timer = window.setInterval(() => {
       api
         .listCvVersions(offer.link)
-        .then((res) => setVersions(res.items))
+        .then((res) => {
+          if (alive) setVersions(res.items);
+        })
         .catch(() => undefined);
     }, 2000);
-    return () => window.clearInterval(timer);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
   }, [running, offer.link]);
 
   let subtitle = 'Osobna wersja. Bazowe CV zostaje bez zmian.';

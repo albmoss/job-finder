@@ -22,6 +22,7 @@ benchmark_results.json
 scraper_status.json
 waterfall_state.json
 olx_category_state.json
+scope_rejects.json
 last_scrape_run.json
 pipeline_run_state.json
 pipeline_checkpoint.json

@@ -212,6 +212,7 @@ class LinkedInScraper:
         jobs: List[Job] = []
         seen_links = set()
         known = known_links() if not getattr(self, "force", False) else set()
+        self.enrich_stats = {"ok": 0, "error": 0, "blocked": 0}
 
         city = scope_city(default="Warszawa")
         levels = scope_levels()
@@ -221,8 +222,9 @@ class LinkedInScraper:
         start = 0
         step = 10
         empty_pages = 0
+        collected = 0
 
-        while len(jobs) < self.max_offers and empty_pages < 2 and not stop.requested():
+        while collected < self.max_offers and empty_pages < 2 and not stop.requested():
             search_url = self.build_search_url(start=start)
             logger.debug(f"LinkedIn: fetching search page start={start}")
 
@@ -275,31 +277,20 @@ class LinkedInScraper:
                     # Wykryj tryb pracy z lokalizacji lub tytułu
                     work_modes = norm_work_modes(f"{loc} {title}")
 
-                    # Znane oferty: nie dociągamy opisu, oznaczamy last_seen
                     if link in known:
                         self.seen_again_links.append(link)
-                        job = Job(
-                            title=title,
-                            company=company,
-                            link=link,
-                            description=title,
-                            source=self.get_source_name(),
-                            location=loc,
-                            posted_date=posted_date,
-                            work_modes=work_modes,
-                            scraped_at=datetime.now().isoformat(),
-                            logo_url=logo,
-                        )
-                        jobs.append(job)
+                        collected += 1
                         page_found += 1
+                        if collected >= self.max_offers:
+                            break
                         continue
 
-                    # Nowe oferty: pobierz pełny opis i kryteria z endpointu szczegółów
                     detail_data = {}
                     if job_id:
                         detail_data = self._fetch_job_detail(job_id)
+                        self.enrich_stats["ok" if detail_data.get("description") else "error"] += 1
 
-                    desc = detail_data.get("description") or title
+                    desc = detail_data.get("description") or f"Oferta z LinkedIn: {title}"
                     work_modes = norm_work_modes(f"{loc} {title}") or norm_work_modes(desc[:500])
 
                     job = Job(
@@ -319,18 +310,19 @@ class LinkedInScraper:
                         logo_url=logo,
                     )
                     jobs.append(job)
+                    collected += 1
                     page_found += 1
-                    if len(jobs) >= self.max_offers:
+                    if collected >= self.max_offers:
                         break
 
-                logger.info(f"LinkedIn: processed start={start}, collected {page_found} jobs (total: {len(jobs)})")
+                logger.info(f"LinkedIn: processed start={start}, collected {page_found} jobs (total: {collected})")
                 start += step
 
             except Exception as e:
                 logger.error(f"LinkedIn: error scraping start={start}: {e}")
                 break
 
-        logger.info(f"LinkedIn: successfully collected {len(jobs)} jobs")
+        logger.info(f"LinkedIn: successfully collected {collected} jobs ({len(jobs)} new)")
         return jobs
 
     def run(self) -> List[Job]:

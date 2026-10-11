@@ -15,6 +15,7 @@ from typing import List
 import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils import stop
 from utils.candidate_scope import scope_city, scope_levels
 from utils.data_models import Job
 from utils.offer_fields import (
@@ -81,7 +82,8 @@ class JoobleAPIScraper:
                 resp.raise_for_status()
                 return resp.json()
             except requests.RequestException as e:
-                logger.warning(f"Jooble page {page} '{keywords}': attempt {attempt}/{retries} failed: {e}")
+                logger.warning(f"Jooble page {page} '{keywords}': attempt {attempt}/{retries} failed: "
+                               f"{str(e).replace(self.api_key, '***')}")
                 if attempt < retries:
                     time.sleep(2 ** attempt)
         return {}
@@ -138,7 +140,7 @@ class JoobleAPIScraper:
             page = 1
             max_pages = 10  # Bezpiecznik na każdy zestaw słów kluczowych
             
-            while page <= max_pages:
+            while page <= max_pages and not stop.requested():
                 data = self._fetch_page(keywords, page)
                 jobs_data = data.get("jobs", [])
                 

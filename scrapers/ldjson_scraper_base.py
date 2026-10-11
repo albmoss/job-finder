@@ -23,7 +23,7 @@ from typing import List, Optional
 
 import requests
 
-from utils import stop, telemetry
+from utils import scope_rejects, stop, telemetry
 from utils.data_models import Job
 from utils.links import canonical_link, logo_url
 from utils.text_cleaner import strip_html
@@ -131,6 +131,8 @@ class LdJsonPortalScraper:
         self._cooldown_until = 0.0
         self._interval = self.MIN_REQUEST_INTERVAL
         self._clean_streak = 0
+        self._floor = self.FLOOR_REQUEST_INTERVAL
+        self._ok_since_429 = 0
         self.liveness_scope = None
         self.listing_complete = False
 
@@ -164,23 +166,28 @@ class LdJsonPortalScraper:
             self._last_request_at = time.monotonic()
 
     def _note_ok(self):
-        """Czysta odpowiedź - po SPEEDUP_AFTER z rzędu przyspieszamy o 20%."""
+        """Czysta odpowiedź - po SPEEDUP_AFTER z rzędu przyspieszamy o 20%, nie poniżej tempa, przy którym padło 429."""
         with self._rate_lock:
-            if self._interval <= self.FLOOR_REQUEST_INTERVAL:
+            self._ok_since_429 += 1
+            if self._interval <= self._floor:
                 return
             self._clean_streak += 1
             if self._clean_streak >= self.SPEEDUP_AFTER:
                 self._clean_streak = 0
-                self._interval = max(self.FLOOR_REQUEST_INTERVAL, self._interval * 0.8)
+                self._interval = max(self._floor, self._interval * 0.8)
                 logger.info(f"{self.SOURCE_NAME}: no push-back - interval down to {self._interval:.2f}s")
 
     def _note_throttled(self, wait: float):
         """HTTP 429 - cooldown plus powrót do wolniejszego (a potem coraz wolniejszego) tempa."""
         with self._rate_lock:
             self._clean_streak = 0
+            if self._ok_since_429 >= self.SPEEDUP_AFTER:
+                self._floor = min(3.0, max(self._floor, self._interval * 1.25))
+            self._ok_since_429 = 0
             self._interval = min(3.0, max(self.MIN_REQUEST_INTERVAL, self._interval * 1.6))
             self._cooldown_until = max(self._cooldown_until, time.monotonic() + wait)
-            logger.warning(f"{self.SOURCE_NAME}: HTTP 429 - cooldown {wait:.0f}s, interval {self._interval:.2f}s")
+            logger.warning(f"{self.SOURCE_NAME}: HTTP 429 - cooldown {wait:.0f}s, interval {self._interval:.2f}s, "
+                           f"floor {self._floor:.2f}s")
         telemetry.emit("throttled", name=self.SOURCE_NAME)
 
     def _fetch(self, url: str, attempts: int = 3) -> Optional[str]:
@@ -496,13 +503,25 @@ class LdJsonPortalScraper:
                     f"by their URL slug (their pages are never fetched)"
                 )
 
+        reject_scope = f"{self.SOURCE_NAME}|{self.location_filter}|{int(bool(self.skip_senior))}"
+        if not getattr(self, "force", False):
+            rejected = scope_rejects.load(reject_scope)
+            before = len(links)
+            links = [l for l in links if l not in rejected]
+            if before != len(links):
+                logger.info(
+                    f"{self.SOURCE_NAME}: {before - len(links)} offers were out of scope in an earlier run "
+                    f"(their pages are skipped)"
+                )
+
         if not links:
             return []
 
-        jobs, no_ldjson, out_of_scope = [], 0, 0
+        jobs, no_ldjson, rejected_now = [], 0, []
         started = time.monotonic()
         with ThreadPoolExecutor(max_workers=self.DETAIL_THREADS) as executor:
-            for done, result in enumerate(executor.map(self._fetch_detail, links), 1):
+            results = zip(links, executor.map(self._fetch_detail, links))
+            for done, (link, result) in enumerate(results, 1):
                 if done % self.PROGRESS_EVERY == 0 and done < len(links):
                     rate = done / max(time.monotonic() - started, 1e-6)
                     logger.info(
@@ -515,9 +534,11 @@ class LdJsonPortalScraper:
                     continue
                 job, posting = result
                 if not self._in_scope(job, posting):
-                    out_of_scope += 1
+                    rejected_now.append(link)
                     continue
                 jobs.append(job)
+        scope_rejects.remember(reject_scope, rejected_now)
+        out_of_scope = len(rejected_now)
 
         # Liczby wejścia i wyjścia na INFO - cicha porażka to najgorszy rodzaj błędu
         logger.info(

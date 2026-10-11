@@ -134,10 +134,16 @@ class JobDatabase:
         self._rev = None
 
     def _index(self) -> dict:
-        """Mapa kanoniczny link -> Job dla aktualnie wczytanej listy."""
+        """Mapa kanoniczny link (także alias tego samego źródła z `also_on`) -> Job."""
         if self._by_link is None:
             from utils.links import canonical_link
-            self._by_link = {canonical_link(job.link): job for job in self._jobs}
+            index = {}
+            for job in self._jobs:
+                for entry in job.also_on or ():
+                    if isinstance(entry, dict) and entry.get("link") and entry.get("source") == job.source:
+                        index.setdefault(canonical_link(entry["link"]), job)
+            index.update({canonical_link(job.link): job for job in self._jobs})
+            self._by_link = index
         return self._by_link
 
     def revision(self) -> int:
@@ -160,6 +166,9 @@ class JobDatabase:
 
     def load_records(self) -> list[dict]:
         return list(self._store.load().values())
+
+    def raw_records(self) -> dict[str, str]:
+        return self._store.load_raw()
 
     def save_records(self, records) -> tuple[int, int]:
         by_key = {}
@@ -248,9 +257,11 @@ class JobDatabase:
             # Ofertę pobraną ponownie liczymy jako zobaczoną - inaczej źródło,
             # które oddało same znane oferty, nie zostawiłoby po sobie ŻADNEGO
             # śladu i zapis zostałby pominięty razem z uzupełnionymi datami.
-            self._mark_seen(known, now)
-            touched += 1
-            changed[link] = known
+            key = canonical_link(known.link)
+            if key not in changed:
+                self._mark_seen(known, now)
+                touched += 1
+            changed[key] = known
             # Uzupełnij daty i cechy, których poprzedni przebieg nie znał, a ten zna
             if job.posted_date and not known.posted_date:
                 known.posted_date = job.posted_date
@@ -267,9 +278,11 @@ class JobDatabase:
                     setattr(known, name, value)
 
         for link in seen_again:
-            key = canonical_link(link) if link else None
-            job = by_link.get(key) if key else None
+            job = by_link.get(canonical_link(link)) if link else None
             if job is None:
+                continue
+            key = canonical_link(job.link)
+            if key in changed:
                 continue
             self._mark_seen(job, now)
             touched += 1

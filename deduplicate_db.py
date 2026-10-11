@@ -38,7 +38,7 @@ import re
 
 import config
 from utils import candidates, telemetry
-from utils.data_models import JobDatabase
+from utils.data_models import JobDatabase, is_placeholder_description
 from utils.links import canonical_link
 
 logging.basicConfig(
@@ -188,7 +188,7 @@ def _merge_provenance(winner: dict, losers: list) -> bool:
     return True
 
 
-def _plan(all_jobs: dict, decided: set) -> tuple:
+def _plan(all_jobs: dict, decided: set, assessed: frozenset = frozenset()) -> tuple:
     """
     Zdecyduj RAZ dla wszystkich plików, kogo zostawiamy w każdej grupie.
 
@@ -234,6 +234,8 @@ def _plan(all_jobs: dict, decided: set) -> tuple:
         # Przy równych opisach zostaje wariant zdalny - obejmuje każde miasto.
         links.sort(key=lambda l: (
             0 if l in decided else 1,
+            1 if is_placeholder_description(all_jobs[l].get("description")) else 0,
+            0 if l in assessed else 1,
             -len(all_jobs[l].get("description") or ""),
             0 if normalize_city(all_jobs[l].get("location")) in _REMOTE else 1,
             l,
@@ -258,9 +260,7 @@ def _plan(all_jobs: dict, decided: set) -> tuple:
             stats["dropped"] += len(dropped)
             if len({all_jobs[l].get("source") for l in links}) > 1:
                 stats["cross"] += 1
-            provenance[keepers[0]] = [
-                {"source": all_jobs[l].get("source"), "link": l} for l in dropped
-            ]
+            provenance[keepers[0]] = [all_jobs[l] for l in dropped]
 
     return keep, provenance, stats
 
@@ -339,7 +339,7 @@ def run():
         if current is None or len(job.get("description") or "") > len(current.get("description") or ""):
             all_jobs[link] = job
 
-    keep, provenance, stats = _plan(all_jobs, decided)
+    keep, provenance, stats = _plan(all_jobs, decided, frozenset(candidates.assessed_links()))
     logger.info(
         f"Plan for {len(all_jobs)} unique offers: keeping {len(keep)}, "
         f"merged {stats['dropped']} in {stats['groups']} groups "

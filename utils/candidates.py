@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import re
 import shutil
 import threading
@@ -34,6 +35,7 @@ LEGACY_NAMES = (CV_PDF, CV_DOCX, CV_TEXT, PROFILE, LEGACY_MATCH_RESULTS, DECISIO
 NAME_MAX = 60
 
 _lock = threading.RLock()
+_cached: tuple | None = None
 
 
 class CandidateError(ValueError):
@@ -61,23 +63,40 @@ def _migrate(target: Path) -> None:
             shutil.move(str(src), str(target / item))
 
 
+def _signature(path: Path):
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
+
+
 def _index() -> dict:
+    global _cached
     with _lock:
-        index = load_json_safe(_index_path(), default=None)
+        path = _index_path()
+        sig = _signature(path)
+        if sig is not None and _cached is not None and _cached[0] == sig:
+            return copy.deepcopy(_cached[1])
+        index = load_json_safe(path, default=None)
         if _valid(index):
             if not any(c["id"] == index.get("active") for c in index["items"]):
                 index["active"] = index["items"][0]["id"]
+            _cached = (sig, copy.deepcopy(index))
             return index
         target = ROOT / FIRST_ID
         target.mkdir(parents=True, exist_ok=True)
         _migrate(target)
         index = {"active": FIRST_ID, "items": [{"id": FIRST_ID, "name": "Kandydat 1", "created_at": _now()}]}
-        save_json_atomic(_index_path(), index, backup=False)
+        _save(index)
         return index
 
 
 def _save(index: dict) -> None:
-    save_json_atomic(_index_path(), index, backup=False)
+    global _cached
+    with _lock:
+        save_json_atomic(_index_path(), index, backup=False)
+        _cached = None
 
 
 def active_id() -> str:
@@ -109,6 +128,14 @@ def decided_links() -> set[str]:
         decisions = load_json_safe(directory / DECISIONS, default={})
         if isinstance(decisions, dict):
             links |= {canonical_link(k) for k in decisions}
+    return links
+
+
+def assessed_links() -> set[str]:
+    links: set[str] = set()
+    for directory in dirs():
+        if (directory / MATCH_RESULTS).exists():
+            links |= {canonical_link(k) for k in match_results(directory).keys()}
     return links
 
 

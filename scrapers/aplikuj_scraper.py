@@ -167,6 +167,8 @@ class AplikujScraper(LdJsonPortalScraper):
             if len(ordered) >= self.max_offers or stop.requested():
                 break
             for page in range(1, self.max_pages + 1):
+                if stop.requested():
+                    break
                 url = self.build_category_url(cat, page)
                 html = self._fetch(url)
                 if not html:

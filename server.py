@@ -129,9 +129,8 @@ def api_offers(request: Request) -> JSONResponse:
     # Nowe = pierwszy raz zobaczone od startu ostatniego pobierania. Oba znaczniki to
     # isoformat czasu lokalnego, więc porównanie napisów = porównanie chwil.
     fresh_since = job_data_service.fresh_since()
-    fresh_count = (
-        sum(1 for job, _ in items if (job.scraped_at or "") >= fresh_since) if fresh_since else 0
-    )
+    fresh_count = job_data_service.fresh_count(
+        items, fresh_since, cache_key=None if search else f"fresh:{tab}:{sort}")
     rows = [job_data_service.list_item(job, rec, fresh_since) for job, rec in items[start : start + page_size]]
 
     return JSONResponse({
@@ -267,6 +266,8 @@ def api_tool_fetch_link(body: dict) -> JSONResponse:
     try:
         fetched = fetch_job_from_link(url)
         return JSONResponse({"ok": True, "data": fetched})
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         logger.error(f"Błąd pobierania oferty z linku {url}: {e}")
         return JSONResponse({"error": f"Nie udało się odczytać oferty ze wskazanego adresu: {e}"}, status_code=500)
