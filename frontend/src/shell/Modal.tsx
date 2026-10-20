@@ -20,7 +20,8 @@ export function Modal({ title, label, onClose, children, wide, closeButton = tru
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      const modals = document.querySelectorAll('.modal');
+      if (e.key === 'Escape' && ref.current === modals[modals.length - 1]) {
         e.preventDefault();
         closeRef.current();
       }

@@ -4,6 +4,7 @@ import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { formatDayLong, parseDate } from '../format';
 import type { Candidate } from '../types';
+import { useDismiss } from '../use_dismiss';
 import { SENIORITY_LABEL } from './LaunchModal';
 import { Modal } from './Modal';
 
@@ -40,21 +41,7 @@ export function CandidateMenu() {
   const [creating, setCreating] = useState(false);
   const anchorRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onPointer = (event: PointerEvent) => {
-      if (!anchorRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointer);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onPointer);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  useDismiss(open, () => setOpen(false), (target) => !!anchorRef.current?.contains(target));
 
   const active = candidates?.items.find((c) => c.id === candidates.active);
   if (!candidates || !active) return null;

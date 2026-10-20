@@ -21,9 +21,10 @@ BACKUP_DIR_NAME = "backups"
 DEFAULT_KEEP = 10
 
 # Bazy SQLite odtwarzalne przez pipeline (oferty, wyniki dopasowania) trzymają dwie
-# kopie (utils/sqlite_store.py). Pliki JSON - z user_decisions.json na czele -
-# trzymają pełne dziesięć, bo tych danych nie odtworzy nic.
+# kopie (utils/sqlite_store.py). Pliki JSON trzymają dziesięć, a user_decisions.json
+# dwadzieścia, bo tych danych nie odtworzy nic.
 REGENERABLE_KEEP = 2
+DECISIONS_KEEP = 20
 
 
 def _backup_dir(filepath: Path) -> Path:

@@ -37,8 +37,9 @@ class RecordStore:
         self._raw: Optional[dict[str, str]] = None
 
     def _connect(self) -> sqlite3.Connection:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         existed = self.path.exists()
+        if not existed:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path, timeout=60)
         conn.execute("PRAGMA busy_timeout = 60000")
         key = str(self.path.resolve())

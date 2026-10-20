@@ -53,7 +53,7 @@ const REASON_LABEL: Record<keyof PrefilterReasons, string> = {
 const n = (value: number) => countFormat.format(value);
 const rateFormat = new Intl.NumberFormat('pl-PL', { maximumFractionDigits: 1 });
 
-function subtitle(phase: Phase, pipeline: PipelineState, summary: RunSummary | null): string {
+function subtitle(phase: Phase, pipeline: PipelineState): string {
   switch (phase) {
     case 'profile':
       return 'Pierwszy krok, zanim ruszy pobieranie ofert.';
@@ -65,13 +65,8 @@ function subtitle(phase: Phase, pipeline: PipelineState, summary: RunSummary | n
       return 'Przesiew odrzuca oferty spoza Twojego profilu, resztę porównujemy z CV.';
     case 'failed':
       return pipeline.error_message ?? 'Przebieg zakończył się błędem.';
-    default: {
-      if (!summary) return '';
-      const compared = `${n(summary.checked)} ${plural(summary.checked, OFFERS)} ${plural(summary.checked, COMPARED)} z Twoim CV.`;
-      return summary.downloaded != null
-        ? `${n(summary.downloaded)} ${plural(summary.downloaded, OFFERS)} ${plural(summary.downloaded, DOWNLOADED)}, ${compared}`
-        : compared;
-    }
+    default:
+      return '';
   }
 }
 
@@ -111,7 +106,7 @@ export function ProgressScreen(_props: ScreenProps) {
   const phase = runPhase(pipeline, states);
   const running = RUNNING_PHASES.includes(phase);
   const stopping = pipeline.status === 'stopping';
-  const sub = subtitle(phase, pipeline, summary);
+  const sub = subtitle(phase, pipeline);
   const elapsed = elapsedSeconds(pipeline, now);
   const scoring = scoringProgress(pipeline);
   const sources = pipeline.telemetry?.sources ?? [];
@@ -144,10 +139,6 @@ export function ProgressScreen(_props: ScreenProps) {
           <div className="pg-stat">
             <dt>Nowe oferty</dt>
             <dd>{summary?.downloaded != null ? n(summary.downloaded) : '–'}</dd>
-          </div>
-          <div className="pg-stat">
-            <dt>Dopasowane</dt>
-            <dd>{summary ? n(summary.matched_count) : '–'}</dd>
           </div>
         </dl>
       </header>
@@ -204,14 +195,7 @@ export function ProgressScreen(_props: ScreenProps) {
             )}
           </section>
           <section className="pg-best">
-            <div className="pg-best-head">
-              <h2 className="pg-side-title">Najlepsze dopasowania</h2>
-              {summary && summary.matched_count > 0 && (
-                <span className="pg-best-total">
-                  {n(summary.matched_count)} {plural(summary.matched_count, OFFERS)}
-                </span>
-              )}
-            </div>
+            <h2 className="pg-side-title">Najlepsze dopasowania</h2>
             {recent.length > 0 ? (
               recent.map((offer, index) => (
                 <button
@@ -388,7 +372,7 @@ function MatchingView({
   const errors = scoring?.scoring.errors ?? 0;
 
   return (
-    <div className="pg-live pg-match">
+    <div className="pg-live">
       <div className="pg-live-head">
         <h2 className="pg-live-title">{summary ? 'Do przejrzenia' : 'Ocena ofert'}</h2>
         {errors > 0 && <p className="pg-live-meta warn">Nieudane oceny: {n(errors)}</p>}
@@ -397,23 +381,8 @@ function MatchingView({
         <>
           <div className="pg-match-count">
             <span className="pg-match-num">{n(summary.matched_count)}</span>
-            <span className="pg-match-of">z {n(summary.checked)} sprawdzonych</span>
           </div>
           <p className="pg-match-note">Oferty z procentem dopasowania, bez zapisanych, ukrytych i wysłanych.</p>
-          <dl className="pg-facts">
-            <div className="pg-fact">
-              <dt>Ocenione teraz</dt>
-              <dd>{scoring ? n(scoring.scored) : '–'}</dd>
-            </div>
-            <div className="pg-fact">
-              <dt>Tempo</dt>
-              <dd>{scoring?.rate != null ? `${rateFormat.format(scoring.rate)} na sekundę` : '–'}</dd>
-            </div>
-            <div className="pg-fact">
-              <dt>Odrzucone w przesiewie</dt>
-              <dd>{rejected != null ? n(rejected) : '–'}</dd>
-            </div>
-          </dl>
         </>
       ) : scoring?.total != null ? (
         <>

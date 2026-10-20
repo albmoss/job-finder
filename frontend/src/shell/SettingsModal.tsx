@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Eye, EyeOff, Upload } from 'lucide-react';
-import { api, errorMessage } from '../api';
+import { api, CV_FILE_ACCEPT, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { BACKUPS, plural } from '../plural';
 import type { EnvKeysResponse } from '../types';
@@ -226,7 +226,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           <input
             ref={fileRef}
             type="file"
-            accept=".pdf,.docx,.doc,.txt,.md"
+            accept={CV_FILE_ACCEPT}
             hidden
             onChange={(e) => {
               const file = e.target.files?.[0];

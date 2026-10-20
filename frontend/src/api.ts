@@ -18,7 +18,6 @@ import type {
   PipelineState,
   RunSummary,
   Stage,
-  Stats,
   TailorInstructions,
 } from './types';
 
@@ -65,12 +64,12 @@ const post = <T>(path: string, body?: unknown) =>
 
 const cvVersionPath = (id: string) => `/cv-versions/${encodeURIComponent(id)}`;
 
+export const CV_FILE_ACCEPT = '.pdf,.docx,.txt,.md';
+
 type PipelineAction = { ok: boolean; message: string; state: PipelineState };
 type LlmSaveResponse = { ok: boolean; message: string; api_info: EnvKeysResponse['api_info']; fields: EnvField[] };
 
 export const api = {
-  getStats: () => request<Stats>('/stats'),
-
   getOffers: (params: { tab: OfferTab; search?: string; page?: number; pageSize?: number; sort?: OfferSort }) => {
     const query = new URLSearchParams({
       tab: params.tab,

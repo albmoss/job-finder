@@ -112,4 +112,3 @@ class TailorReply(BaseModel):
     questions: list[Question]
     numbers_to_verify: list[NumberToVerify]
     section_order: list[str]
-    file_name: str

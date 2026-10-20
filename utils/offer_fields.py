@@ -54,9 +54,10 @@ def _or_none(values: list[str]):
 
 
 _PIECE_SPLIT_RE = re.compile(r"[/,|;&+]| i | lub | or ")
+_LEVEL_SPLIT_RE = re.compile(r"[/,|;&+]| i | lub | or |\s[-–—]\s")
 
 
-def _pick(raw, table: tuple[tuple[str, str], ...]) -> list[str]:
+def _pick(raw, table: tuple[tuple[str, str], ...], split: re.Pattern = _PIECE_SPLIT_RE) -> list[str]:
     """
     Kody z `table` (wzorzec, kod) dla wartości `raw`.
 
@@ -70,20 +71,21 @@ def _pick(raw, table: tuple[tuple[str, str], ...]) -> list[str]:
     items = raw if isinstance(raw, (list, tuple)) else [raw]
     found: list[str] = []
     for item in items:
-        for piece in _PIECE_SPLIT_RE.split(_fold(item)):
+        for piece in split.split(_fold(item)):
             code = next((code for pattern, code in table if re.search(pattern, piece)), None)
             if code and code not in found:
                 found.append(code)
     return found
 
 
-# Kolejność = pierwszeństwo w obrębie jednego kawałka. „Senior” stoi przed „mid”,
-# bo „Starszy specjalista” zawiera też „specjalista”.
+# Kolejność = pierwszeństwo w obrębie jednego kawałka. „Senior” stoi przed „junior” i „mid”,
+# bo „Senior Associate” zawiera też „associate”, a „Starszy specjalista” - „specjalista”.
 _SENIORITY_TABLE = (
-    (r"praktyk|stazyst|intern|trainee|\bstaz\b|student|absolwent", "intern"),
+    (r"praktyk|stazyst|\bintern(?:ship|s)?\b|trainee|\bstaz\b|student|absolwent", "intern"),
+    (r"\bsenior(?:ka)?\b|\bstarsz[ya]\b", "senior"),
     (r"junior|mlodsz|asystent|assistant|bez doswiadczenia|exp_no|entry|podstawow|associate", "junior"),
-    (r"senior|starsz|ekspert|expert", "senior"),
-    (r"lead|lider|principal|architect|architekt", "lead"),
+    (r"ekspert|expert", "senior"),
+    (r"\blead(?:er)?\b(?!\s*generation)|\blider|principal|architect|architekt", "lead"),
     (r"manager|menedzer|kierownik|dyrektor|director|head of|\bc-level|prezes|kierownictw", "manager"),
     (r"\bmid\b|regular|specjalist|specialist|medior|intermediate|sredni", "mid"),
 )
@@ -99,9 +101,9 @@ _CONTRACT_TABLE = (
     (r"staz|praktyk|internship|trainee", "staz"),
     (r"o dzielo|\buod\b|specific[- ]task", "dzielo"),
     (r"zlecen|mandate|\buz\b", "zlecenie"),
-    (r"b2b|kontrakt|\bcontract\b|self-?employ|dzialalnosc|samozatrudn", "b2b"),
+    (r"b2b|kontrakt|(?<!employment )\bcontract\b(?! of employment)|self-?employ|dzialalnosc|samozatrudn", "b2b"),
     (r"tymczasow|agenc|zastepstw|freelance|wolontari|temporary", "other"),
-    (r"o prace|umowa o prac|\buop\b|permanent|employment contract|etat", "uop"),
+    (r"o prace|umowa o prac|\buop\b|permanent|employment contract|contract of employment|etat", "uop"),
     (r"inn[yae]|other", "other"),
 )
 
@@ -114,7 +116,7 @@ _SCHEDULE_TABLE = (
 
 def norm_seniority(raw) -> list[str] | None:
     """Kody poziomu z dowolnej wartości portalu (tekst albo lista tekstów)."""
-    return _or_none(_pick(raw, _SENIORITY_TABLE))
+    return _or_none(_pick(raw, _SENIORITY_TABLE, _LEVEL_SPLIT_RE))
 
 
 def norm_work_modes(raw) -> list[str] | None:
@@ -146,9 +148,9 @@ def norm_skills(raw) -> list[str] | None:
 
 
 _PERIODS = {
-    "month": "month", "monthly": "month", "mies": "month", "m": "month",
+    "month": "month", "monthly": "month", "mies": "month", "miesi": "month", "m": "month",
     "hour": "hour", "hourly": "hour", "godz": "hour", "h": "hour",
-    "year": "year", "yearly": "year", "annual": "year", "rok": "year", "y": "year",
+    "year": "year", "yearly": "year", "annual": "year", "rok": "year", "roczn": "year", "y": "year",
     "day": "day", "daily": "day", "dzien": "day", "d": "day",
     "week": "week", "weekly": "week", "tydz": "week", "w": "week",
 }
@@ -190,16 +192,28 @@ def make_salary(min_value=None, max_value=None, currency: str | None = "PLN",
     }
 
 
+_AMOUNT = r"\d{1,3}(?:[ \xa0.]\d{3})+(?:,\d+)?|\d+(?:[.,]\d+)?"
 _SALARY_TEXT_RE = re.compile(
-    r"(?P<min>\d[\d \xa0]*(?:[.,]\d+)?)\s*(?:[-–—]|do)\s*(?P<max>\d[\d \xa0]*(?:[.,]\d+)?)"
-    r"|(?P<single>\d[\d \xa0]*(?:[.,]\d+)?)"
+    rf"(?<![\w.,])(?P<min>{_AMOUNT})\s*(?:[-–—]|do)\s*(?P<max>{_AMOUNT})(?!\d)"
+    rf"|(?<![\w.,])(?P<single>{_AMOUNT})(?!\d)(?!\s*x\b)"
 )
+_UPPER_ONLY_RE = re.compile(r"(?:\bdo|\bup to|\bmax\w*)\W*$")
+_LOWER_ONLY_RE = re.compile(r"(?:\bod|\bfrom|\bmin\w*)\W*$")
+
+
+def _amount(raw: str | None) -> str | None:
+    """Kwota z tekstu: „10.000” i „10 000” to dziesięć tysięcy, „1,5” to półtora."""
+    if raw is None:
+        return None
+    raw = raw.replace(" ", "").replace("\xa0", "")
+    return raw.replace(".", "") if re.fullmatch(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?", raw) else raw
 
 
 def salary_from_text(text: str | None, contract: str | None = None) -> dict | None:
     """
     Widełki z napisu portalu, np. „4 806–5 300 zł brutto / mies.”,
-    „25–35 zł netto (+ VAT) / godz.”. Zwraca None, gdy w napisie nie ma kwoty.
+    „25–35 zł netto (+ VAT) / godz.”. „do 9000 zł” to samo maksimum, „od 5000 zł”
+    samo minimum. Zwraca None, gdy w napisie nie ma kwoty.
     """
     if not text:
         return None
@@ -207,11 +221,15 @@ def salary_from_text(text: str | None, contract: str | None = None) -> dict | No
     match = _SALARY_TEXT_RE.search(folded)
     if not match:
         return None
-    low = match.group("min") or match.group("single")
-    high = match.group("max") or match.group("single")
+    low, high = _amount(match.group("min")), _amount(match.group("max"))
+    single = _amount(match.group("single"))
+    if single is not None:
+        before = folded[:match.start()]
+        low = None if _UPPER_ONLY_RE.search(before) else single
+        high = None if _LOWER_ONLY_RE.search(before) else single
     currency = "EUR" if ("eur" in folded or "€" in text) else "USD" if ("usd" in folded or "$" in text) else "PLN"
     period = None
-    for key in ("godz", "hour", "/h", "mies", "month", "rok", "year", "dzien", "day", "tydz", "week"):
+    for key in ("godz", "hour", "/h", "mies", "month", "roczn", "rok", "year", "dzien", "day", "tydz", "week"):
         if key in folded:
             period = key.strip("/")
             break
@@ -221,20 +239,20 @@ def salary_from_text(text: str | None, contract: str | None = None) -> dict | No
 
 _LANG_PATTERNS = (
     (r"angiel|english", "english"),
-    (r"niemieck|german|deutsch", "german"),
+    (r"niemieck|german(?!y)|deutsch(?!land)", "german"),
     (r"francus|french", "french"),
-    (r"hiszpan|spanish", "spanish"),
+    (r"hiszpansk|spanish", "spanish"),
     (r"wlosk|italian", "italian"),
     (r"rosyjsk|russian", "russian"),
-    (r"ukrain", "ukrainian"),
-    (r"niderland|holendersk|dutch", "dutch"),
-    (r"czesk|czech", "czech"),
+    (r"ukrainsk|ukrainian", "ukrainian"),
+    (r"niderlandzk|holendersk|dutch", "dutch"),
+    (r"czesk|czech(?![a-z]|\s+republic)", "czech"),
     (r"slowack|slovak", "slovak"),
     (r"szwedzk|swedish", "swedish"),
     (r"norwesk|norwegian", "norwegian"),
     (r"dunsk|danish", "danish"),
     (r"finsk|finnish", "finnish"),
-    (r"portugal|portuguese", "portuguese"),
+    (r"portugalsk|portuguese", "portuguese"),
     (r"wegiersk|hungarian", "hungarian"),
     (r"rumunsk|romanian", "romanian"),
     (r"japonsk|japanese", "japanese"),
@@ -343,11 +361,26 @@ _NO_EXPERIENCE_RE = re.compile(
     r"|no (prior )?experience (is )?(required|needed)|brak doswiadczenia nie jest przeszkoda"
 )
 _YEARS_RE = re.compile(
-    r"(?:min(?:imum|\.)?|co najmniej|at least|od|powyzej|ponad|over)?\s*"
-    r"(?<!\d)(?P<low>\d{1,2})(?:\s*(?:-|–|do|to)\s*(?P<high>\d{1,2}))?\s*\+?\s*"
+    r"(?<![\d.,])(?P<low>\d{1,2})(?:[.,]\d)?(?:\s*(?:-|–|do|to)\s*(?P<high>\d{1,2})(?:[.,]\d)?)?\s*\+?\s*"
     r"(?:lat[a]?|rok(?:u|i)?|years?|yrs?)\b"
 )
-_AGE_RE = re.compile(r"(?:w wieku|wiek\w*|ukonczon\w*|pelnolet\w*|aged?)\s*(?:od\s*)?$")
+_ABBREV_RE = re.compile(r"\b(min|max|ok|np|tj|wg|ca|m\.in)\.")
+_SENTENCE_RE = re.compile(r"(?:(?<!\d)\.|\.(?!\d)|[\n;•·●▪])+")
+_EXPERIENCE_RE = re.compile(r"doswiadcz|experience(?!d)|stazu pracy")
+_EXPERIENCE_SPAN = 40
+_AGE_RE = re.compile(
+    r"\b(?:w wieku|wiek\w*|ukonczon\w*|pelnolet\w*|aged?|chlop\w*|dziewczyn\w*|dzieck\w*|dzieci\w*"
+    r"|syn\w*|cork\w*|niemowl\w*|child\w*|boys?|girls?|kids?)\W*(?:od\s*)?$"
+)
+_NEGATION_RE = re.compile(
+    r"\bnie (?:musisz|musi|wymagamy|oczekujemy|potrzebujesz|trzeba)\b|\bnot required\b|\bno need\b"
+    r"|\bdon'?t need\b|\bdo not need\b|\bnot necessary\b"
+)
+_NOT_REQUIRED_RE = re.compile(r"nie (?:jest |sa )?(?:wymagan|konieczn|potrzebn)|\bnot (?:required|necessary|needed)\b")
+_SINCE_RE = re.compile(
+    r"\b(?:od|for|since|przez)\s+(?:(?:ponad|over|more than|prawie|niemal|blisko|almost|nearly|juz|already)\s+)?$"
+)
+_EXPERIENCE_NEXT_RE = re.compile(r"\W*(?:\w+\W+){0,2}?(?:doswiadcz|experience(?!d))")
 _ABOUT_COMPANY_RE = re.compile(
     r"\b(?:eksper(?:ci|tow|tami)|experts|nasz\w*|na rynku|on the market|cto|ceo|realizujac\w*"
     r"|dzialamy|istniejemy|laczymy|zrealizowal\w*)\b"
@@ -359,27 +392,52 @@ _CANDIDATE_RE = re.compile(
 )
 
 
+def _not_requirement(sentence: str, start: int, end: int) -> bool:
+    """Liczba lat, która nie jest wymogiem: wiek, przeczenie, historia firmy."""
+    before = sentence[max(0, start - 60):start]
+    if _AGE_RE.search(before[-25:]) or re.match(r"\s*old\b", sentence[end:]):
+        return True
+    if _NEGATION_RE.search(before[-40:]) or _NOT_REQUIRED_RE.search(sentence[end:end + 40]):
+        return True
+    since = _SINCE_RE.search(before)
+    if since and not _EXPERIENCE_RE.search(before[max(0, since.start() - 20):since.start()]) \
+            and not _EXPERIENCE_NEXT_RE.match(sentence, end):
+        return True
+    if _ABOUT_COMPANY_RE.search(sentence):
+        clause_start = max(sentence.rfind(",", 0, start) + 1, start - 80)
+        clause_end = sentence.find(",", end)
+        clause_end = min(len(sentence) if clause_end < 0 else clause_end, end + 80)
+        if not _CANDIDATE_RE.search(sentence[max(clause_start, 0):clause_end]):
+            return True
+    return False
+
+
 def years_from_text(text: str | None) -> int | None:
     """
     Minimalna liczba lat doświadczenia z treści oferty.
 
-    Liczba musi stać w tym samym zdaniu co „doświadczenie”/„experience”, żeby
+    Liczba musi stać blisko słowa „doświadczenie”/„experience”/„stażu pracy”, żeby
     „firma działa od 20 lat” nie stało się wymaganiem. Przy widełkach („2-3 lata”)
-    bierzemy dolną granicę. „Bez doświadczenia” daje 0. Brak informacji: None.
+    bierzemy dolną granicę, przy ułamku część całkowitą („1,5 roku” = 1). „Bez
+    doświadczenia” daje 0. Brak informacji: None.
     """
     if not text:
         return None
     folded = _fold(text)
     if _NO_EXPERIENCE_RE.search(folded):
         return 0
+    folded = _ABBREV_RE.sub(lambda m: m.group(1).replace(".", " "), folded)
     best = None
-    for sentence in re.split(r"[.\n;•·●▪]+", folded):
-        if "doswiadcz" not in sentence and "experience" not in sentence and "stazu pracy" not in sentence:
-            continue
-        if _ABOUT_COMPANY_RE.search(sentence) and not _CANDIDATE_RE.search(sentence):
+    for sentence in _SENTENCE_RE.split(folded):
+        keywords = [(m.start(), m.end()) for m in _EXPERIENCE_RE.finditer(sentence)]
+        if not keywords:
             continue
         for match in _YEARS_RE.finditer(sentence):
-            if _AGE_RE.search(sentence[max(0, match.start("low") - 20):match.start("low")]):
+            start, end = match.start("low"), match.end()
+            if not any(k_start - end <= _EXPERIENCE_SPAN and start - k_end <= _EXPERIENCE_SPAN
+                       for k_start, k_end in keywords):
+                continue
+            if _not_requirement(sentence, start, end):
                 continue
             years = int(match.group("low"))
             if 0 < years <= 20:

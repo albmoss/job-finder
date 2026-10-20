@@ -5,6 +5,7 @@ Runs all job scrapers and saves results to the jobs database (config.JOBS_DATABA
 
 import logging
 import logging.handlers
+import os
 import sys
 import concurrent.futures
 from pathlib import Path
@@ -13,7 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from utils.console import force_utf8
-from config import SCRAPER_CONFIG, JOBS_DATABASE_PATH, USER_AGENTS
+import config
+from config import SCRAPER_CONFIG, USER_AGENTS
 from scrapers import (
     PracujOptimizedScraper,  # HTTP + __NEXT_DATA__ (bez przeglądarki)
     OLXScraper,
@@ -40,7 +42,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.handlers.RotatingFileHandler(Path(__file__).resolve().parent / 'scraper.log',
+        logging.handlers.RotatingFileHandler(os.environ.get("JOBFINDER_LOG_PATH")
+                                             or Path(__file__).resolve().parent / 'scraper.log',
                                              maxBytes=5 * 1024 * 1024, backupCount=2, encoding='utf-8')
     ]
 )
@@ -89,7 +92,7 @@ def refresh_sources(source_names):
         src = (record_source or "").lower()
         return any(t in src for t in targets)
 
-    db = JobDatabase(str(JOBS_DATABASE_PATH))
+    db = JobDatabase(str(config.JOBS_DATABASE_PATH))
     doomed, removed, protected = [], 0, 0
     for job in db.load_records():
         if matches(job.get("source")):
@@ -214,7 +217,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
     
     status_manager = ScraperStatusManager()
     
-    db = JobDatabase(str(JOBS_DATABASE_PATH))
+    db = JobDatabase(str(config.JOBS_DATABASE_PATH))
 
     def _scrape_source(scraper):
         source_name = scraper.get_source_name()
@@ -294,71 +297,78 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                 'status': 'failed'
             }
 
-    def _collect(scrapers, max_workers, label):
-        """Uruchom grupę scraperów równolegle i zapisuj wyniki na bieżąco."""
-        logger.info(f"{label}: running {len(scrapers)} scrapers (max {max_workers} parallel)...")
+    def _record_result(scraper, future):
+        """Zapisz wynik jednego źródła na bieżąco - tylko w wątku głównym."""
+        source = scraper.get_source_name()
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_scrape_source, s): s for s in scrapers}
+        try:
+            result = future.result()
+        except Exception as e:
+            logger.error(f"✗ {source}: Thread crashed - {e}")
+            telemetry.emit("source", name=source, state="failed", error=str(e)[:300])
+            scraper_results[source] = {'success': False, 'error': str(e), 'status': 'crashed'}
+            return
 
-            for future in concurrent.futures.as_completed(futures):
-                scraper = futures[future]
-                source = scraper.get_source_name()
+        if not result['success']:
+            scraper_results[source] = {
+                'success': False,
+                'error': result.get('error', 'Unknown'),
+                'status': 'failed',
+            }
+            return
 
-                try:
-                    result = future.result()
-                except Exception as e:
-                    logger.error(f"✗ {source}: Thread crashed - {e}")
-                    telemetry.emit("source", name=source, state="failed", error=str(e)[:300])
-                    scraper_results[source] = {'success': False, 'error': str(e), 'status': 'crashed'}
-                    continue
+        new_jobs = result['jobs']
+        all_jobs.extend(new_jobs)
+        scraper_results[source] = {
+            'success': True,
+            'jobs_count': len(new_jobs),
+            'status': result['status'],
+            # Próbka wystarczy: objawy, których szukamy, dotyczą całych
+            # pól naraz, więc widać je na pięćdziesięciu rekordach tak
+            # samo dobrze jak na pięciu tysiącach.
+            'sample': new_jobs[:50],
+            'history_before': result.get('history_before') or [],
+        }
 
-                if not result['success']:
-                    scraper_results[source] = {
-                        'success': False,
-                        'error': result.get('error', 'Unknown'),
-                        'status': 'failed',
-                    }
-                    continue
+        # Zapis przyrostowy - przerwany przebieg nie traci tego, co zebrał.
+        # Nowe oferty i te, których szczegółów nie pobierano (bo już je
+        # mamy), idą jednym zapisem: bez odnotowania tych drugich sygnał
+        # "wisi od X dni" nigdy by nie ruszył.
+        seen_again = getattr(scraper, "seen_again_links", None) or ()
+        # Źródło, które pobrało zero NOWYCH ofert, ale rozpoznało setki
+        # znanych, działa poprawnie - po prostu nic nowego nie wisi.
+        # Bez tej liczby diagnoza uznałaby je za martwe.
+        scraper_results[source]['also_seen'] = len(seen_again)
+        # Statystyki dociagania opisow. Bez nich przebieg, w ktorym
+        # KAZDA podstrona odmowila, konczyl sie napisem "Successfully
+        # scraped" - liczba ofert byla w porzadku, bo braklo tylko
+        # tresci. Tak przez tydzien wchodzilo do bazy 1272 ofert
+        # z zaslepka zamiast opisu.
+        scraper_results[source]['enrich'] = getattr(scraper, "enrich_stats", None)
+        scraper_results[source]['failed_parts'] = list(getattr(scraper, "listing_failures", None) or ())
+        if new_jobs or seen_again:
+            added, touched = db.record_scrape(new_jobs, seen_again)
+            logger.info(f"{source}: saved {added} new offers, "
+                        f"{touched} still listed")
+            telemetry.emit("source_saved", name=source, added=added, seen=touched)
 
-                new_jobs = result['jobs']
-                all_jobs.extend(new_jobs)
-                scraper_results[source] = {
-                    'success': True,
-                    'jobs_count': len(new_jobs),
-                    'status': result['status'],
-                    # Próbka wystarczy: objawy, których szukamy, dotyczą całych
-                    # pól naraz, więc widać je na pięćdziesięciu rekordach tak
-                    # samo dobrze jak na pięciu tysiącach.
-                    'sample': new_jobs[:50],
-                    'history_before': result.get('history_before') or [],
-                }
-
-                # Zapis przyrostowy - przerwany przebieg nie traci tego, co zebrał.
-                # Nowe oferty i te, których szczegółów nie pobierano (bo już je
-                # mamy), idą jednym zapisem: bez odnotowania tych drugich sygnał
-                # "wisi od X dni" nigdy by nie ruszył.
-                seen_again = getattr(scraper, "seen_again_links", None) or ()
-                # Źródło, które pobrało zero NOWYCH ofert, ale rozpoznało setki
-                # znanych, działa poprawnie - po prostu nic nowego nie wisi.
-                # Bez tej liczby diagnoza uznałaby je za martwe.
-                scraper_results[source]['also_seen'] = len(seen_again)
-                # Statystyki dociagania opisow. Bez nich przebieg, w ktorym
-                # KAZDA podstrona odmowila, konczyl sie napisem "Successfully
-                # scraped" - liczba ofert byla w porzadku, bo braklo tylko
-                # tresci. Tak przez tydzien wchodzilo do bazy 1272 ofert
-                # z zaslepka zamiast opisu.
-                scraper_results[source]['enrich'] = getattr(scraper, "enrich_stats", None)
-                scraper_results[source]['failed_parts'] = list(getattr(scraper, "listing_failures", None) or ())
-                if new_jobs or seen_again:
-                    added, touched = db.record_scrape(new_jobs, seen_again)
-                    logger.info(f"{source}: saved {added} new offers, "
-                                f"{touched} still listed")
-                    telemetry.emit("source_saved", name=source, added=added, seen=touched)
-
-    _collect(api_scrapers, 5, "Phase 1 (API/HTTP)")
     # Playwright nie znosi wielu instancji naraz - stąd ostrzejszy limit
-    _collect(browser_scrapers, 2, "Phase 2 (browser)")
+    groups = [(api_scrapers, 5, "Phase 1 (API/HTTP)"), (browser_scrapers, 2, "Phase 1 (browser)")]
+    executors, futures = [], {}
+    try:
+        for scrapers, max_workers, label in groups:
+            if not scrapers:
+                continue
+            logger.info(f"{label}: running {len(scrapers)} scrapers (max {max_workers} parallel)...")
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+            executors.append(executor)
+            futures.update({executor.submit(_scrape_source, s): s for s in scrapers})
+
+        for future in concurrent.futures.as_completed(futures):
+            _record_result(futures[future], future)
+    finally:
+        for executor in executors:
+            executor.shutdown(wait=True)
 
     if stop.requested():
         stopped = sorted(s for s, r in scraper_results.items() if r.get('status') == 'stopped')
@@ -389,7 +399,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
         else:
             print(f"  ✗ {source}: FAILED - {result.get('error', 'Unknown error')}")
     
-    print(f"\nJobs database: {JOBS_DATABASE_PATH}")
+    print(f"\nJobs database: {config.JOBS_DATABASE_PATH}")
     print("="*60)
 
     findings = _report_health(scraper_results, db, skipped_no_key, disabled_reported)

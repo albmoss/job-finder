@@ -10,11 +10,12 @@ import { MarkSentModal, type MarkSentState } from './shell/MarkSentModal';
 import { SettingsModal } from './shell/SettingsModal';
 import { Toasts, useToasts } from './shell/Toasts';
 import { TopBar } from './shell/TopBar';
-import { isBusy } from './run_progress';
+import { currentStageId, isBusy, scoringProgress } from './run_progress';
 import type { CandidatesResponse, CVInfo, DecisionStatus, OfferDetail, PipelineState, RunSummary } from './types';
 
 const POLL_BUSY_MS = 1200;
 const POLL_IDLE_MS = 4000;
+const SUMMARY_PILL_MS = 3000;
 
 export function App() {
   const route = useRoute();
@@ -112,6 +113,7 @@ export function App() {
     refreshCv();
   }, [refreshCv]);
 
+  const actionSeq = useRef(0);
   useEffect(() => {
     let timer = 0;
     let cancelled = false;
@@ -120,6 +122,7 @@ export function App() {
       window.clearTimeout(timer);
       if (inFlight) return;
       inFlight = true;
+      const seq = actionSeq.current;
       let next: PipelineState | null = null;
       try {
         next = await api.getPipelineState();
@@ -128,9 +131,10 @@ export function App() {
       }
       inFlight = false;
       if (cancelled) return;
-      if (next) applyPipeline(next);
+      const stale = seq !== actionSeq.current;
+      if (next && !stale) applyPipeline(next);
       if (document.visibilityState === 'visible') {
-        timer = window.setTimeout(tick, isBusy(next) ? POLL_BUSY_MS : POLL_IDLE_MS);
+        timer = window.setTimeout(tick, stale || isBusy(next) ? POLL_BUSY_MS : POLL_IDLE_MS);
       }
     };
     const onVisibility = () => {
@@ -145,10 +149,18 @@ export function App() {
     };
   }, [applyPipeline]);
 
-  const watchSummary = pipelineBusy || route.name === 'postep';
+  const onProgress = route.name === 'postep';
+  const pillNeedsSummary =
+    pipelineBusy &&
+    pipeline?.status !== 'stopping' &&
+    !(pipeline && currentStageId(pipeline) === 'phase3' && scoringProgress(pipeline)?.total != null);
+  const summaryAt = useRef(0);
   useEffect(() => {
-    if (watchSummary && pipeline) refreshRunSummary();
-  }, [watchSummary, pipeline, refreshRunSummary]);
+    if (!pipeline || !(onProgress || pillNeedsSummary)) return;
+    if (!onProgress && Date.now() - summaryAt.current < SUMMARY_PILL_MS) return;
+    summaryAt.current = Date.now();
+    refreshRunSummary();
+  }, [onProgress, pillNeedsSummary, pipeline, refreshRunSummary]);
 
   const profileDone = pipeline?.stages.find((s) => s.id === 'phase0')?.status === 'done';
   const profileWasDone = useRef(profileDone);
@@ -166,12 +178,15 @@ export function App() {
       refreshCv();
       if (pipeline.status === 'completed' || pipeline.status === 'failed') {
         const finished = pipeline;
+        const showDone = (summary: RunSummary | null) => {
+          if (routeRef.current.name !== 'postep') setRunDone({ pipeline: finished, summary });
+        };
         api.getRunSummary().then(
           (summary) => {
             applySummary(summary);
-            setRunDone({ pipeline: finished, summary });
+            showDone(summary);
           },
-          () => setRunDone({ pipeline: finished, summary: null }),
+          () => showDone(null),
         );
       } else if (pipeline.status === 'stopped') {
         toast('Wyszukiwanie zatrzymane.');
@@ -186,8 +201,10 @@ export function App() {
   }, [cvMissing, route.name]);
 
   const startSearch = useCallback(async () => {
+    actionSeq.current += 1;
     try {
       const res = await api.startPipeline('full');
+      actionSeq.current += 1;
       applyPipeline(res.state);
       applySummary(null);
       setRunDone(null);
@@ -200,8 +217,12 @@ export function App() {
   }, [toast, applyPipeline, applySummary]);
 
   const stopSearch = useCallback(async () => {
+    actionSeq.current += 1;
     try {
-      applyPipeline((await api.stopPipeline()).state);
+      const res = await api.stopPipeline();
+      actionSeq.current += 1;
+      applyPipeline(res.state);
+      if (!res.ok && isBusy(res.state)) toast(res.message, { icon: TriangleAlert });
     } catch (err) {
       toast(`Nie udało się zatrzymać: ${errorMessage(err)}`, { icon: TriangleAlert });
     }
@@ -219,16 +240,19 @@ export function App() {
       const previousStatus = (['save', 'apply', 'reject'].includes(offer.status ?? '') ? offer.status : null) as
         | DecisionStatus
         | null;
-      const readyCv = offer.cv_versions
-        ? offer.cv_versions.find((v) => v.status === 'ready')
-        : offer.cv?.status === 'ready'
-          ? offer.cv
-          : undefined;
       try {
         let detail: OfferDetail;
         if (previousStatus === 'apply') {
           detail = await api.getOfferDetail(offer.link);
         } else {
+          const versions =
+            offer.cv_versions ??
+            (offer.cv && offer.cv.status !== 'ready' ? (await api.listCvVersions(offer.link)).items : undefined);
+          const readyCv = versions
+            ? versions.find((v) => v.status === 'ready')
+            : offer.cv?.status === 'ready'
+              ? offer.cv
+              : undefined;
           const res = await api.updateDecision(offer.link, 'apply', 'apply', readyCv?.id);
           detail = res.offer;
           bumpData();
@@ -258,6 +282,7 @@ export function App() {
       toast,
       openLaunch,
       openSettings,
+      settingsOpen,
       openMarkSent,
     }),
     [
@@ -275,6 +300,7 @@ export function App() {
       toast,
       openLaunch,
       openSettings,
+      settingsOpen,
       openMarkSent,
     ],
   );

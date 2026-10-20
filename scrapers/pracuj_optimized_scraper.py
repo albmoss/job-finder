@@ -170,16 +170,9 @@ class PracujOptimizedScraper:
         self.et_param = ",".join(str(c) for c in et_codes)
         self.days = cfg.get("days_param", 7)
 
-        catalog = fetch_pracuj_categories()
-        from utils.portal_categories import pick_categories
-        picked = pick_categories("pracuj", catalog)
-        if picked is not None:
-            self.categories: Optional[List[str]] = picked
-            self.cc_param = ",".join(str(c) for c in sorted(picked))
-            logger.info(f"Pracuj.pl: {len(picked)} categories from CV")
-        else:
-            self.categories = None
-            self.cc_param = ""
+        self.categories: Optional[List[str]] = None
+        self.cc_param = ""
+        self.listing_failures: List[str] = []
 
         self.parallel_threads = cfg.get("parallel_threads", 3)
         self.detail_threads = cfg.get("detail_threads", 3)
@@ -225,9 +218,9 @@ class PracujOptimizedScraper:
             url += f"&cc={self.cc_param}"
         return url
 
-    def fetch_html(self, url: str, max_attempts: int = 3, is_detail: bool = False) -> str:
+    def fetch_html(self, url: str, max_attempts: int = 3, is_detail: bool = False) -> Optional[str]:
         if is_detail and self._detail_aborted:
-            return ""
+            return None
 
         for attempt in range(max_attempts):
             self._throttle()
@@ -260,7 +253,7 @@ class PracujOptimizedScraper:
                                 "and falling back to listing summaries"
                             )
                             telemetry.emit("throttled", name=self.get_source_name())
-                    return ""
+                    return None
 
                 if e.code == 429:
                     retry_after = e.headers.get('Retry-After') if e.headers else None
@@ -440,11 +433,17 @@ class PracujOptimizedScraper:
                 results = list(executor.map(self.parse_listing_page, page_batch))
 
                 batch_found_jobs = False
-                for result in results:
+                for page, result in zip(page_batch, results):
                     if result and len(result) > 0:
                         all_items.extend(result)
                         batch_found_jobs = True
                         consecutive_empty = 0
+                        if page == total_pages:
+                            logger.warning(
+                                f"Pracuj.pl: page {total_pages} still has {len(result)} offers - "
+                                f"listing cut at the page limit, later pages are not scraped"
+                            )
+                            self.listing_failures.append(f"strony po {total_pages}")
 
                 if not batch_found_jobs:
                     consecutive_empty += 1
@@ -589,7 +588,16 @@ class PracujOptimizedScraper:
             logger.debug(f"Pracuj.pl: Error extracting detail: {e}")
             return None
 
+    def _pick_categories(self):
+        from utils.portal_categories import pick_categories
+        picked = pick_categories("pracuj", fetch_pracuj_categories())
+        if picked is not None:
+            self.categories = picked
+            self.cc_param = ",".join(str(c) for c in sorted(picked))
+            logger.info(f"Pracuj.pl: {len(picked)} categories from CV")
+
     def run(self) -> List[Job]:
+        self._pick_categories()
         cat_info = f", cc={self.cc_param}" if self.cc_param else ""
         logger.info(f"{self.get_source_name()}: Starting scrape (lokalizacja: {self.city}, et={self.et_param}{cat_info})")
         all_items = self.fetch_all_listings()
@@ -618,29 +626,25 @@ class PracujOptimizedScraper:
             self.seen_again_links = []
 
         if not links_to_fetch:
-            self.enrich_stats = {
-                "ok": 0,
-                "error": 0,
-                "blocked": 0,
-                "ze_stanu": len(self.seen_again_links),
-            }
+            self.enrich_stats = {"ok": 0, "error": 0, "blocked": 0}
             return []
 
-        def _fetch_one_detail(link: str) -> tuple[str, Optional[dict]]:
+        def _fetch_one_detail(link: str) -> tuple[str, Optional[dict], bool]:
             if stop.requested():
-                return link, None
+                return link, None, False
             html = self.fetch_html(link, max_attempts=2, is_detail=True)
             detail = self.extract_detail_from_html(html) if html else None
-            return link, detail
+            return link, detail, html is not None
 
         jobs: List[Job] = []
         ok = 0
         fallback_count = 0
+        skipped = 0
         started = time.monotonic()
         total = len(links_to_fetch)
 
         with ThreadPoolExecutor(max_workers=self.detail_threads) as executor:
-            for done, (link, detail) in enumerate(executor.map(_fetch_one_detail, links_to_fetch), 1):
+            for done, (link, detail, attempted) in enumerate(executor.map(_fetch_one_detail, links_to_fetch), 1):
                 if done % self.PROGRESS_EVERY == 0 and done < total and not self._detail_aborted:
                     rate = done / max(time.monotonic() - started, 1e-6)
                     logger.info(
@@ -661,6 +665,7 @@ class PracujOptimizedScraper:
                     salary = item.get('salary') or detail.get('salary')
                 else:
                     fallback_count += 1
+                    skipped += not attempted
                     desc = item.get('fallback_description') or "Brak opisu"
                     skills_req = item.get('skills_required')
                     skills_nice = None
@@ -703,8 +708,7 @@ class PracujOptimizedScraper:
 
         self.enrich_stats = {
             "ok": ok,
-            "error": fallback_count,
+            "error": fallback_count - skipped,
             "blocked": blocked,
-            "ze_stanu": len(self.seen_again_links),
         }
         return jobs

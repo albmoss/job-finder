@@ -106,9 +106,8 @@ def candidate_state(profile: dict, cv_text: str | None) -> dict:
     return candidate
 
 
-def build_state(job: Job, profile: dict, cv_text: str | None) -> dict:
-    """Stan dla Jev: kandydat (profil + CV) i oferta (pola + treść)."""
-    candidate = candidate_state(profile, cv_text)
+def offer_state(job: Job) -> dict:
+    """Oferta tak, jak widzi ją Jev: pola strukturalne i treść."""
     offer = {
         "stanowisko": job.title,
         "firma": job.company,
@@ -124,10 +123,12 @@ def build_state(job: Job, profile: dict, cv_text: str | None) -> dict:
         "kategoria": job.category,
         "opis": (job.description or "")[:DESCRIPTION_LIMIT],
     }
-    return {
-        "kandydat": candidate,
-        "oferta": {k: v for k, v in offer.items() if v not in (None, [], "")},
-    }
+    return {k: v for k, v in offer.items() if v not in (None, [], "")}
+
+
+def build_state(job: Job, profile: dict, cv_text: str | None) -> dict:
+    """Stan dla Jev: kandydat (profil + CV) i oferta (pola + treść)."""
+    return {"kandydat": candidate_state(profile, cv_text), "oferta": offer_state(job)}
 
 
 def ask(state: dict, key: str, session: requests.Session | None = None,
@@ -149,9 +150,15 @@ def ask(state: dict, key: str, session: requests.Session | None = None,
                 raise JevError(f"Brak połączenia z TypeSafe: {e}") from e
         else:
             if resp.status_code == 200:
-                body = resp.json()
-                return {"answers": body["answers"], "model": body.get("model"),
-                        "usage": body.get("usage")}
+                try:
+                    body = resp.json()
+                    answers = body["answers"]
+                    missing = set(questions or QUESTIONS) - set(answers)
+                except (ValueError, KeyError, TypeError) as e:
+                    raise JevError(f"TypeSafe: niepoprawna odpowiedź ({type(e).__name__}: {e})") from e
+                if missing:
+                    raise JevError(f"TypeSafe: brak odpowiedzi na {sorted(missing)[:5]}")
+                return {"answers": answers, "model": body.get("model"), "usage": body.get("usage")}
             if resp.status_code in (401, 403):
                 raise JevError(f"TypeSafe odrzucił klucz ({resp.status_code})")
             if resp.status_code not in (429, 529) and resp.status_code < 500:

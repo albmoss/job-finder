@@ -342,14 +342,8 @@
   height: 22px;
 }
 
-.mo-menu-anchor {
-  position: relative;
+.btn-quiet.mo-more {
   margin-right: -8px;
-}
-
-.mo-menu-right {
-  top: 36px;
-  right: 0;
 }
 
 .mo-detail > * {

@@ -13,10 +13,10 @@ from typing import Optional
 from urllib.parse import urljoin
 
 # Parametry, które są częścią tożsamości oferty i NIE mogą zostać ucięte.
-# "jk=" to identyfikator oferty na Indeed (/viewjob?jk=...) - bez niego wszystkie
+# "jk" to identyfikator oferty na Indeed (/viewjob?jk=...) - bez niego wszystkie
 # oferty z tego portalu sprowadzałyby się do jednego klucza ".../viewjob"
 # i zostawała by w bazie dokładnie jedna z nich.
-_MEANINGFUL_PARAMS = ("id=", "offerId=", "jobId=", "oid=", "jk=")
+_MEANINGFUL_PARAMS = frozenset({"id", "offerId", "jobId", "oid", "jk"})
 
 
 def canonical_link(link: str) -> str:
@@ -24,9 +24,9 @@ def canonical_link(link: str) -> str:
     Sprowadź URL oferty do postaci kanonicznej:
     usuń fragment (#...), parametry śledzące i końcowy slash.
 
-    Query string jest zachowywany tylko wtedy, gdy niesie identyfikator oferty -
-    inaczej straciłoby się rozróżnienie między ofertami na portalach, które
-    trzymają ID w query.
+    Z query stringa zostają tylko parametry z identyfikatorem oferty - inaczej
+    straciłoby się rozróżnienie między ofertami na portalach, które trzymają ID
+    w query.
     """
     if not link:
         return link
@@ -35,9 +35,8 @@ def canonical_link(link: str) -> str:
 
     if "?" in link:
         base, _, query = link.partition("?")
-        if any(p in query for p in _MEANINGFUL_PARAMS):
-            return link.rstrip("/")
-        link = base
+        kept = [p for p in query.split("&") if p.partition("=")[0] in _MEANINGFUL_PARAMS]
+        link = f"{base}?{'&'.join(kept)}" if kept else base
 
     return link.rstrip("/")
 

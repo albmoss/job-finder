@@ -11,7 +11,6 @@ from pathlib import Path
 TOKENS = {
     # powierzchnie
     "bg": "#0E0E10",
-    "panel": "rgba(24, 24, 26, 0.92)",
     "paper": "#F2F2F0",
     "scrim": "rgba(8, 8, 9, 0.6)",
     # tusz

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { ClipboardPaste, FileCheck, FileUser, Plus, Search, Send, Sparkles, TriangleAlert, Upload } from 'lucide-react';
-import { api, errorMessage } from '../api';
+import { api, CV_FILE_ACCEPT, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { CHARS, plural } from '../plural';
 import { profileLine } from '../shell/LaunchModal';
@@ -14,7 +14,6 @@ const STEPS = [
   { icon: Send, title: 'Wybierasz i aplikujesz', text: 'Zapisujesz oferty, dopasowujesz CV i śledzisz wysłane aplikacje.' },
 ];
 
-const ACCEPT = '.pdf,.docx,.txt';
 const PREREQ_RETRY_MS = 5000;
 
 function savedLine(cv: CVInfo): string {
@@ -109,7 +108,7 @@ function UploadStep({ busy, onFile, onPaste }: { busy: boolean; onFile: (file: F
       <input
         ref={inputRef}
         type="file"
-        accept={ACCEPT}
+        accept={CV_FILE_ACCEPT}
         hidden
         onChange={(e) => {
           const file = e.target.files?.[0];
@@ -160,7 +159,7 @@ function PasteStep({
 }
 
 function ConsentStep({ cv }: { cv: CVInfo }) {
-  const { startSearch, openSettings } = useApp();
+  const { startSearch, openSettings, settingsOpen } = useApp();
   const [prereq, setPrereq] = useState<PipelinePrerequisites | null>(null);
   const [prereqError, setPrereqError] = useState<string | null>(null);
   const [consent, setConsent] = useState(false);
@@ -169,28 +168,39 @@ function ConsentStep({ cv }: { cv: CVInfo }) {
   const prereqReady = Boolean(prereq?.ready_full) && !prereqError;
 
   useEffect(() => {
-    if (prereqReady) return;
+    if (prereqReady || settingsOpen) return;
     let cancelled = false;
     let timer = 0;
+    let inFlight = false;
     const load = async () => {
+      window.clearTimeout(timer);
+      if (inFlight) return;
+      inFlight = true;
       try {
         const next = await api.getPipelinePrerequisites();
         if (cancelled) return;
         setPrereq(next);
         setPrereqError(null);
-        if (next.ready_full) return;
+        if (next.ready_full || !next.jev_ready || (next.llm_needed && !next.api_ready)) return;
       } catch (err) {
         if (cancelled) return;
         setPrereqError(errorMessage(err));
+      } finally {
+        inFlight = false;
       }
-      timer = window.setTimeout(load, PREREQ_RETRY_MS);
+      if (document.visibilityState === 'visible') timer = window.setTimeout(load, PREREQ_RETRY_MS);
     };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
     load();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [cv, prereqReady]);
+  }, [cv, prereqReady, settingsOpen]);
 
   const issues = prereqError ? [prereqError] : (prereq?.issues ?? []);
 
@@ -205,7 +215,6 @@ function ConsentStep({ cv }: { cv: CVInfo }) {
       <FileCheck className="st0-icon" />
       <h2 className="st0-title">Poszukać ofert?</h2>
       <p className="st0-hint">{savedLine(cv)}</p>
-      <p className="st0-meta">Dopasowanie: Jev. Model odczytu CV: z ustawień.</p>
       {issues.length > 0 && (
         <div className="st0-issues">
           {issues.map((issue) => (

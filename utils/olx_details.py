@@ -1,5 +1,5 @@
 """
-Pobieranie pełnych opisów ofert z OLX.
+Rozbieranie ofert OLX.
 
 Kontekst: OLXScraper zapisywał jako opis zaślepkę
 "Oferta z OLX (kategoria: <kategoria>)" - czyli ~25% bazy trafiało do analizy AI
@@ -8,54 +8,18 @@ z zerową treścią, a model oceniał je wyłącznie po tytule.
 Strona oferty OLX osadza cały stan w `window.__PRERENDERED_STATE__` (JSON w stringu).
 Dla ogłoszeń o pracę interesuje nas `jobAd.job`, gdzie jest:
   description (HTML), salary (widełki), params (wymiar pracy, typ umowy), employer.
-Nie trzeba przeglądarki - zwykły GET wystarczy.
+HTML przychodzi z przeglądarki scrapera: gołe `requests` dostaje od OLX 403.
 """
 
 import json
 import logging
-import random
 import re
-import threading
-import time
-
-import requests
 
 from utils.links import canonical_link
 
 logger = logging.getLogger(__name__)
 
 _STATE_RE = re.compile(r'window\.__PRERENDERED_STATE__\s*=\s*("(?:[^"\\]|\\.)*")')
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "pl-PL,pl;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
-
-# Wynik oznaczający, że oferty już nie ma (wygasła / usunięta)
-EXPIRED = "__EXPIRED__"
-
-
-class _Throttle:
-    """Globalny odstęp między żądaniami, wspólny dla wszystkich wątków."""
-
-    def __init__(self, min_interval=0.4):
-        self.min_interval = min_interval
-        self._lock = threading.Lock()
-        self._last = 0.0
-
-    def wait(self):
-        with self._lock:
-            delta = time.monotonic() - self._last
-            if delta < self.min_interval:
-                time.sleep(self.min_interval - delta + random.random() * 0.15)
-            self._last = time.monotonic()
-
-
-throttle = _Throttle()
 
 
 def normalize_olx_link(link: str) -> str:
@@ -75,7 +39,7 @@ def _extract_state(html: str) -> dict:
         return {}
 
 
-def build_description(job: dict, category: str = "") -> str:
+def build_description(job: dict) -> str:
     """Opis oferty OLX - czysty tekst ogłoszenia, bez doklejania parametrów."""
     return (job.get("description") or "").strip()
 
@@ -166,31 +130,6 @@ def extract_company(job: dict, fallback: str = "OLX") -> str:
         if candidate and str(candidate).strip() and str(candidate).lower() != "none":
             return str(candidate).strip()
     return fallback
-
-
-def fetch_offer_details(link: str, session: requests.Session = None, timeout: int = 20) -> dict:
-    """
-    Pobierz szczegóły oferty OLX.
-
-    Zwraca dict:
-      {'description': str, 'company': str, 'posted_date': str, 'status': 'ok'|'expired'|'error'}
-    """
-    sess = session or requests
-    link = normalize_olx_link(link)
-
-    try:
-        throttle.wait()
-        resp = sess.get(link, headers=HEADERS, timeout=timeout)
-        if resp.status_code == 404:
-            return {"status": "expired"}
-        if resp.status_code != 200:
-            return {"status": "error", "http": resp.status_code}
-        html = resp.text
-    except Exception as e:
-        logger.debug(f"OLX detail fetch failed for {link}: {e}")
-        return {"status": "error", "error": str(e)}
-
-    return parse_offer_html(html)
 
 
 def parse_offer_html(html: str) -> dict:

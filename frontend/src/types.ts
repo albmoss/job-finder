@@ -1,18 +1,3 @@
-export interface Stats {
-  raw_count: number;
-  /** Oferty z procentem od Jev. */
-  scored_count: number;
-  /** Oferty odrzucone przez przesiew albo bez opisu — bez procentu. */
-  filtered_count: number;
-  /** Oferty, których przesiew i Jev jeszcze nie widziały. */
-  pending_scoring_count: number;
-  /** Oferty w bazie zobaczone pierwszy raz od startu ostatniego pobierania. */
-  fresh_count: number;
-  decisions_count: number;
-  /** Aplikacje (bez archiwum), które stoją na etapie co najmniej 14 dni. */
-  applications_stale: number;
-}
-
 export type StageStatus = 'pending' | 'running' | 'done' | 'skipped' | 'failed';
 
 export interface PipelineStage {
@@ -99,9 +84,7 @@ export interface PipelineEvent {
 
 export interface PipelineState {
   running: boolean;
-  pid: number | null;
   mode: string;
-  cmd: string[] | null;
   stages: PipelineStage[];
   events: PipelineEvent[];
   current_stage_idx: number;
@@ -110,9 +93,6 @@ export interface PipelineState {
   exit_code: number | null;
   error_message: string | null;
   status: PipelineStatus;
-  can_resume: boolean;
-  progress_percent: number | null;
-  progress_label: string;
   started_at?: number | null;
   finished_at?: number | null;
   telemetry?: PipelineTelemetry;
@@ -315,6 +295,8 @@ export interface OfferDetail {
   fields: OfferFields;
   description_blocks: DescriptionBlock[];
   raw_description: string;
+  /** Język treści ogłoszenia; domyślny język wersji CV pod ofertę. */
+  language: 'pl' | 'en';
   /** ISO; UI pokazuje „dodana dzisiaj / wczoraj / 28 września”. */
   scraped_at: string | null;
   salary_text: string | null;

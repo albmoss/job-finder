@@ -46,6 +46,7 @@ export interface AppContextValue {
   toast: (message: string, opts?: ToastOptions) => void;
   openLaunch: () => void;
   openSettings: () => void;
+  settingsOpen: boolean;
   /** Zapisuje status 'apply' (z gotową wersją CV) i otwiera okno „Aplikacja oznaczona jako wysłana”. */
   openMarkSent: (offer: MarkSentOffer, opts?: MarkSentOptions) => void;
 }

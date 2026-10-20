@@ -49,10 +49,6 @@ def get(doc: Any, path: str | list, default: Any = None) -> Any:
     return node
 
 
-def exists(doc: Any, path: str | list) -> bool:
-    return get(doc, path, _MISSING) is not _MISSING
-
-
 def set_(doc: Any, path: str | list, value: Any) -> bool:
     parts = parse(path) if isinstance(path, str) else path
     if not parts:

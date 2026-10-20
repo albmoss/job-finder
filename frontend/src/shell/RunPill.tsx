@@ -49,7 +49,7 @@ export function RunPill() {
   return (
     <div className="tb-run glass" role="status" aria-label="Wyszukiwanie ofert">
       <a className="tb-run-link" href={`#${paths.progress}`} title="Szczegóły wyszukiwania">
-        <span className="spinner tb-run-spinner" aria-hidden="true" />
+        <span className="spinner" aria-hidden="true" />
         <span className="tb-run-text">
           <span className="tb-run-row">
             <span className="tb-run-title">{title}</span>

@@ -600,17 +600,8 @@
   gap: 2px;
 }
 
-.pg-best-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+.pg-best .pg-side-title {
   margin-bottom: 4px;
-}
-
-.pg-best-total {
-  color: rgba(245, 245, 244, 0.78);
-  font-size: 13px;
-  line-height: 18px;
 }
 
 .pg-row {

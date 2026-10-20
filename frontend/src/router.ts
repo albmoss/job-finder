@@ -62,9 +62,18 @@ export function parseRoute(hash: string): Route {
 }
 
 let current = parseRoute(window.location.hash);
+let currentHash = window.location.hash;
+let blocker: ((path: string) => void) | null = null;
 
 window.addEventListener('hashchange', () => {
+  if (blocker && window.location.hash !== currentHash) {
+    const target = window.location.hash.slice(1);
+    window.history.pushState(null, '', currentHash || '#');
+    blocker(target);
+    return;
+  }
   current = parseRoute(window.location.hash);
+  currentHash = window.location.hash;
   listeners.forEach((fn) => fn());
 });
 
@@ -81,13 +90,26 @@ export function useRoute(): Route {
   return useSyncExternalStore(subscribe, () => current);
 }
 
+export function blockNavigation(onBlocked: (path: string) => void): () => void {
+  blocker = onBlocked;
+  return () => {
+    if (blocker === onBlocked) blocker = null;
+  };
+}
+
 /** `replace` nie dodaje wpisu do historii (przekierowania, zmiana parametrów listy). */
-export function navigate(path: string, opts: { replace?: boolean } = {}) {
+export function navigate(path: string, opts: { replace?: boolean; force?: boolean } = {}) {
   const hash = `#${path}`;
   if (window.location.hash === hash) return;
+  if (blocker && !opts.replace && !opts.force) {
+    blocker(path);
+    return;
+  }
+  if (opts.force) blocker = null;
   if (opts.replace) {
     window.history.replaceState(null, '', hash);
     current = parseRoute(hash);
+    currentHash = hash;
     listeners.forEach((fn) => fn());
   } else {
     window.location.hash = path;

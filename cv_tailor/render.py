@@ -126,7 +126,7 @@ def render_html(cv: dict, language: str, order: list[str] | None = None, title: 
             .replace("{{body}}", "\n".join(p for p in parts if p)))
 
 
-def render_pdf(html_text: str, target: Path) -> int:
+def render_pdf(html_text: str, target: Path) -> None:
     from playwright.sync_api import sync_playwright
 
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -142,5 +142,3 @@ def render_pdf(html_text: str, target: Path) -> int:
         finally:
             browser.close()
     tmp.replace(target)
-    from pypdf import PdfReader
-    return len(PdfReader(str(target)).pages)

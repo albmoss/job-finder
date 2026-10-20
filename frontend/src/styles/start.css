@@ -107,13 +107,6 @@
   line-height: 18px;
 }
 
-.st0-meta {
-  margin-top: -12px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 18px;
-}
-
 .st0-issues {
   display: flex;
   flex-direction: column;

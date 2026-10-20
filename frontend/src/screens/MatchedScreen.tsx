@@ -5,7 +5,6 @@ import {
   Check,
   EyeOff,
   FileUser,
-  Link,
   RotateCcw,
   Search,
   SlidersHorizontal,
@@ -16,6 +15,7 @@ import { countFormat } from '../format';
 import { NEW_ONES, OFFERS, plural } from '../plural';
 import { navigate, paths } from '../router';
 import type { OfferDetail, OfferListItem, OfferSort, OffersResponse } from '../types';
+import { useDismiss } from '../use_dismiss';
 import { CompanyLogo } from './offer/CompanyLogo';
 import { MatchedDetail } from './matched/MatchedDetail';
 import { Pager } from './matched/Pager';
@@ -101,10 +101,7 @@ export function MatchedScreen({ route }: ScreenProps) {
       .getOffers({ tab, search, page, pageSize, sort })
       .then((res) => {
         if (cancelled) return;
-        if (res.items.length === 0 && page > 1 && res.total > 0) {
-          setPage(Math.max(1, res.total_pages));
-          return;
-        }
+        if (res.page !== page) setPage(res.page);
         setList(res);
         setListError(null);
         goneAmong(res.items).then((gone) => {
@@ -152,21 +149,7 @@ export function MatchedScreen({ route }: ScreenProps) {
     };
   }, [selectedLink, dataVersion, toast]);
 
-  useEffect(() => {
-    if (!sortOpen) return;
-    const onPointer = (event: PointerEvent) => {
-      if (!sortRef.current?.contains(event.target as Node)) setSortOpen(false);
-    };
-    const onKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setSortOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointer);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onPointer);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [sortOpen]);
+  useDismiss(sortOpen, () => setSortOpen(false), (target) => !!sortRef.current?.contains(target));
 
   const select = useCallback((link: string) => navigate(paths.matched(link || undefined), { replace: true }), []);
 
@@ -263,15 +246,6 @@ export function MatchedScreen({ route }: ScreenProps) {
         bumpData();
       },
     });
-  };
-
-  const copyLink = async (link: string) => {
-    try {
-      await navigator.clipboard.writeText(link);
-      toast('Skopiowano link.', { icon: Link });
-    } catch (err) {
-      toast(`Nie udało się skopiować linku: ${errorMessage(err)}`);
-    }
   };
 
   const toggleHidden = () => {
@@ -412,7 +386,6 @@ export function MatchedScreen({ route }: ScreenProps) {
           onHide={() => void decide(usableDetail, 'reject')}
           onRestore={() => void restore(usableDetail, 'Oferta wróciła do Dopasowanych.')}
           onMarkSent={() => markSent(usableDetail)}
-          onCopyLink={() => void copyLink(usableDetail.link)}
         />
       ) : (
         <article className="panel mo-detail mo-detail-empty">

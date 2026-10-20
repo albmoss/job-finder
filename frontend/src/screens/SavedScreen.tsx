@@ -1,29 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  ArrowUpRight,
-  Bookmark,
-  BookmarkCheck,
-  Check,
-  Download,
-  FileCheck2,
-  FilePenLine,
-  FileText,
-  LoaderCircle,
-  Plus,
-  Send,
-} from 'lucide-react';
+import { Bookmark, BookmarkCheck, LoaderCircle, Plus } from 'lucide-react';
 import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { formatDayLong, parseDate } from '../format';
 import { OFFERS, plural } from '../plural';
 import { navigate, paths } from '../router';
-import type { CvVersionSummary, OfferListItem } from '../types';
+import type { CvVersionSummary, OfferDetail, OfferListItem } from '../types';
 import { AddFromLinkModal } from './add/AddFromLinkModal';
+import { MatchedDetail } from './matched/MatchedDetail';
 import { locationLine } from './offer/offer_format';
 import type { ScreenProps } from './types';
 import '../styles/saved.css';
 
 const PAGE_SIZE = 100;
+const SEP = '\u2002·\u2002';
 
 async function loadAllSaved(): Promise<OfferListItem[]> {
   const items: OfferListItem[] = [];
@@ -34,27 +24,23 @@ async function loadAllSaved(): Promise<OfferListItem[]> {
   }
 }
 
-function cvStatusText(cv: CvVersionSummary | null): string {
+function cvStatusText(cv: CvVersionSummary | null): string | null {
   if (cv?.status === 'ready') return 'CV gotowe';
   if (cv?.status === 'draft') return 'Szkic CV';
   if (cv?.status === 'running') return 'Tworzymy CV…';
-  return 'Bez osobnej wersji CV';
+  return null;
 }
 
-function placeLine(item: OfferListItem): string {
-  const where = locationLine(item.location, item.work_mode);
-  return [item.company, where].filter(Boolean).join('\u2002·\u2002');
-}
-
-function savedLine(value: string | null): string {
+function savedText(value: string | null): string {
   const date = parseDate(value);
-  return date ? `\u2002·\u2002Zapisano ${formatDayLong(date, date.getFullYear() !== new Date().getFullYear())}` : '';
+  return date ? `Zapisano ${formatDayLong(date, date.getFullYear() !== new Date().getFullYear())}` : '';
 }
 
 export function SavedScreen({ route }: ScreenProps) {
   const app = useApp();
   const { dataVersion, toast, bumpData, openMarkSent } = app;
   const [items, setItems] = useState<OfferListItem[] | null>(null);
+  const [detail, setDetail] = useState<OfferDetail | null>(null);
   const [loadError, setLoadError] = useState('');
   const [adding, setAdding] = useState(false);
   const itemsRef = useRef(items);
@@ -76,6 +62,33 @@ export function SavedScreen({ route }: ScreenProps) {
 
   const requested = route.query.get('oferta');
   const selected = items?.find((i) => i.link === requested) ?? items?.[0] ?? null;
+  const selectedLink = selected?.link ?? null;
+
+  useEffect(() => {
+    if (!selectedLink) {
+      setDetail(null);
+      return;
+    }
+    let alive = true;
+    api
+      .getOfferDetail(selectedLink)
+      .then((res) => {
+        if (!alive) return;
+        setDetail(res);
+        if (res.is_gone) return;
+        api.checkOffers([res.link]).then((check) => {
+          if (alive && check.gone.length > 0) setDetail((prev) => (prev?.link === res.link ? { ...prev, is_gone: true } : prev));
+        }, () => undefined);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setDetail(null);
+        toast(`Nie udało się wczytać oferty: ${errorMessage(err)}`);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selectedLink, dataVersion, toast]);
 
   const select = useCallback((link: string | null) => {
     navigate(paths.saved(link ?? undefined), { replace: true });
@@ -120,10 +133,10 @@ export function SavedScreen({ route }: ScreenProps) {
     }
   };
 
-  const markSent = (item: OfferListItem) => {
-    openMarkSent(item, {
-      onChange: (offer) => {
-        if (offer.status === 'apply') removeLocal(offer.link);
+  const markSent = (offer: OfferDetail) => {
+    openMarkSent(offer, {
+      onChange: (next) => {
+        if (next.status === 'apply') removeLocal(next.link);
       },
     });
   };
@@ -132,6 +145,7 @@ export function SavedScreen({ route }: ScreenProps) {
     setItems((prev) => prev?.map((i) => (i.link === link ? { ...i, note } : i)) ?? prev);
 
   const count = items?.length ?? 0;
+  const shown = detail && selected && detail.link === selected.link ? detail : null;
 
   return (
     <div className="sv-screen">
@@ -171,59 +185,71 @@ export function SavedScreen({ route }: ScreenProps) {
             </div>
           ) : (
             <ul className="sv-rows scroll">
-              {items.map((item) => (
-                <li
-                  key={item.link}
-                  className="glass sv-row"
-                  aria-current={item.link === selected?.link}
-                  tabIndex={0}
-                  onClick={() => select(item.link)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      select(item.link);
-                    }
-                  }}
-                >
-                  <div className="sv-row-top">
-                    <h2 className="sv-row-title">{item.title}</h2>
-                    <button
-                      type="button"
-                      className="btn-quiet sv-unsave"
-                      title="Usuń z zapisanych"
-                      aria-label="Usuń z zapisanych"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        unsave(item);
-                      }}
-                    >
-                      <BookmarkCheck />
-                    </button>
-                  </div>
-                  <p className="sv-row-place">{placeLine(item)}</p>
-                  <div className="sv-row-meta">
-                    <span className="sv-row-pay">
-                      {item.salary_text || 'Brak widełek'}
-                      <span className="sv-row-saved">{savedLine(item.decided_at)}</span>
-                    </span>
-                    <span className={item.cv?.status === 'ready' ? 'sv-cv is-ready' : 'sv-cv'}>
-                      {cvStatusText(item.cv)}
-                    </span>
-                  </div>
-                </li>
-              ))}
+              {items.map((item) => {
+                const cv = cvStatusText(item.cv);
+                return (
+                  <li
+                    key={item.link}
+                    className="glass sv-row"
+                    aria-current={item.link === selected?.link}
+                    tabIndex={0}
+                    onClick={() => select(item.link)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        select(item.link);
+                      }
+                    }}
+                  >
+                    <div className="sv-row-top">
+                      <h2 className="sv-row-title">{item.title}</h2>
+                      <button
+                        type="button"
+                        className="btn-quiet sv-unsave"
+                        title="Usuń z zapisanych"
+                        aria-label="Usuń z zapisanych"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          unsave(item);
+                        }}
+                      >
+                        <BookmarkCheck />
+                      </button>
+                    </div>
+                    <p className="sv-row-place">
+                      {[item.company, locationLine(item.location, item.work_mode)].filter(Boolean).join(SEP)}
+                    </p>
+                    <div className="sv-row-meta">
+                      <span className="sv-row-pay">
+                        {item.salary_text}
+                        <span className="sv-row-saved">
+                          {item.salary_text && SEP}
+                          {savedText(item.decided_at)}
+                        </span>
+                      </span>
+                      {cv && <span className={item.cv?.status === 'ready' ? 'sv-cv is-ready' : 'sv-cv'}>{cv}</span>}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
-          <p className="sv-foot">Zapisanie oferty nie wysyła aplikacji.</p>
         </section>
 
-        {items?.length !== 0 && (
-          <aside className="panel sv-detail">
-            {selected && (
-              <SavedDetail key={selected.link} item={selected} onMarkSent={markSent} onNoteSaved={updateNote} />
-            )}
-          </aside>
-        )}
+        {items?.length !== 0 &&
+          (shown && selected ? (
+            <MatchedDetail
+              key={shown.link}
+              offer={shown}
+              busy={false}
+              onUnsave={() => void unsave(selected)}
+              onMarkSent={() => markSent(shown)}
+            >
+              <NoteField link={shown.link} initial={selected.note} onSaved={updateNote} />
+            </MatchedDetail>
+          ) : (
+            <article className="panel mo-detail" />
+          ))}
       </div>
 
       {adding && (
@@ -233,128 +259,40 @@ export function SavedScreen({ route }: ScreenProps) {
   );
 }
 
-interface SavedDetailProps {
-  item: OfferListItem;
-  onMarkSent: (item: OfferListItem) => void;
-  onNoteSaved: (link: string, note: string) => void;
+interface NoteFieldProps {
+  link: string;
+  initial: string;
+  onSaved: (link: string, note: string) => void;
 }
 
-function SavedDetail({ item, onMarkSent, onNoteSaved }: SavedDetailProps) {
+function NoteField({ link, initial, onSaved }: NoteFieldProps) {
   const { toast } = useApp();
-  const [note, setNote] = useState(item.note);
-  const [savingNote, setSavingNote] = useState(false);
-  const [checkedGone, setCheckedGone] = useState(false);
-  const cv = item.cv;
+  const [note, setNote] = useState(initial);
+  const stored = useRef(initial);
 
-  useEffect(() => {
-    if (item.is_gone) return;
-    let alive = true;
-    api.checkOffers([item.link]).then((res) => {
-      if (alive && res.gone.length > 0) setCheckedGone(true);
-    }, () => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [item.link, item.is_gone]);
-
-  const saveNote = async () => {
-    setSavingNote(true);
+  const save = async () => {
+    const next = note.trim();
+    if (next === stored.current) return;
     try {
-      const res = await api.saveNote(item.link, note.trim());
-      onNoteSaved(item.link, res.offer.note);
-      setNote(res.offer.note);
+      const res = await api.saveNote(link, next);
+      stored.current = res.offer.note;
+      onSaved(link, res.offer.note);
       toast('Zapisano notatkę.');
     } catch (err) {
       toast(`Nie udało się zapisać notatki: ${errorMessage(err)}`);
-    } finally {
-      setSavingNote(false);
     }
   };
 
   return (
-    <div className="sv-detail-body scroll">
-      <p className="sv-company">{item.company}</p>
-      <h2 className="sv-title">{item.title}</h2>
-      {(item.is_gone || checkedGone) && (
-        <p className="label warn">Ogłoszenie zdjęte z portalu. Możesz je usunąć z zapisanych.</p>
-      )}
-
-      {cv?.status === 'ready' ? (
-        <div className="glass sv-cv-card">
-          <FileCheck2 className="sv-cv-card-icon" />
-          <div className="sv-cv-card-text">
-            <p className="sv-cv-card-title">CV pod ofertę jest gotowe</p>
-            <p className="label">{cv.file_name}</p>
-          </div>
-          <a className="btn" href={api.cvVersionPdfUrl(cv.id)} download={cv.file_name ?? undefined}>
-            <Download />
-            Pobierz CV
-          </a>
-        </div>
-      ) : cv?.status === 'draft' || cv?.status === 'running' ? (
-        <div className="glass sv-cv-card">
-          {cv.status === 'running' ? (
-            <LoaderCircle className="sv-cv-card-icon spin" />
-          ) : (
-            <FilePenLine className="sv-cv-card-icon" />
-          )}
-          <div className="sv-cv-card-text">
-            <p className="sv-cv-card-title">{cv.status === 'running' ? 'Tworzymy CV…' : 'Szkic CV czeka na sprawdzenie'}</p>
-            <p className="label">Wersja {cv.version}</p>
-          </div>
-          <a className="btn" href={`#${paths.cvVersion(cv.id)}`}>
-            <FilePenLine />
-            Sprawdź wersję
-          </a>
-        </div>
-      ) : (
-        <div className="glass sv-cv-card">
-          <FileText className="sv-cv-card-icon" />
-          <div className="sv-cv-card-text">
-            <p className="sv-cv-card-title">Bez osobnej wersji CV</p>
-            <p className="label">Wyślesz bazowe CV albo dopasujesz je do tej oferty.</p>
-          </div>
-          <a className="btn" href={`#${paths.tailorNew(item.link)}`}>
-            <FilePenLine />
-            Dopasuj CV
-          </a>
-        </div>
-      )}
-
-      <label className="sv-note-label" htmlFor="sv-note">
-        Twoja notatka
-      </label>
+    <label className="sv-note">
+      <span className="label">Twoja notatka</span>
       <textarea
-        id="sv-note"
-        className="field sv-note"
+        className="field"
         value={note}
         placeholder="Np. wysłać CV po sprawdzeniu portfolio."
-        disabled={savingNote}
         onChange={(e) => setNote(e.target.value)}
+        onBlur={() => void save()}
       />
-      <button
-        type="button"
-        className="btn"
-        disabled={savingNote || note.trim() === item.note}
-        onClick={saveNote}
-      >
-        {savingNote ? <LoaderCircle className="spin" /> : <Check />}
-        Zapisz notatkę
-      </button>
-
-      <div className="sv-spacer" />
-
-      <div className="sv-actions">
-        <button type="button" className="btn" onClick={() => onMarkSent(item)}>
-          <Send />
-          Wysłane
-        </button>
-        <a className="btn btn-primary" href={item.link} target="_blank" rel="noreferrer">
-          <ArrowUpRight />
-          Otwórz ogłoszenie
-        </a>
-      </div>
-      <p className="sv-hint">Aplikujesz na stronie pracodawcy. Po wysłaniu zaznacz to tutaj.</p>
-    </div>
+    </label>
   );
 }

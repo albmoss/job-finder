@@ -71,6 +71,23 @@ def _signature(path: Path):
     return (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
 
 
+def _candidate_dirs() -> list[Path]:
+    found = [d for d in ROOT.glob("k*") if d.is_dir() and re.fullmatch(r"k\d+", d.name)]
+    return sorted(found, key=lambda d: int(d.name[1:]))
+
+
+def _rebuilt(found: list[Path]) -> dict:
+    items = []
+    for directory in found:
+        profile = load_json_safe(directory / PROFILE, default=None)
+        meta = profile.get("_metadata") if isinstance(profile, dict) else None
+        name = _clean_name(meta.get("name")) if isinstance(meta, dict) else ""
+        items.append({"id": directory.name, "name": name or f"Kandydat {directory.name[1:]}", "auto_name": True,
+                      "created_at": datetime.fromtimestamp(directory.stat().st_mtime).isoformat(timespec="seconds")})
+    ids = [c["id"] for c in items]
+    return {"active": FIRST_ID if FIRST_ID in ids else ids[0], "items": items}
+
+
 def _index() -> dict:
     global _cached
     with _lock:
@@ -84,6 +101,9 @@ def _index() -> dict:
                 index["active"] = index["items"][0]["id"]
             _cached = (sig, copy.deepcopy(index))
             return index
+        found = _candidate_dirs() if sig is not None else []
+        if found:
+            return _rebuilt(found)
         target = ROOT / FIRST_ID
         target.mkdir(parents=True, exist_ok=True)
         _migrate(target)

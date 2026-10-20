@@ -68,7 +68,7 @@ export function TopBar({ minimal, running }: { minimal: boolean; running: boolea
   const showPill = !minimal && running && route.name !== 'postep';
 
   return (
-    <header className={minimal ? 'tb tb-minimal' : showPill ? 'tb is-running' : 'tb'}>
+    <header className={showPill ? 'tb is-running' : 'tb'}>
       <a className="tb-brand" href={`#${paths.matched()}`} aria-label="jobfinder">
         <LogoMark />
         <span className="tb-wordmark">jobfinder</span>

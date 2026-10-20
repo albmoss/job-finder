@@ -589,6 +589,10 @@ textarea.field {
   animation: pop-in 150ms var(--ease-out);
 }
 
+.menu.panel {
+  background: linear-gradient(180deg, rgb(30 30 33), rgb(22 22 24));
+}
+
 .menu-item {
   display: flex;
   align-items: center;
@@ -814,7 +818,7 @@ textarea.field {
 }
 
 .logo-sm.has-image {
-  padding: 5px;
+  padding: 6px;
 }
 
 .logo-sm svg {

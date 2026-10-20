@@ -52,6 +52,9 @@ candidates/
 # Kopie zapasowe plików danych (utils/safe_io.py)
 backups/
 
+# Przetworzone logo firm (utils/logos.py)
+logo_cache/
+
 # Zrzuty ekranu (poza tymi z README)
 *.png
 !docs/app.png

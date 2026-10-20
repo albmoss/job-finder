@@ -31,12 +31,10 @@ CAREERJET_API_KEY = os.getenv("CAREERJET_API_KEY", "")
 SCRAPER_CONFIG = {
     "location": "Warszawa",
     "radius_km": 0,  # Tylko miasto z CV (plus oferty zdalne); przedmieścia odpadają w przesiewie
-    "days_posted": 30,
     "headless": True,
     "timeout_ms": 30000,
     "max_retries": 3,
     "delay_between_requests": 2.0,
-    "max_workers": 3,  # Limit równolegle pracujących scraperów
     
     # Filtry poziomu wejściowego - osobne dla każdego portalu
     # Pracuj.pl: pięć poziomów doświadczenia daje ok. 4374 oferty

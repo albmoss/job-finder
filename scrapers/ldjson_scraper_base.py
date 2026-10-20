@@ -48,7 +48,7 @@ _LD_JSON_RE = re.compile(
 # tylko po to, żeby dostać ocenę odrzucającą. Filtr jest celowo wąski - łapie
 # wyłącznie jednoznaczne sygnały seniority, żeby nie zgubić ofert do przyuczenia.
 _SENIOR_TITLE_RE = re.compile(
-    r"\b(senior|starszy|starsza|lead|team\s*lead|principal|expert|ekspert|"
+    r"\b(senior|starszy|starsza|lead(?!\s*generation)|team\s*lead|principal|expert|ekspert|"
     r"kierownik|kierowniczka|manager|menedżer|menedżerka|dyrektor|dyrektorka|"
     r"architekt|architektka|head\s+of|chief|prezes)\b",
     re.IGNORECASE,
@@ -133,6 +133,7 @@ class LdJsonPortalScraper:
         self._clean_streak = 0
         self._floor = self.FLOOR_REQUEST_INTERVAL
         self._ok_since_429 = 0
+        self._blocked = 0
         self.liveness_scope = None
         self.listing_complete = False
 
@@ -195,6 +196,7 @@ class LdJsonPortalScraper:
         "" = 404 (koniec paginacji), None = strony nie udało się pobrać."""
         for attempt in range(1, attempts + 1):
             self._throttle()
+            odmowa = False
             try:
                 resp = self.session.get(url, timeout=25)
                 if resp.status_code == 429:
@@ -208,6 +210,7 @@ class LdJsonPortalScraper:
                     continue
                 if resp.status_code == 404:
                     return ""  # koniec paginacji - nie ma sensu ponawiać
+                odmowa = resp.status_code == 403
                 resp.raise_for_status()
                 self._note_ok()
                 return resp.text
@@ -218,6 +221,9 @@ class LdJsonPortalScraper:
                 )
                 if attempt < attempts:
                     time.sleep((2 ** attempt) + random.random())
+        if odmowa:
+            with self._rate_lock:
+                self._blocked += 1
         return None
 
     # --- parsowanie ----------------------------------------------------------
@@ -517,6 +523,7 @@ class LdJsonPortalScraper:
         if not links:
             return []
 
+        blocked_before = self._blocked
         jobs, no_ldjson, rejected_now = [], 0, []
         started = time.monotonic()
         with ThreadPoolExecutor(max_workers=self.DETAIL_THREADS) as executor:
@@ -552,10 +559,10 @@ class LdJsonPortalScraper:
                 f"JobPosting in ld+json - check whether the board changed its structure"
             )
 
+        blocked = self._blocked - blocked_before
         self.enrich_stats = {
             "ok": len(links) - no_ldjson,
-            "error": no_ldjson,
-            "blocked": 0,
-            "ze_stanu": len(self.seen_again_links),
+            "error": no_ldjson - blocked,
+            "blocked": blocked,
         }
         return jobs

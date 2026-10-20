@@ -14,15 +14,16 @@ import re
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from config import JOBS_DATABASE_PATH
+import config
 from utils import candidates
 from utils.llm import PLACEHOLDERS, PROVIDERS, settings_from_env
 from utils.cv_parser import CVParser
 from utils.data_models import JobDatabase, Job, JobMatch, ScraperStatusManager, is_placeholder_description
 from utils.text_cleaner import detect_work_mode, strip_html
-from utils.safe_io import save_json_atomic, load_json_safe
+from utils.safe_io import DECISIONS_KEEP, save_json_atomic, load_json_safe
 from utils.links import canonical_link
-from utils.candidate_scope import load_profile
+from utils.candidate_scope import load_profile, scope_city
+from utils.cv_profile import is_polish
 from utils.liveness import wygasle, zdjete_z_portalu
 from utils.offer_check import zdjete_ze_sprawdzen
 from cv_tailor import store as cv_store
@@ -81,21 +82,6 @@ def work_mode_text(job: Job) -> str:
         return WORK_MODE_LABELS[modes[0]] if len(modes) == 1 else WORK_MODE_LABELS["hybrid"]
     label = detect_work_mode(job.location or "", job.description or "", job.title or "")["label"]
     return {"Hybrydowo": "hybrydowo", "100% Zdalnie": "zdalnie"}.get(label, "")
-
-
-def _parse_dt(raw: Optional[str]) -> Optional[datetime]:
-    if not raw:
-        return None
-    raw = str(raw).strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(raw, fmt)
-        except ValueError:
-            pass
-    try:
-        return datetime.fromisoformat(raw)
-    except Exception:
-        return None
 
 
 def format_description(text: str, drop_prefix: str = "") -> List[str]:
@@ -168,9 +154,6 @@ class JobDataService:
         self._lock = threading.RLock()
         self.raw_jobs: List[Job] = []
         self.analyzed_matches: List[JobMatch] = []
-        # Oferty odrzucone przez przesiew i oferty bez wpisu w match_results (liczone przy wczytaniu).
-        self.filtered_count = 0
-        self.pending_count = 0
         self.match_results: Dict[str, dict] = {}
         self.job_lookup: Dict[str, Job] = {}
         self.match_lookup: Dict[str, JobMatch] = {}
@@ -198,10 +181,6 @@ class JobDataService:
         started = data.get("started_at") if isinstance(data, dict) else None
         return started if isinstance(started, str) and started else None
 
-    def touch(self):
-        with self._lock:
-            self._rev += 1
-
     def reload(self):
         with self._lock:
             self.data_loaded = False
@@ -211,7 +190,7 @@ class JobDataService:
         with self._lock:
             dec_path = decisions_path()
             mat_store = candidates.match_results()
-            jobs_db = JobDatabase(str(JOBS_DATABASE_PATH))
+            jobs_db = JobDatabase(str(config.JOBS_DATABASE_PATH))
             sig_dec = _file_signature(dec_path)
             sig_mat = (str(mat_store.path), mat_store.revision())
             sig_jobs = (str(jobs_db.filepath), jobs_db.revision())
@@ -271,7 +250,6 @@ class JobDataService:
                 lookup: Dict[str, Job] = {}
                 matches: Dict[str, JobMatch] = {}
                 scored_matches: List[JobMatch] = []
-                filtered_count = pending_count = 0
                 seen_links = set()
                 for j in self.raw_jobs:
                     c_link = canonical_link(j.link)
@@ -289,10 +267,6 @@ class JobDataService:
                                     pct = int(raw_pct)
                                 except (ValueError, TypeError):
                                     pct = None
-                            if pct is None and res.get("filtered"):
-                                filtered_count += 1
-                        else:
-                            pending_count += 1
                         m = JobMatch(job=j, match_percentage=pct)
                         matches[j.link] = m
                         matches[c_link] = m
@@ -306,8 +280,6 @@ class JobDataService:
                 self.job_lookup = lookup
                 self.match_lookup = matches
                 self.analyzed_matches = scored_matches
-                self.filtered_count = filtered_count
-                self.pending_count = pending_count
 
                 status_mgr = ScraperStatusManager()
                 sig_live = (sig_jobs, _file_signature(Path(status_mgr.filepath)), date.today().isoformat())
@@ -362,7 +334,8 @@ class JobDataService:
             }
 
     def _save_decisions(self) -> bool:
-        ok = save_json_atomic(self._decisions_path or decisions_path(), self.user_decisions, backup=True, keep=20)
+        ok = save_json_atomic(self._decisions_path or decisions_path(), self.user_decisions, backup=True,
+                              keep=DECISIONS_KEEP)
         if not ok:
             logger.error("Nie udało się zapisać decyzji użytkownika do pliku!")
         self._rev += 1
@@ -435,7 +408,7 @@ class JobDataService:
                 return False, "Błąd zapisu decyzji do pliku"
             return True, ""
 
-    def restore_decision(self, link: str):
+    def restore_decision(self, link: str) -> Tuple[bool, bool]:
         with self._lock:
             self.ensure_loaded()
             c_link = canonical_link(link)
@@ -446,26 +419,9 @@ class JobDataService:
             if c_link in self.user_decisions:
                 self.user_decisions.pop(c_link, None)
                 changed = True
-            if changed:
-                save_json_atomic(self._decisions_path or decisions_path(), self.user_decisions, backup=True, keep=20)
-                self._rev += 1
-            return changed
-
-    def get_stats(self) -> Dict[str, Any]:
-        with self._lock:
-            self.ensure_loaded()
-            fresh_since = self.fresh_since()
-            fresh_count = (
-                sum(1 for j in self.raw_jobs if (j.scraped_at or "") >= fresh_since) if fresh_since else 0
-            )
-            return {
-                "raw_count": len(self.raw_jobs),
-                "scored_count": len(self.analyzed_matches),
-                "filtered_count": self.filtered_count,
-                "pending_scoring_count": self.pending_count,
-                "fresh_count": fresh_count,
-                "decisions_count": len(self.user_decisions),
-            }
+            if changed and not self._save_decisions():
+                return False, changed
+            return True, changed
 
     def _job(self, link: str) -> Optional[Job]:
         return self.job_lookup.get(link) or self.job_lookup.get(canonical_link(link))
@@ -502,9 +458,11 @@ class JobDataService:
                 })
             return {"items": items, "counts": counts, "total": len(items)}
 
-    def ws_collect(self, tab: str, search: str = "", sort: str = "match") -> List[Tuple[Job, Dict[str, Any]]]:
+    def ws_collect(self, tab: str, search: str = "", sort: str = "match",
+                   loaded: bool = False) -> List[Tuple[Job, Dict[str, Any]]]:
         with self._lock:
-            self.ensure_loaded()
+            if not loaded:
+                self.ensure_loaded()
             out: List[Tuple[Job, Dict[str, Any]]] = []
 
             if tab == "Dopasowane":
@@ -547,15 +505,25 @@ class JobDataService:
                 ]
             return out
 
-    def hidden_count(self) -> int:
+    def hidden_count(self, loaded: bool = False) -> int:
         with self._lock:
-            self.ensure_loaded()
+            if not loaded:
+                self.ensure_loaded()
             cached = self._derived_cache.get("hidden")
             if cached and cached[0] == self._rev:
                 return cached[1]
-            count = len(self.ws_collect("Ukryte"))
+            count = len(self.ws_collect("Ukryte", loaded=True))
             self._derived_cache["hidden"] = (self._rev, count)
             return count
+
+    def known_logo(self, url: str) -> bool:
+        with self._lock:
+            self.ensure_loaded()
+            cached = self._derived_cache.get("logos")
+            if not cached or cached[0] != self._signatures["jobs"]:
+                cached = (self._signatures["jobs"], {j.logo_url for j in self.raw_jobs if j.logo_url})
+                self._derived_cache["logos"] = cached
+            return url in cached[1]
 
     def fresh_count(self, items: List[Tuple[Job, Dict[str, Any]]], fresh_since: Optional[str],
                     cache_key: Optional[str] = None) -> int:
@@ -571,7 +539,8 @@ class JobDataService:
                 self._derived_cache[cache_key] = (stamp, count)
             return count
 
-    def list_item(self, job: Job, rec: Dict[str, Any], fresh_since: Optional[str]) -> Dict[str, Any]:
+    def list_item(self, job: Job, rec: Dict[str, Any], fresh_since: Optional[str],
+                  latest_cv: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         status = rec["status"]
         return {
             "link": job.link,
@@ -588,7 +557,7 @@ class JobDataService:
             "status": "save" if status in SAVED_STATUSES else status if status in DECISION_STATUSES else None,
             "decided_at": rec["decided_at"],
             "note": rec["note"],
-            "cv": cv_store.latest_for(job.link),
+            "cv": latest_cv.get(canonical_link(job.link)),
         }
 
     def get_offer_detail(self, link: str) -> Optional[Dict[str, Any]]:
@@ -634,6 +603,7 @@ class JobDataService:
                 },
                 "description_blocks": format_description_blocks(paragraphs),
                 "raw_description": description,
+                "language": "en" if description and not is_polish(description) else "pl",
                 "scraped_at": job.scraped_at or None,
                 "salary_text": salary_text(getattr(job, "salary", None)),
                 "status": "save" if status in SAVED_STATUSES else status if status in DECISION_STATUSES else None,
@@ -685,6 +655,13 @@ class JobDataService:
 
 # Singleton instancja
 job_data_service = JobDataService()
+
+
+def latest_cv_by_link() -> Dict[str, Dict[str, Any]]:
+    latest: Dict[str, Dict[str, Any]] = {}
+    for version in cv_store.list_versions():
+        latest.setdefault(version["link"], version)
+    return latest
 
 
 # --- CV & API Keys & Environment Management ---
@@ -778,32 +755,36 @@ def _profile_summary(cv: str) -> Optional[Dict[str, Any]]:
 def save_uploaded_cv(filename: str, content_bytes: bytes) -> Tuple[bool, str]:
     txt_path = cv_txt_path()
     name = filename.lower()
-    text = None
+    target = upload = None
 
     try:
         if name.endswith(".pdf"):
-            pdf_path = cv_pdf_path()
-            with open(pdf_path, "wb") as f:
-                f.write(content_bytes)
-            text = CVParser.extract_from_pdf(str(pdf_path))
+            target = cv_pdf_path()
         elif name.endswith((".docx", ".doc")):
-            docx_path = candidates.path(candidates.CV_DOCX)
-            with open(docx_path, "wb") as f:
-                f.write(content_bytes)
-            text = CVParser.extract_from_docx(str(docx_path))
-        else:
+            target = candidates.path(candidates.CV_DOCX)
+        if target is None:
             text = content_bytes.decode("utf-8", errors="replace")
-
-        if text and len(text.strip()) > 20:
-            cleaned = CVParser.clean_text(text)
-            with open(txt_path, "w", encoding="utf-8") as f:
-                f.write(cleaned)
-            return True, f"Zapisano CV ({len(cleaned)} znaków)."
         else:
+            upload = target.with_name(target.name + ".upload")
+            upload.write_bytes(content_bytes)
+            extract = CVParser.extract_from_pdf if target.suffix == ".pdf" else CVParser.extract_from_docx
+            text = extract(str(upload))
+
+        if not text or len(text.strip()) <= 20:
             return False, "Plik CV jest pusty lub nie udało się wyodrębnić tekstu."
+        cleaned = CVParser.clean_text(text)
+        if upload is not None:
+            os.replace(upload, target)
+            upload = None
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(cleaned)
+        return True, f"Zapisano CV ({len(cleaned)} znaków)."
     except Exception as e:
         logger.error(f"Błąd zapisu CV: {e}")
         return False, f"Błąd przetwarzania pliku CV: {e}"
+    finally:
+        if upload is not None:
+            upload.unlink(missing_ok=True)
 
 
 def save_pasted_cv_text(raw_text: str) -> Tuple[bool, str]:
@@ -961,7 +942,13 @@ def _get_chromium_executable_path() -> Optional[str]:
         return p.chromium.executable_path
 
 
+_chromium_path: Optional[str] = None
+
+
 def check_playwright_chromium() -> Tuple[bool, str]:
+    global _chromium_path
+    if _chromium_path and Path(_chromium_path).is_file():
+        return True, "Playwright + Chromium gotowe"
     try:
         import playwright
     except ImportError:
@@ -977,6 +964,7 @@ def check_playwright_chromium() -> Tuple[bool, str]:
 
     try:
         if exe_path and Path(exe_path).is_file():
+            _chromium_path = exe_path
             return True, "Playwright + Chromium gotowe"
     except (OSError, ValueError):
         pass
@@ -1035,33 +1023,35 @@ def fetch_job_from_link(url: str) -> Dict[str, Any]:
     return fetched
 
 
-def save_manual_job(data: Dict[str, Any]) -> Tuple[bool, str]:
-    job_data_service.ensure_loaded()
+def save_manual_job(data: Dict[str, Any]) -> Tuple[bool, str, str]:
     job = Job(
         title=data.get("title", ""),
         company=data.get("company", ""),
         link=data.get("link", ""),
         description=data.get("description", ""),
         source=data.get("source", "") or "Manual",
-        location=data.get("location", "") or "Warszawa",
+        location=data.get("location", "") or scope_city(default=""),
     )
     if not job.title or not job.company or not job.link:
-        return False, "Tytuł, firma i link są wymagane."
+        return False, "Tytuł, firma i link są wymagane.", ""
 
     try:
-        JobDatabase(str(JOBS_DATABASE_PATH)).put_jobs([job])
-
-        # Update in-memory
-        existing = job_data_service.job_lookup.get(job.link)
-        if existing is not None:
-            for field in ("title", "company", "location", "source", "description"):
-                setattr(existing, field, getattr(job, field))
-        else:
-            job_data_service.raw_jobs.append(job)
-            job_data_service.job_lookup[job.link] = job
-
-        job_data_service.touch()
-        return True, "Oferta zapisana w bazie."
+        db = JobDatabase(str(config.JOBS_DATABASE_PATH))
+        known = db.get(job.link)
+        if known is None:
+            db.put_jobs([job])
+            return True, "Oferta zapisana w bazie.", job.link
+        changed = False
+        if is_placeholder_description(known.description) and not is_placeholder_description(job.description):
+            known.description = job.description
+            changed = True
+        for field in ("title", "company", "location"):
+            if not getattr(known, field) and getattr(job, field):
+                setattr(known, field, getattr(job, field))
+                changed = True
+        if changed:
+            db.put_jobs([known])
+        return True, "Oferta jest już w bazie.", known.link
     except Exception as e:
         logger.error(f"Nie udało się zapisać oferty do bazy: {e}")
-        return False, f"Błąd zapisu: {e}"
+        return False, f"Błąd zapisu: {e}", ""

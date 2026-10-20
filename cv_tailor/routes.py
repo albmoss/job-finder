@@ -7,9 +7,12 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.routing import Route
 
 from cv_tailor import review, store, tailor
-from cv_tailor.model import cv_text, llm_settings
+from cv_tailor.model import llm_settings
 from cv_tailor.render import render_html, render_pdf
+from utils.cv_profile import cv_text
 from utils.data_models import is_placeholder_description
+
+FINALIZE_ATTEMPTS = 2
 
 
 def _error(message: str, status: int = 400) -> JSONResponse:
@@ -136,27 +139,38 @@ def _html(v: dict, which: str, marks: bool) -> str:
 
 def finalize(request: Request) -> JSONResponse:
     version_id = request.path_params["id"]
-    v = store.get(version_id)
-    if v is None:
-        return _missing()
-    if v["status"] not in ("draft", "ready"):
-        return _error("Tę wersję można zapisać dopiero po przygotowaniu szkicu.")
-    pending = store.to_summary(v)["pending_numbers"]
-    if pending:
-        return _error(f"Przed pobraniem sprawdź liczby do potwierdzenia ({pending}).")
-    try:
-        render_pdf(_html(v, "tailored", False), store.pdf_path(version_id))
-    except Exception as e:
-        return _error(f"Nie udało się utworzyć PDF: {type(e).__name__}: {str(e)[:200]}", 500)
-    file_name = f"cv_{store.slug(v.get('company') or '')}_v{v['version']}.pdf"
+    for _ in range(FINALIZE_ATTEMPTS):
+        v = store.get(version_id)
+        if v is None:
+            return _missing()
+        if v["status"] not in ("draft", "ready"):
+            return _error("Tę wersję można zapisać dopiero po przygotowaniu szkicu.")
+        pending = store.to_summary(v)["pending_numbers"]
+        if pending:
+            return _error(f"Przed pobraniem sprawdź liczby do potwierdzenia ({pending}).")
+        html_text = _html(v, "tailored", False)
+        try:
+            render_pdf(html_text, store.pdf_path(version_id))
+        except Exception as e:
+            return _error(f"Nie udało się utworzyć PDF: {type(e).__name__}: {str(e)[:200]}", 500)
+        file_name = f"cv_{store.slug(v.get('company') or '')}_v{v['version']}.pdf"
+        stale = False
 
-    def fn(cur: dict):
-        if cur["status"] not in ("draft", "ready"):
-            return False
-        cur.update(status="ready", file_name=file_name)
+        def fn(cur: dict):
+            nonlocal stale
+            if cur["status"] not in ("draft", "ready"):
+                return False
+            if _html(cur, "tailored", False) != html_text:
+                stale = True
+                return False
+            cur.update(status="ready", file_name=file_name)
 
-    v = store.update(version_id, fn)
-    return JSONResponse(_detail(v))
+        v = store.update(version_id, fn)
+        if v is None:
+            return _missing()
+        if not stale:
+            return JSONResponse(_detail(v))
+    return _error("Wersja zmieniła się w trakcie tworzenia PDF. Spróbuj ponownie.", 409)
 
 
 def pdf(request: Request):

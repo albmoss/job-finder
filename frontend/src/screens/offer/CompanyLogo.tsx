@@ -32,11 +32,10 @@ export function CompanyLogo({ url, source, size }: CompanyLogoProps) {
     return (
       <span className={`logo-tile logo-${size} has-image`} aria-hidden="true">
         <img
-          src={url}
+          src={`/api/logo?src=${encodeURIComponent(url)}`}
           alt=""
           loading="lazy"
           decoding="async"
-          referrerPolicy="no-referrer"
           onError={() => setFailedUrl(url)}
         />
       </span>

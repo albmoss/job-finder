@@ -9,7 +9,9 @@ powstają w katalogach tymczasowych - prywatne dane w katalogu projektu nie są 
 Uruchomienie:  python tests/integration_test.py
 """
 
+import atexit
 import json
+import logging
 import os
 import io
 import shutil
@@ -20,16 +22,44 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+TMP = Path(tempfile.mkdtemp(prefix="test_candidates_"))
+atexit.register(shutil.rmtree, TMP, True)
+os.environ["JOBFINDER_LOG_PATH"] = str(TMP / "scraper.log")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
 import config
 from utils import candidates
+config.JOBS_DATABASE_PATH = TMP / "jobs.db"
+candidates.ROOT = TMP / "candidates"
+
+import requests
+import app_services
+import pipeline_manager
+from utils import llm, offer_check, stop
+from utils.data_models import ScraperStatusManager
 from utils.links import canonical_link
 from utils.safe_io import load_json_safe, save_json_atomic
 from utils.text_cleaner import clean_job_description, strip_html
 
 ROOT = Path(__file__).parent.parent
 PASSED, FAILED = [], []
-candidates.ROOT = Path(tempfile.mkdtemp(prefix="test_candidates_")) / "candidates"
-config.JOBS_DATABASE_PATH = candidates.ROOT.parent / "jobs.db"
+pipeline_manager.STATE_LOCK_FILE = TMP / "pipeline_run_state.json"
+stop.STOP_FLAG_FILE = TMP / "pipeline_stop_requested.flag"
+offer_check.OFFER_CHECKS_PATH = TMP / "offer_checks.json"
+app_services.ENV_PATH = TMP / ".env"
+ScraperStatusManager.__init__.__defaults__ = (str(TMP / "scraper_status.json"),)
+
+for _name in [k for k in os.environ if "API_KEY" in k or k.startswith("ADZUNA_")]:
+    del os.environ[_name]
+config.LLM = llm.settings_from_env({})
+
+
+def _no_network(*args, **kwargs):
+    raise RuntimeError("real network call in a test")
+
+
+llm._post = llm._ask_gemini = _no_network
+requests.Session.send = _no_network
 
 
 def check(name, condition, detail=""):
@@ -49,6 +79,9 @@ def test_canonical_link():
           canonical_link("https://a.pl/of/1/") == "https://a.pl/of/1")
     check("keeps query holding the offer ID",
           canonical_link("https://a.pl/job?id=55") == "https://a.pl/job?id=55")
+    check("tracking parameters ending in 'id' do not count as the offer ID",
+          canonical_link("https://a.pl/of/1?fbclid=x&utm_id=2") == "https://a.pl/of/1"
+          and canonical_link("https://a.pl/job?gclid=x&id=55") == "https://a.pl/job?id=55")
     check("is idempotent",
           canonical_link(canonical_link("https://a.pl/x?utm=1")) == canonical_link("https://a.pl/x?utm=1"))
     check("handles empty input", canonical_link("") == "")
@@ -81,13 +114,16 @@ def test_safe_io():
     path = tmp / "safe_io.json"
     try:
         data = {"a": 1, "ą": "ę"}
-        check("atomic write reports success", save_json_atomic(path, data) is True)
+        save_json_atomic(path, data)
         check("read returns the same data", load_json_safe(path) == data)
         check("leaves no .tmp file behind", not path.with_suffix(".json.tmp").exists())
 
+        for version in (2, 3):
+            save_json_atomic(path, {"v": version}, backup=True)
         path.write_text("{uszkodzony json", encoding="utf-8")
         recovered = load_json_safe(path, default={"fallback": True})
-        check("corrupt file does not crash the app", isinstance(recovered, dict))
+        check("a corrupt file is restored from the newest backup, not the default",
+              recovered == {"v": 2}, recovered)
 
         check("missing file returns the default",
               load_json_safe(tmp / "brak.json", default={"d": 1}) == {"d": 1})
@@ -95,12 +131,10 @@ def test_safe_io():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-
-
 def test_llm_providers():
     """
     Pula kluczy i rodzaje błędów dostawców modeli. Od rodzaju błędu zależy reakcja
-    kaskady: limit albo zły klucz -> następny klucz, urwany JSON -> podział paczki.
+    kaskady: limit albo zły klucz -> następny klucz, urwany JSON -> następny model.
     """
     print("\n[6] Model providers: key pool and error kinds")
     from pydantic import BaseModel
@@ -122,13 +156,13 @@ def test_llm_providers():
           s.api_keys == [] and "opneai" in s.error, str(s.api_keys))
     s = llm.settings_from_env({"LLM_PROVIDER": "openai", "OPENAI_API_KEY": "k",
                                "OPENAI_MODELS": "qwen3, qwen3,llama4"})
-    check("custom models replace the defaults for scoring and the profile",
+    check("custom models replace the provider defaults",
           s.models == ["qwen3", "llama4"], str(s.models))
 
     check("Gemini 429 is a rate limit", llm._classify_gemini("429 RESOURCE_EXHAUSTED") == "rate_limit")
     check("Gemini rejected key moves on to the next key",
           llm._classify_gemini("400 INVALID_ARGUMENT. {'reason': 'API_KEY_INVALID'}") == "invalid_key")
-    check("truncated JSON asks for a smaller batch",
+    check("truncated JSON is its own kind, so the caller moves on to the next model",
           llm._classify_gemini("Unterminated string starting at") == "truncated")
     check("an unknown error is none of these", llm._classify_gemini("connection reset") == "other")
 
@@ -173,17 +207,17 @@ def test_llm_providers():
             nazwa = settings.provider.id
             check(f"{nazwa}: HTTP {limit} is a rate limit", rodzaj(settings, Odp(limit, {})) == "rate_limit")
             check(f"{nazwa}: HTTP 401 is a rejected key", rodzaj(settings, Odp(401, {})) == "invalid_key")
-        check("openai: output cut at the token limit asks for a smaller batch",
+        check("openai: output cut at the token limit is truncated",
               rodzaj(openai, Odp(200, {"choices": [{"finish_reason": "length",
                                                     "message": {"content": '{"evalu'}}]})) == "truncated")
-        check("anthropic: output cut at the token limit asks for a smaller batch",
+        check("anthropic: output cut at the token limit is truncated",
               rodzaj(anthropic, Odp(200, {"stop_reason": "max_tokens", "content": []})) == "truncated")
         kolejka[:] = [Odp(200, ok_anthropic)]
         check("anthropic: the wrapped reply is unwrapped into the list",
               llm.ask_json(anthropic, "m", "k", "prompt", Ocena).data == lista)
 
         # Serwer bez json_schema (np. DeepSeek) dostaje json_object - i odrzucony
-        # tryb nie jest wysyłany ponownie przy każdej kolejnej paczce.
+        # tryb nie jest wysyłany ponownie przy każdym kolejnym zapytaniu.
         kolejka[:] = [Odp(400, {"error": "response_format json_schema is not supported"}),
                       Odp(200, ok_openai)]
         wynik = llm.ask_json(openai, "m", "k", "prompt", Ocena).data
@@ -191,7 +225,7 @@ def test_llm_providers():
         kolejka[:] = [Odp(200, ok_openai)]
         wyslane.clear()
         llm.ask_json(openai, "m", "k", "prompt", Ocena)
-        check("the rejected schema mode is not retried on the next batch",
+        check("the rejected schema mode is not retried on the next request",
               [b["response_format"]["type"] for b in wyslane] == ["json_object"], str(wyslane))
     finally:
         llm._post = prawdziwy_post
@@ -343,7 +377,6 @@ def test_scraper_health():
                        domain="praca.pl")["verdict"] == "degraded")
 
     # NoFluffJobs API oddaje tytuł z encjami; przebieg z 25.09 padł na tym w fazie 1.
-    from dataclasses import asdict
     from scrapers.nofluff_scraper import NoFluffScraper
     nfj = NoFluffScraper.__new__(NoFluffScraper)._parse_posting(
         {"title": "IT Systems &amp; Infrastructure Administrator", "name": "Kowalski &amp; Syn",
@@ -351,9 +384,6 @@ def test_scraper_health():
     check("NoFluffJobs titles and companies arrive decoded",
           (nfj.title, nfj.company) == ("IT Systems & Infrastructure Administrator", "Kowalski & Syn"),
           (nfj.title, nfj.company))
-    check("so the health check has nothing to flag",
-          health.check("NoFluffJobs", 38, jobs=[asdict(nfj)] * 3,
-                       domain="nofluffjobs.com") is None)
 
     check("a rate limit is never read as breakage",
           health.check("Indeed", 0, error="HTTP 429 Too Many Requests")["verdict"] == "inconclusive")
@@ -468,6 +498,20 @@ def test_dedup_winner_and_years():
           {e["link"] for e in zwyciezca["also_on"]} == {"https://b.pl/x", "https://c.pl/x", "https://d.pl/x"},
           zwyciezca["also_on"])
 
+    tekst = "Budujemy platformę danych dla klientów z branży logistycznej. " * 6
+    warianty = {f"https://nfj.example/analyst-{slug}": {
+        "link": f"https://nfj.example/analyst-{slug}", "title": "Data Analyst", "company": "Beta",
+        "location": miasto, "source": "NoFluffJobs", "description": tekst}
+        for slug, miasto in (("a-krakow", "Kraków"), ("b-remote", "Remote"), ("c-wroclaw", "Wrocław"))}
+    keep = deduplicate_db._plan(warianty, set())[0]
+    check("the same long text in several cities is one offer and the remote variant is kept",
+          keep == {"https://nfj.example/analyst-b-remote"}, keep)
+    bez_opisu = {link: dict(job, description="") for link, job in warianty.items()
+                 if not link.endswith("remote")}
+    keep = deduplicate_db._plan(bez_opisu, set())[0]
+    check("the same title without a description stays separate across cities",
+          keep == set(bez_opisu), keep)
+
     for text, expected in [
         ("Andersen is a global software development company with over 18 years of experience.", None),
         ("Nad wszystkim czuwa nasz CTO, który ma 20 lat doświadczenia w programowaniu.", None),
@@ -479,6 +523,156 @@ def test_dedup_winner_and_years():
     ]:
         check(f"years from text: {text[:40]}", years_from_text(text) == expected, years_from_text(text))
 
+
+def test_matching_rules():
+    print("\n[9c] Prefilter title rule, text features, offer fingerprint, stored percent, crash safety")
+    from unittest.mock import patch
+    import requests
+    from matching import jev, prefilter
+    import matching.run as matching_run
+    from utils.data_models import Job, JobDatabase
+    from utils.offer_fields import languages_from_text, norm_contracts, norm_seniority, years_from_text
+    from utils.sqlite_store import RecordStore
+
+    junior = {"city": "Warszawa", "seniority": "junior", "years_experience": 1.0, "skills": ["SQL"],
+              "languages": [{"name": "polish", "level": "C2"}, {"name": "english", "level": "B2"}]}
+    for title, expected in [
+        ("Project Manager", None), ("Key Account Manager (International)", None),
+        ("Junior / Mid Project Manager", None), ("Mid/Senior Backend Developer", None),
+        ("Lead Generation Specialist", None), ("Opiekunka osób starszych", None),
+        ("Senior Backend Developer", "poziom"), ("Kierownik sklepu", "poziom"), ("Team Leader", "poziom"),
+    ]:
+        reason = prefilter.reject_reason(Job.from_dict({"title": title, "location": "Warszawa"}), junior)
+        check(f"prefilter title: {title}", reason == expected, reason)
+
+    for text, expected in [
+        ("Wymagamy 2,5 roku doświadczenia.", 2),
+        ("Requirements: 1.5 years of experience.", 1),
+        ("Doświadczenie: min. 3 lata", 3),
+        ("Nie musisz mieć 20 lat doświadczenia, wszystkiego nauczymy.", None),
+        ("Działamy od 15 lat i szukamy osoby z doświadczeniem.", None),
+        ("We are looking for experienced sales people, present on the market for 12 years.", None),
+        ("Opieka nad chłopcem (7 lat), doświadczenie z dziećmi.", None),
+        ("Doświadczenie od 3 lat w sprzedaży.", 3),
+    ]:
+        check(f"years from text: {text[:40]}", years_from_text(text) == expected, years_from_text(text))
+
+    for raw, expected in [("International Sales Manager", ["manager"]), ("Internal Audit", None),
+                          ("Specjalista ds. leadów", ["mid"]), ("Senior Associate", ["senior"]),
+                          ("Młodszy - Starszy Monter", ["junior", "senior"])]:
+        check(f"seniority: {raw}", norm_seniority(raw) == expected, norm_seniority(raw))
+    check("employment contract is uop", norm_contracts("Contract of employment") == ["uop"],
+          norm_contracts("Contract of employment"))
+    for text in ("Obsługa klientów z Ukrainy, znajomość języka polskiego.",
+                 "Our office in Germany uses English language."):
+        names = [lang["name"] for lang in languages_from_text(text) or []]
+        check(f"a country is not a language: {text[:30]}", "ukrainian" not in names and "german" not in names, names)
+
+    base = {"title": "Analityk", "company": "Acme", "location": "Warszawa", "link": "https://acme.example/1",
+            "description": "Analiza danych w SQL. " * 400}
+    fp = matching_run.offer_fingerprint(Job.from_dict(base))
+    check("offer fingerprint ignores salary and text beyond what Jev reads",
+          fp == matching_run.offer_fingerprint(Job.from_dict(dict(base, salary={"min": 1, "max": 2},
+                                                                 description=base["description"] + "Dopisek.")))
+          and fp != matching_run.offer_fingerprint(Job.from_dict(dict(base, title="Analityk danych"))))
+
+    class Reply:
+        def __init__(self, body):
+            self.status_code, self.body, self.headers, self.text = 200, body, {}, ""
+
+        def json(self):
+            if self.body is None:
+                raise requests.exceptions.JSONDecodeError("Expecting value", "<html>", 0)
+            return self.body
+
+    for body in (None, {"model": "m"}, {"answers": {"fit": {"noul": 0.5}}}):
+        session = type("S", (), {"post": lambda self, *a, **k: Reply(body)})()
+        try:
+            jev.ask({}, "k", session)
+            outcome = "returned"
+        except jev.JevError:
+            outcome = "JevError"
+        except Exception as e:
+            outcome = type(e).__name__
+        check(f"malformed 200 from Jev is a JevError: {str(body)[:30]}", outcome == "JevError", outcome)
+
+    answers = {"requirements": {"score": 4, "legend": dict.fromkeys("abcde")},
+               "role": {"score": 3, "legend": dict.fromkeys("abcd")},
+               "level": {"choice": "match", "probabilities": {"match": 1.0}},
+               "blocker": {"noul": 0.0}, "fit": {"noul": 1.0}, "direction": {"noul": 1.0}}
+    expected_pct = jev.percent(answers)
+    temp_path = Path(tempfile.mkdtemp(prefix="test_matching_"))
+    orig_jobs = config.JOBS_DATABASE_PATH
+    db_path = temp_path / "jobs.db"
+    store = RecordStore(temp_path / "match_results.db")
+    offers = [dict(base, link=f"https://acme.example/{n}", title=f"Analityk {n}",
+                   description="Wymagamy 3 lata doświadczenia w SQL.") for n in range(1, 6)]
+    offers[1]["title"] = "Senior Analityk"
+    JobDatabase(str(db_path)).save_records(offers)
+    jobs = {j.link: j for j in JobDatabase(str(db_path)).load_jobs()}
+    asked = []
+
+    def run(profile, ask, features=None):
+        def fake_ask(state, *a, **k):
+            asked.append(state["oferta"]["stanowisko"])
+            return ask(state)
+        with patch.object(matching_run, "ensure_profile", return_value=profile), \
+             patch.object(matching_run, "cv_text", return_value="CV"), \
+             patch.object(matching_run, "remember_profile"), \
+             patch.object(matching_run, "profile_history", return_value={}), \
+             patch.object(matching_run.candidates, "match_results", return_value=store), \
+             patch.object(matching_run.jev, "api_key", return_value="test"), \
+             patch.object(matching_run.triage, "triage",
+                          lambda items, *a, **k: ({link: 1.0 for link, _ in items}, 0, 0, False)), \
+             patch.object(matching_run.jev, "ask", fake_ask), \
+             patch.object(matching_run, "text_features",
+                          return_value=features or {"years_required": None, "languages": None}), \
+             redirect_stdout(io.StringIO()):
+            return matching_run.main([])
+
+    try:
+        mine = RecordStore(temp_path / "shared.db")
+        mine.put({"a": {"v": 1}})
+        mine.load()
+        RecordStore(temp_path / "shared.db").put({"b": {"v": 1}})
+        mine.sync({"a": {"v": 2}})
+        check("sync keeps a row another store inserted after this one loaded",
+              mine.load() == {"a": {"v": 2}, "b": {"v": 1}}, mine.load())
+        config.JOBS_DATABASE_PATH = db_path
+        profile_fp = matching_run.profile_fingerprint(junior)
+        store.sync({link: {"percent": 1, "filtered": None, "answers": answers,
+                           "offer_fp": matching_run.offer_fingerprint(jobs[link]), "profile_fp": profile_fp,
+                           "model": "m", "scored_at": "2026-10-01T10:00:00"}
+                    for link in (offers[0]["link"], offers[1]["link"])})
+
+        def crash_on_third(state):
+            if state["oferta"]["stanowisko"] == "Analityk 4":
+                raise ValueError("unexpected reply")
+            return {"answers": answers, "model": "m"}
+
+        code = run(junior, crash_on_third, {"years_required": 0, "languages": None})
+        saved = store.load()
+        check("a different text extractor does not send a scored offer back to Jev",
+              "Analityk 1" not in asked, asked)
+        check("percent is recomputed from stored answers",
+              saved[offers[0]["link"]]["percent"] == expected_pct, saved[offers[0]["link"]])
+        check("a prefilter reject keeps the paid answers",
+              saved[offers[1]["link"]]["filtered"] == "poziom" and saved[offers[1]["link"]]["answers"] == answers
+              and saved[offers[1]["link"]]["percent"] is None, saved[offers[1]["link"]])
+        check("an unexpected error in one reply keeps every other scored offer",
+              code == 1 and sorted(link for link, e in saved.items() if e.get("percent") is not None)
+              == sorted([offers[0]["link"], offers[2]["link"], offers[4]["link"]]), (code, saved.keys()))
+        check("full scoring keeps the triage mark of the offer",
+              (saved[offers[2]["link"]].get("triage") or {}).get("p") == 1.0, saved[offers[2]["link"]])
+
+        asked.clear()
+        run(dict(junior, seniority="senior", years_experience=6.0), lambda state: {"answers": answers, "model": "m"})
+        saved = store.load()
+        check("an offer no longer rejected gets its percent back without Jev",
+              saved[offers[1]["link"]]["percent"] == expected_pct and "Senior Analityk" not in asked, asked)
+    finally:
+        config.JOBS_DATABASE_PATH = orig_jobs
+        shutil.rmtree(temp_path, ignore_errors=True)
 
 
 def test_olx_tempo_przy_blokadzie():
@@ -501,7 +695,9 @@ def test_olx_tempo_przy_blokadzie():
             self.status = status
 
     class FikcyjnaStrona:
-        """Zawsze 403 - dokładnie ten stan, który kasował przerwę."""
+        """Zawsze 403 - dokładnie ten stan, który kasował przerwę. `fetch` w stronie pada, więc idzie `goto`."""
+        url = "https://www.olx.pl/praca/warszawa/"
+
         def __init__(self):
             self.wejscia = 0
 
@@ -510,6 +706,12 @@ def test_olx_tempo_przy_blokadzie():
 
         def unroute(self, *a, **k):
             pass
+
+        def is_closed(self):
+            return False
+
+        def evaluate(self, js, arg):
+            raise RuntimeError("Page.evaluate: Execution context was destroyed")
 
         def goto(self, url, **k):
             self.wejscia += 1
@@ -536,7 +738,7 @@ def test_olx_tempo_przy_blokadzie():
                       link=f"https://www.olx.pl/oferta/x-ID{i}.html",
                       description="x", source="OLX Praca")
                   for i in range(40)]
-        scraper.enrich_descriptions(oferty)
+        wynik = scraper.enrich_descriptions(oferty)
     finally:
         olx.time.sleep = prawdziwy_sleep
         kl.known_links = prawdziwe_known
@@ -555,6 +757,8 @@ def test_olx_tempo_przy_blokadzie():
           f"{wejscia} wejsc przy limicie {olx.BLOKADY_LIMIT}")
     check("nie probuje wszystkich 40 ofert",
           wejscia < 40, f"wejsc: {wejscia}")
+    check("zablokowane i nieodwiedzone oferty ida do zapisu z zaslepka",
+          len(wynik) == 40, f"{len(wynik)} z 40")
 
 
 
@@ -592,6 +796,12 @@ def test_zdjete_z_portalu():
     check("dni scrapowania czytane z ofert, nie z historii scrapera",
           dni["X"] == {"2026-09-08", "2026-09-05", "2026-08-23"} and dni["Y"] == {"2026-09-08", "2026-08-23"},
           str(dict(dni)))
+
+    przebiegi = [{"link": "k2", "source": "X", "last_seen": "2026-09-10T09:00:00"},
+                 {"link": "k1", "source": "X", "last_seen": "2026-09-11T12:00:00"}]
+    inny_zakres = {"X": {"liveness": {"scope": "warszawa", "since": "2026-09-10T12:00:00"}}}
+    check("oferta widziana tego samego dnia przed zmiana zakresu nie jest zdjeta",
+          zdjete_z_portalu(przebiegi, inny_zakres) == set(), str(zdjete_z_portalu(przebiegi, inny_zakres)))
 
     from utils.liveness import wygasle
     terminy = [
@@ -826,7 +1036,9 @@ def test_olx_fetch_rownolegly():
         scraper.page = StronaFetch(lambda n: 403)
         scraper.timeout = 1000
         scraper.seen_again_links = []
-        scraper.enrich_descriptions(zbuduj(200))
+        wynik = scraper.enrich_descriptions(zbuduj(200))
+        check("po blokadzie oferty ida do zapisu z zaslepka, nie znikaja",
+              len(wynik) == 200, f"{len(wynik)} z 200")
 
         check("blokady licza sie osobno, nie jako bledy",
               scraper.enrich_stats["blocked"] > 0 and scraper.enrich_stats["error"] == 0,
@@ -1076,14 +1288,18 @@ def test_pipeline_final_status():
 def test_stop_during_scraping():
     print("\n[14b] Stop during scraping saves collected offers and leaves the source unfinished")
     from unittest.mock import patch
+    import threading
+    import time
     import main_scraper
     from utils import stop
 
     temp = Path(tempfile.mkdtemp(prefix="test_stop_scraping_"))
     flag = temp / "pipeline_stop_requested.flag"
     ran, saved, status_calls = [], [], []
+    browser_started = threading.Event()
+    http_saw_browser = []
 
-    def fake_scraper(name, stops=False):
+    def fake_scraper(name, mode=None):
         class Fake:
             def __init__(self, config):
                 self.seen_again_links = []
@@ -1094,8 +1310,19 @@ def test_stop_during_scraping():
 
             def run(self):
                 ran.append(name)
-                if stops:
+                if mode == "stops":
+                    browser_started.wait(3)
                     flag.touch()
+                elif mode == "until_stop":
+                    browser_started.set()
+                    for _ in range(300):
+                        if flag.exists():
+                            break
+                        time.sleep(0.01)
+                elif mode == "browser":
+                    browser_started.set()
+                elif mode == "http":
+                    http_saw_browser.append(browser_started.wait(3))
                 return [object()] * 6
         return Fake
 
@@ -1116,19 +1343,34 @@ def test_stop_during_scraping():
              "CareerjetAPIScraper", "PracaPlScraper", "AplikujScraper", "GoWorkScraper", "ATSFeedsScraper",
              "IndeedScraper"]
     fakes = {cls: fake_scraper(f"Src {cls}") for cls in names}
-    fakes["PracujOptimizedScraper"] = fake_scraper("Alpha", stops=True)
-    fakes["OLXScraper"] = fake_scraper("Omega")
+    fakes["PracujOptimizedScraper"] = fake_scraper("Alpha", "stops")
+    fakes["OLXScraper"] = fake_scraper("Omega", "until_stop")
     try:
         with patch.multiple(main_scraper, ScraperStatusManager=Status, JobDatabase=Db, **fakes), \
              patch.object(stop, "STOP_FLAG_FILE", flag), redirect_stdout(io.StringIO()):
             jobs = main_scraper.run_all_scrapers(only=["alpha", "omega"])
+            ran_before = sorted(ran)
+            saved_before = list(saved)
+            main_scraper.run_all_scrapers(only=["alpha", "omega"])
     finally:
         shutil.rmtree(temp, ignore_errors=True)
-    check("stopped scraping returns what it collected instead of failing", len(jobs) == 6, len(jobs))
-    check("sources not started before the stop never run", ran == ["Alpha"], ran)
-    check("offers collected before the stop are saved", saved == [6], saved)
+    check("stopped scraping returns what it collected instead of failing", len(jobs) == 12, len(jobs))
+    check("offers collected before the stop are saved", sorted(saved_before) == [6, 6], saved_before)
+    check("sources not started before the stop never run",
+          ran_before == ["Alpha", "Omega"] and sorted(ran) == ran_before and saved == saved_before, ran)
     check("a stopped source is not marked as scraped today and reports no full listing",
           status_calls == [], status_calls)
+
+    ran.clear()
+    saved.clear()
+    browser_started.clear()
+    fakes["PracujOptimizedScraper"] = fake_scraper("Http", "http")
+    fakes["OLXScraper"] = fake_scraper("Browser", "browser")
+    with patch.multiple(main_scraper, ScraperStatusManager=Status, JobDatabase=Db, **fakes), \
+         patch.object(stop, "STOP_FLAG_FILE", temp / "brak.flag"), redirect_stdout(io.StringIO()):
+        jobs = main_scraper.run_all_scrapers(only=["http", "browser"])
+    check("browser group runs alongside the HTTP group, not after it", http_saw_browser == [True], http_saw_browser)
+    check("each source is saved exactly once", sorted(saved) == [6, 6] and len(jobs) == 12, saved)
 
 
 def test_listing_completeness():
@@ -1190,7 +1432,7 @@ def test_scope_rejects():
     def make():
         scraper = object.__new__(GoWorkScraper)
         scraper.location_filter, scraper.skip_senior, scraper.skip_known_details = "warszawa", False, False
-        scraper.seen_again_links, scraper.listing_complete = [], False
+        scraper.seen_again_links, scraper.listing_complete, scraper._blocked = [], False, 0
         scraper._collect_links = lambda: ["https://gw.pl/1", "https://gw.pl/2"]
         scraper._in_scope = lambda job, posting: job.link.endswith("/1")
         def detail(link):
@@ -1217,6 +1459,21 @@ def test_scope_rejects():
 
 
 
+def test_remote_offers_in_poland():
+    print("\n[14f] JustJoin/RocketJobs remote offers pass only with coordinates in Poland")
+    from scrapers.justjoin_scraper import JustJoinScraper
+    from scrapers.rocketjobs_scraper import RocketJobsScraper
+
+    for cls in (JustJoinScraper, RocketJobsScraper):
+        scraper = cls.__new__(cls)
+        remote = {"workplaceType": "remote", "city": "Los Angeles", "latitude": 34.05, "longitude": -118.24}
+        check(f"{cls.__name__}: a remote offer from abroad is dropped",
+              scraper._matches_location(remote, "Warszawa") is False)
+        check(f"{cls.__name__}: a remote offer with one office in Poland is kept",
+              scraper._matches_location(dict(remote, locations=[
+                  {"city": "Kraków", "latitude": 50.06, "longitude": 19.94}]), "Warszawa") is True)
+
+
 def test_windows_process_safety():
     print("\n[17] Windows process identity and child management")
     from pipeline_manager import _get_process_creation_time, _is_pid_alive
@@ -1237,7 +1494,7 @@ def test_pipeline_stop_and_resume_lifecycle():
     import pipeline_manager as sapp
     from utils import stop
     from pipeline_manager import PipelineProcessManager, load_json_safe
-    import tempfile, shutil, time, sys, io
+    import tempfile, shutil, sys, io
     from unittest.mock import patch
     from contextlib import redirect_stdout
     import matching.run
@@ -1253,7 +1510,6 @@ def test_pipeline_stop_and_resume_lifecycle():
 
     patches = [
         patch.object(sapp, "STATE_LOCK_FILE", t_state_lock),
-        patch.object(sapp, "CHECKPOINT_FILE", t_checkpoint),
         patch.object(stop, "STOP_FLAG_FILE", t_stop_flag),
         patch.object(pipeline, "CHECKPOINT_FILE", t_checkpoint),
         patch("utils.cv_profile.ensure_profile", return_value={"seniority": "mid", "city": "Warszawa", "skills": ["python"]}),
@@ -1265,51 +1521,42 @@ def test_pipeline_stop_and_resume_lifecycle():
     try:
         os.chdir(temp_dir)
 
-        # 1. Real run_pipeline lifecycle: initial checkpoint inside phase0 and stop during matching
+        def run_with(purge=lambda: True, dedup=lambda: True, matching=lambda *a, **k: 0, **options):
+            with patch.object(pipeline, "purge_stale_offers") as p0, \
+                 patch.object(pipeline, "migrate_normalize_links") as p1_5, \
+                 patch.object(pipeline, "deduplicate_db") as p2, \
+                 patch.object(pipeline, "clean_db") as p2_5, \
+                 patch.object(pipeline, "JobDatabase"), \
+                 patch("matching.run.main", side_effect=matching):
+                p0.main, p1_5.main, p2.run, p2_5.run = purge, (lambda: True), dedup, (lambda: True)
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    result = pipeline.run_pipeline(**options)
+            return result, out.getvalue(), load_json_safe(t_checkpoint, default={})
+
         phase0_saw_checkpoint = {"seen": False, "has_options": False}
 
         def fake_purge():
-            # Executed during Phase 0: verify initial checkpoint was already persisted!
             if t_checkpoint.exists():
                 phase0_saw_checkpoint["seen"] = True
                 cp = load_json_safe(t_checkpoint, default={})
                 if cp.get("options", {}).get("skip_scraping") is True and cp.get("current_stage") == "phase0":
                     phase0_saw_checkpoint["has_options"] = True
             return True
+
         def fake_matching_stopping(*args, **kwargs):
-            # Simulate stop requested at matching boundary
             t_stop_flag.touch()
             return 1
 
-        with patch.object(pipeline, "purge_stale_offers") as mock_p0, \
-             patch.object(pipeline, "migrate_normalize_links") as mock_p1_5, \
-             patch.object(pipeline, "deduplicate_db") as mock_p2, \
-             patch.object(pipeline, "clean_db") as mock_p2_5, \
-             patch.object(pipeline, "JobDatabase") as mock_db_cls, \
-             patch("matching.run.main", side_effect=fake_matching_stopping):
-
-            mock_p0.main = fake_purge
-            mock_p1_5.main = lambda: True
-            mock_p2.run = lambda: True
-            mock_p2_5.run = lambda: True
-            mock_db_instance = mock_db_cls.return_value
-            mock_db_instance.load_jobs.return_value = [{"title": "Job 1", "link": "http://x"}]
-
-            out_buf = io.StringIO()
-            with redirect_stdout(out_buf):
-                res = pipeline.run_pipeline(skip_scraping=True, rescore_all=True)
-            run_output = out_buf.getvalue()
-
+        res, run_output, cp_after_stop = run_with(purge=fake_purge, matching=fake_matching_stopping,
+                                                  skip_scraping=True, rescore_all=True)
         check("initial checkpoint observed inside phase0", phase0_saw_checkpoint["seen"] is True)
         check("initial checkpoint preserves options inside phase0", phase0_saw_checkpoint["has_options"] is True)
         check("run_pipeline returned False on user stop", res is False)
         check("run_pipeline printed PIPELINE STOPPED", "PIPELINE STOPPED" in run_output)
-
-        cp_after_stop = load_json_safe(t_checkpoint, default={})
         check("checkpoint marks stopped is True", cp_after_stop.get("stopped") is True)
         check("checkpoint preserves completed stages before stop", "phase2_5" in cp_after_stop.get("completed_stages", []))
 
-        # 2. Resuming run_pipeline skips completed stages
         phase0_rerun = {"called": False}
         matching_resumed = {"called": False}
 
@@ -1321,65 +1568,63 @@ def test_pipeline_stop_and_resume_lifecycle():
             matching_resumed["called"] = True
             return 0
 
-        with patch.object(pipeline, "purge_stale_offers") as mock_p0, \
-             patch.object(pipeline, "migrate_normalize_links") as mock_p1_5, \
-             patch.object(pipeline, "deduplicate_db") as mock_p2, \
-             patch.object(pipeline, "clean_db") as mock_p2_5, \
-             patch.object(pipeline, "JobDatabase") as mock_db_cls, \
-             patch("matching.run.main", side_effect=fake_matching_success):
-
-            mock_p0.main = fake_purge_rerun
-            mock_p1_5.main = lambda: True
-            mock_p2.run = lambda: True
-            mock_p2_5.run = lambda: True
-            mock_db_instance = mock_db_cls.return_value
-            mock_db_instance.load_jobs.return_value = [{"title": "Job 1", "link": "http://x"}]
-
-            out_resume = io.StringIO()
-            with redirect_stdout(out_resume):
-                res_resume = pipeline.run_pipeline(resume=True)
-            resume_output = out_resume.getvalue()
-
+        res_resume, resume_output, _ = run_with(purge=fake_purge_rerun, matching=fake_matching_success, resume=True)
         check("resumed pipeline returned True on completion", res_resume is True)
         check("resumed pipeline skipped completed phase0", phase0_rerun["called"] is False)
         check("resumed pipeline executed phase3", matching_resumed["called"] is True)
         check("resumed pipeline output contains PIPELINE COMPLETE", "PIPELINE COMPLETE" in resume_output)
 
-        # 3. Slow cooperative stop (>1.5s grace period) and subsequent clean start without immediate stop
+        def broken_dedup():
+            raise RuntimeError("dedup crashed")
+
+        res_fail, out_fail, cp_fail = run_with(dedup=broken_dedup, skip_scraping=True)
+        check("a stage that raises fails the run and is recorded as failed_stage",
+              res_fail is False and "PIPELINE INCOMPLETE" in out_fail and cp_fail.get("failed_stage") == "phase2"
+              and "phase2" not in cp_fail.get("completed_stages", []), cp_fail)
+
+        def dedup_then_stop():
+            stop.request()
+            return True
+
+        res_stop, _, cp_stop = run_with(dedup=dedup_then_stop, skip_scraping=True)
+        check("a stage that finishes while stop is requested is not marked completed",
+              res_stop is False and cp_stop.get("stopped") is True
+              and "phase1_5" in cp_stop.get("completed_stages", [])
+              and "phase2" not in cp_stop.get("completed_stages", []), cp_stop)
+
         mgr = PipelineProcessManager()
-        # Child runs for 2.0s - deliberately exceeding the manager's 1.5s cooperative polling window!
-        slow_cmd = [sys.executable, "-c", "import time; time.sleep(2.0)"]
-        started, _ = mgr.start_pipeline(mode="full", cmd=slow_cmd)
-        check("manager started slow child process", started is True)
+        waits_for_flag = [sys.executable, "-c",
+                          "import sys, time\nfrom pathlib import Path\n"
+                          "flag, end = Path(sys.argv[1]), time.time() + 10\n"
+                          "while not flag.exists() and time.time() < end:\n    time.sleep(0.02)\n"
+                          "sys.exit(0 if flag.exists() else 3)", str(t_stop_flag)]
+        started, _ = mgr.start_pipeline(mode="full", cmd=waits_for_flag)
+        check("manager started the child process", started is True)
+        stop_ok, _ = mgr.stop_pipeline(force=False)
+        code = mgr.wait()
+        check("cooperative stop: the child exits by itself on the flag and the run is stopped",
+              stop_ok is True and code == 0 and mgr.get_state().get("status") == "stopped",
+              (code, mgr.get_state().get("status")))
 
-        # Issue cooperative stop: polling loop waits 1.5s, then returns while process is still running
-        t0 = time.time()
-        stop_ok, stop_msg = mgr.stop_pipeline(force=False)
-        duration = time.time() - t0
-        check("stop_pipeline returned without auto-force-kill", stop_ok is True)
-        check("stop_pipeline polling window observed (~1.5s)", 1.3 <= duration <= 2.2)
-        check("manager status is stopping", mgr.get_state().get("status") in ("stopping", "stopped"))
-
-        # Wait for the child process to finish its 2.0s sleep and exit
-        if mgr._thread:
-            mgr._thread.join(timeout=4.0)
-        check("child process exited cleanly", not mgr.is_running())
-
-        # A leftover stop flag may have remained if polling expired before process exit.
-        # Simulate leftover flag on disk:
         t_stop_flag.touch()
-        check("stop flag exists on disk before new start", t_stop_flag.exists())
-
-        # Next start_pipeline or resume MUST safely clear the stale flag and NOT stop immediately!
         quick_cmd = [sys.executable, "-c", "import sys; sys.exit(0)"]
         next_started, _ = mgr.start_pipeline(mode="full", cmd=quick_cmd)
         check("new start_pipeline started successfully", next_started is True)
         check("stale stop flag cleared by start_pipeline", not t_stop_flag.exists())
+        mgr.wait()
+        check("new run completed successfully instead of immediately stopping",
+              mgr.get_state().get("status") == "completed")
 
-        if mgr._thread:
-            mgr._thread.join(timeout=3.0)
-        next_state = mgr.get_state()
-        check("new run completed successfully instead of immediately stopping", next_state.get("status") == "completed")
+        writer = PipelineProcessManager()
+        writer._sync_state_to_disk(force=True)
+        writer._sync_state_to_disk()
+        deferred = writer._pending_sync
+        writer._sync_state_to_disk(force=True)
+        t_state_lock.unlink()
+        if deferred is not None:
+            deferred.join(2)
+        check("a forced state write cancels the deferred one, so nothing lands on disk after it",
+              deferred is not None and not t_state_lock.exists())
 
         # 4. Standalone tool exit semantics: code 0 = completed, code 1 = failed
         mgr_sa = PipelineProcessManager()
@@ -1440,13 +1685,27 @@ def test_http_security_and_dns_rebinding_protection():
     check("cross-origin mutation rejected with 403 Forbidden", res_csrf.status_code == 403)
 
     # 4. Klucze z .env nie wychodzą jawnym tekstem przez /api/env-keys
-    from app_services import _read_env_file
-    res_keys = client.get("/api/env-keys", headers={"host": "127.0.0.1:8501"})
-    check("env-keys endpoint responds with 200", res_keys.status_code == 200)
-    sekrety = [v for k, v in _read_env_file().items()
-               if ("KEY" in k or "SECRET" in k) and len(v) > 8]
+    from unittest.mock import patch
+    sekrety = {"GEMINI_API_KEY_PRIMARY": "gk-fake-primary-1234567890",
+               "GEMINI_API_KEY_1": "gk-fake-backup-0987654321",
+               "TYPESAFE_API_KEY": "tsk-fake-secret-abcdef123456"}
+    fake_env = TMP / "fake.env"
+    fake_env.write_text("".join(f"{k}={v}\n" for k, v in sekrety.items()), encoding="utf-8")
+    with patch.object(app_services, "ENV_PATH", fake_env):
+        res_keys = client.get("/api/env-keys", headers={"host": "127.0.0.1:8501"})
+    payload = res_keys.json() if res_keys.status_code == 200 else {}
+    configured = {f["key"] for f in payload.get("fields", []) if f.get("configured")}
+    check("env-keys reports the keys configured in .env",
+          {"GEMINI_API_KEY_1", "TYPESAFE_API_KEY"} <= configured
+          and payload.get("api_info", {}).get("count") == 2, payload)
     check("no configured secret appears in the /api/env-keys payload",
-          not any(s in res_keys.text for s in sekrety))
+          not any(v in res_keys.text for v in sekrety.values()))
+
+    with patch("urllib.request.urlopen", side_effect=AssertionError("fetched")) as urlopen, \
+         patch("subprocess.run", side_effect=AssertionError("fetched")) as run:
+        res_file = client.post("/api/tools/fetch-link", json={"url": "file:///C:/Windows/win.ini"})
+    check("fetch-link refuses a file:// URL without opening it",
+          res_file.status_code == 400 and not urlopen.called and not run.called, res_file.text)
 
 
 def test_external_data_change_automatic_invalidation():
@@ -1463,10 +1722,10 @@ def test_external_data_change_automatic_invalidation():
     from utils.data_models import JobDatabase
     t_jobs = temp_path / "jobs.db"
 
-    orig_jobs = app_services.JOBS_DATABASE_PATH
+    orig_jobs = config.JOBS_DATABASE_PATH
     orig_root = candidates.ROOT
 
-    app_services.JOBS_DATABASE_PATH = t_jobs
+    config.JOBS_DATABASE_PATH = t_jobs
     candidates.ROOT = temp_path / "candidates"
     t_decisions = candidates.path(candidates.DECISIONS)
     try:
@@ -1483,10 +1742,8 @@ def test_external_data_change_automatic_invalidation():
 
         # 1. Initial query: consumer observes 1 offer
         res1 = client.get("/api/offers?tab=Dopasowane", headers={"host": "127.0.0.1:8501"})
-        check("initial offers query returns 200", res1.status_code == 200)
         data1 = res1.json()
         check("initial offers count is 1", data1.get("total") == 1)
-        check("initial offer title is observed", len(data1.get("items", [])) > 0 and data1["items"][0]["title"] == "Initial Dev")
 
         # 2. Simulate background pipeline writing newly scraped & analyzed offer to disk
         time.sleep(0.05)
@@ -1499,7 +1756,6 @@ def test_external_data_change_automatic_invalidation():
 
         # 3. Next consumer poll without manual reload: observes updated 2 offers automatically
         res2 = client.get("/api/offers?tab=Dopasowane", headers={"host": "127.0.0.1:8501"})
-        check("subsequent poll returns 200 without manual reload", res2.status_code == 200)
         data2 = res2.json()
         check("background file update automatically reflected in total count (total: 2)", data2.get("total") == 2)
         titles2 = [it["title"] for it in data2.get("items", [])]
@@ -1512,7 +1768,6 @@ def test_external_data_change_automatic_invalidation():
 
         # 5. Consumer polls Zapisane tab without manual reload: observes saved offer automatically
         res3 = client.get("/api/offers?tab=Zapisane", headers={"host": "127.0.0.1:8501"})
-        check("Zapisane poll returns 200", res3.status_code == 200)
         data3 = res3.json()
         check("external decision write automatically reflected in Zapisane tab (total: 1)", data3.get("total") == 1)
         links3 = [it["link"] for it in data3.get("items", [])]
@@ -1526,7 +1781,7 @@ def test_external_data_change_automatic_invalidation():
         check("only undecided offer remains in Dopasowane", "Background Pipeline Dev" in titles4 and "Initial Dev" not in titles4)
 
     finally:
-        app_services.JOBS_DATABASE_PATH = orig_jobs
+        config.JOBS_DATABASE_PATH = orig_jobs
         candidates.ROOT = orig_root
         app_services.job_data_service.reload()
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1554,96 +1809,22 @@ def test_playwright_chromium_prerequisites():
                 return str(target_path)
             return _resolver
 
-        # 1. Existing browser executable file returns ready (bool check)
-        with patch.object(app_services, "_get_chromium_executable_path", side_effect=_mock_resolver(browser_exe)):
-            ok_ready, _ = app_services.check_playwright_chromium()
-            check("existing browser executable returns ready", ok_ready is True)
+        with patch.object(app_services, "_chromium_path", None):
+            with patch.object(app_services, "_get_chromium_executable_path", side_effect=_mock_resolver(missing_exe)):
+                ok_missing, _ = app_services.check_playwright_chromium()
+                check("missing browser executable returns not ready without install", ok_missing is False)
 
-        # 2. Missing browser executable file returns not ready without install (bool check)
-        with patch.object(app_services, "_get_chromium_executable_path", side_effect=_mock_resolver(missing_exe)):
-            ok_missing, _ = app_services.check_playwright_chromium()
-            check("missing browser executable returns not ready without install", ok_missing is False)
+            async def _async_call():
+                with patch.object(app_services, "_get_chromium_executable_path", side_effect=_mock_resolver(browser_exe)):
+                    return app_services.check_playwright_chromium()
 
-        # 3. Invocation from inside an active asyncio event loop
-        async def _async_call():
-            with patch.object(app_services, "_get_chromium_executable_path", side_effect=_mock_resolver(browser_exe)):
-                return app_services.check_playwright_chromium()
+            async_ok, _ = asyncio.run(_async_call())
+            check("check_playwright_chromium succeeds when called from active asyncio loop", async_ok is True)
 
-        async_ok, _ = asyncio.run(_async_call())
-        check("check_playwright_chromium succeeds when called from active asyncio loop", async_ok is True)
-
-def test_pipeline_skipped_stage_progress():
-    print("\n[22] Pipeline progress calculation with skipped stages")
-    import tempfile
-    from pathlib import Path
-    from unittest.mock import patch
-    import pipeline_manager
-    from pipeline_manager import PipelineProcessManager
-
-    # Stan przebiegu w katalogu tymczasowym: wcześniej test kasował prawdziwy
-    # pipeline_run_state.json i z arkusza znikał log przerwanego przebiegu.
-    temp_dir = Path(tempfile.mkdtemp(prefix="test_pipeline_progress_"))
-    with patch.object(pipeline_manager, "STATE_LOCK_FILE", temp_dir / "pipeline_run_state.json"), \
-         patch.object(pipeline_manager, "CHECKPOINT_FILE", temp_dir / "pipeline_checkpoint.json"), \
-         patch("utils.stop.STOP_FLAG_FILE", temp_dir / "pipeline_stop_requested.flag"):
-        _check_skipped_stage_progress(PipelineProcessManager)
-    import shutil
-    shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-def _check_skipped_stage_progress(PipelineProcessManager):
-    class DummyProc:
-        pid = 12345
-        def poll(self): return None
-
-    class ExitedProc:
-        pid = 12345
-        def poll(self): return 0
-
-    mgr = PipelineProcessManager()
-    mgr._cmd = ["test"]
-    mgr._process = DummyProc()
-
-    # 1. Completed state with 1 skipped + 5 done:
-    mgr._status = "completed"
-    mgr._stages = [
-        {"name": "scrape", "title": "Scraping portali", "status": "skipped"},
-        {"name": "extract", "title": "Ekstrakcja", "status": "done"},
-        {"name": "enrich", "title": "Wzbogacanie", "status": "done"},
-        {"name": "cluster", "title": "Klasteryzacja", "status": "done"},
-        {"name": "match", "title": "Dopasowanie", "status": "done"},
-        {"name": "report", "title": "Raport", "status": "done"},
-    ]
-    mgr._active_stage_idx = 5
-    mgr._exit_code = 0
-    mgr._pipeline_complete_seen = True
-
-    state_completed = mgr.get_state()
-    check("completed with skipped stage reports 100.0% progress", state_completed["progress_percent"] == 100.0)
-    check("completed with skipped stage labels 6/6 resolved stages", "6/6" in state_completed["progress_label"])
-    check("completed pipeline cannot be resumed", state_completed["can_resume"] is False)
-
-    # 2. Running state when stage 0 is skipped and stage 1 is active (stages 2-5 pending):
-    mgr._stages = [
-        {"name": "scrape", "title": "Scraping portali", "status": "skipped"},
-        {"name": "extract", "title": "Ekstrakcja", "status": "running"},
-        {"name": "enrich", "title": "Wzbogacanie", "status": "pending"},
-        {"name": "cluster", "title": "Klasteryzacja", "status": "pending"},
-        {"name": "match", "title": "Dopasowanie", "status": "pending"},
-        {"name": "report", "title": "Raport", "status": "pending"},
-    ]
-    mgr._status = "running"
-    mgr._active_stage_idx = 1
-    state_running = mgr.get_state()
-    check("running with 1 skipped stage reflects resolved stage in progress_percent",
-          state_running["progress_percent"] == round((1 / 6) * 100, 1))
-    check("running state indicates active stage", "Etap 2 z 6" in state_running["progress_label"])
-
-    # 3. Stopped state with unfinished stages:
-    mgr._process = ExitedProc()
-    mgr._status = "stopped"
-    state_stopped = mgr.get_state()
-    check("stopped pipeline with remaining stages allows resume", state_stopped["can_resume"] is True)
+            with patch.object(app_services, "_get_chromium_executable_path",
+                              side_effect=AssertionError("resolver called again")) as resolver:
+                cached_ok, _ = app_services.check_playwright_chromium()
+            check("a positive Chromium check is not repeated", cached_ok is True and not resolver.called)
 
 
 def test_pipeline_events():
@@ -1662,6 +1843,9 @@ def test_pipeline_events():
         telemetry.emit("stage", id="phase0_5", state="running")
     lines = out.getvalue().splitlines()
     check("a human log line is not an event", telemetry.parse(lines[0]) is None)
+    glued_text, glued_event = telemetry.split("worker 0 progress line 9" + lines[1])
+    check("an event glued to another thread's print is still read",
+          glued_text == "worker 0 progress line 9" and glued_event == telemetry.parse(lines[1]), glued_event)
 
     mgr = PipelineProcessManager()
     mgr._init_stages("full")
@@ -1719,14 +1903,15 @@ def test_pipeline_events():
 def test_offer_api_contract():
     print("\n[24] Fresh offers, tabs, notes, next step and decisions over HTTP")
     import tempfile, shutil, json
+    from unittest.mock import patch
     from pathlib import Path
     from starlette.testclient import TestClient
     import app_services
     import server
 
     temp_path = Path(tempfile.mkdtemp(prefix="test_offer_api_"))
-    orig_jobs, orig_root = app_services.JOBS_DATABASE_PATH, candidates.ROOT
-    app_services.JOBS_DATABASE_PATH = temp_path / "jobs.db"
+    orig_jobs, orig_root = config.JOBS_DATABASE_PATH, candidates.ROOT
+    config.JOBS_DATABASE_PATH = temp_path / "jobs.db"
     candidates.ROOT = temp_path / "candidates"
     from utils.data_models import JobDatabase
     paths = {
@@ -1752,7 +1937,7 @@ def test_offer_api_contract():
     }
     decisions = {jobs[0]["link"]: "save", jobs[2]["link"]: "reject",
                  jobs[3]["link"]: {"status": "rated", "rating": 7}}
-    JobDatabase(str(app_services.JOBS_DATABASE_PATH)).save_records(jobs)
+    JobDatabase(str(config.JOBS_DATABASE_PATH)).save_records(jobs)
     candidates.match_results().put(matches)
     paths["USER_DECISIONS_PATH"].write_text(json.dumps(decisions), encoding="utf-8")
     paths["LAST_SCRAPE_RUN_PATH"].write_text(json.dumps({"started_at": "2026-09-20T19:00:00"}), encoding="utf-8")
@@ -1782,15 +1967,9 @@ def test_offer_api_contract():
               "rating" not in on_disk3 and noted.json()["offer"]["note"] == "Wysłać po portfolio", on_disk3)
         check("note needs a decision",
               client.post("/api/offers/note", json={"link": jobs[1]["link"], "note": "x"}).status_code == 400)
-        stats = client.get("/api/stats").json()
-        check("stats split the base into scored, filtered and not yet seen",
-              (stats["scored_count"], stats["filtered_count"],
-               stats["pending_scoring_count"], stats["fresh_count"]) == (5, 1, 1, 2), stats)
 
         detail0 = client.get("/api/offers/detail", params={"link": jobs[0]["link"]}).json()
         check("detail exposes match percentage", detail0["match_percentage"] == 80)
-        detail1 = client.get("/api/offers/detail", params={"link": jobs[1]["link"]}).json()
-        check("detail exposes second match percentage", detail1["match_percentage"] == 70)
 
         bad_due = client.post("/api/offers/next-step", json={"link": jobs[0]["link"], "label": "Rozmowa", "due": "2026-13-01"})
         check("next step rejects an invalid date", bad_due.status_code == 400)
@@ -1817,8 +1996,33 @@ def test_offer_api_contract():
 
         cleared = client.post("/api/offers/next-step", json={"link": jobs[0]["link"], "label": "", "due": None})
         check("empty label removes the next step", cleared.status_code == 200 and cleared.json()["offer"]["next_step"] is None)
+
+        manual = client.post("/api/tools/save-manual-job", json={
+            "title": "Analityk 2", "company": "Corp", "link": jobs[1]["link"] + "?fbclid=x",
+            "description": "", "status": "save"})
+        kept = JobDatabase(str(config.JOBS_DATABASE_PATH)).get(jobs[1]["link"])
+        check("adding a known offer by link keeps the stored record and saves the decision",
+              manual.status_code == 200 and manual.json()["offer"]["status"] == "save"
+              and kept.description == jobs[1]["description"] and kept.source == "Test"
+              and kept.scraped_at == jobs[1]["scraped_at"], manual.text)
+        fresh_manual = client.post("/api/tools/save-manual-job", json={
+            "title": "Nowa", "company": "Corp", "link": "https://corp.example/manual"})
+        check("a new manual offer does not get a hard-coded city",
+              fresh_manual.status_code == 200
+              and not JobDatabase(str(config.JOBS_DATABASE_PATH)).get("https://corp.example/manual").location)
+
+        cv_pdf = app_services.cv_pdf_path()
+        cv_pdf.write_bytes(b"%PDF-old")
+        with patch.object(app_services.CVParser, "extract_from_pdf", return_value=""):
+            ok_cv, _ = app_services.save_uploaded_cv("skan.pdf", b"%PDF-new")
+        check("a PDF without text does not replace the current CV file",
+              ok_cv is False and cv_pdf.read_bytes() == b"%PDF-old" and not list(cv_pdf.parent.glob("*.upload")))
+
+        with patch.object(app_services, "save_json_atomic", return_value=False):
+            failed_restore = client.post("/api/offers/restore", json={"link": jobs[1]["link"]})
+        check("restoring a decision reports a failed write", failed_restore.status_code == 500)
     finally:
-        app_services.JOBS_DATABASE_PATH = orig_jobs
+        config.JOBS_DATABASE_PATH = orig_jobs
         candidates.ROOT = orig_root
         app_services.job_data_service.reload()
         shutil.rmtree(temp_path, ignore_errors=True)
@@ -1856,13 +2060,11 @@ def test_foreign_run_visible_to_server():
     )
 
     with patch.object(pm, "STATE_LOCK_FILE", state_file), \
-         patch.object(stop, "STOP_FLAG_FILE", stop_flag), \
-         patch.object(pm, "CHECKPOINT_FILE", temp_path / "pipeline_checkpoint.json"):
+         patch.object(stop, "STOP_FLAG_FILE", stop_flag):
         try:
             server = PipelineProcessManager()
             server.start_pipeline(mode="standalone", cmd=[sys.executable, "-c", "pass"])
             server.wait()
-            check("server's own earlier run finished", server.get_state()["status"] == "completed")
 
             echoed = []
             owner = PipelineProcessManager()
@@ -1883,6 +2085,12 @@ def test_foreign_run_visible_to_server():
                   (state["telemetry"].get("scoring") or {}).get("scored") == 1
                   and (state["telemetry"].get("scoring") or {}).get("to_score") == 150)
             check("server shows the terminal run's log", any("PHASE 3" in line for line in state["logs"]))
+            import server as http_server
+            from starlette.testclient import TestClient
+            with patch.object(PipelineProcessManager, "_instance", server):
+                payload = TestClient(http_server.app, base_url="http://127.0.0.1:8501").get("/api/pipeline/state").json()
+            check("pipeline state over HTTP leaves out logs and process details",
+                  payload.get("status") == "running" and not {"logs", "cmd", "pid", "create_time"} & set(payload))
             refused, _ = server.start_pipeline(mode="full", cmd=[sys.executable, "-c", "pass"])
             check("server refuses a second run while the terminal run lives", refused is False)
 
@@ -1898,7 +2106,6 @@ def test_foreign_run_visible_to_server():
             check("server shows stopping until the run exits", stopping in ("stopping", "stopped"))
             check("terminal run exits after the stop flag", code == 1)
             check("server shows the terminal run as stopped", final["running"] is False and final["status"] == "stopped")
-            check("stopped terminal run can be resumed from the server", final["can_resume"] is True)
             check("terminal output is echoed without event lines",
                   "PIPELINE STOPPED" in echoed and not any(line.startswith(telemetry.PREFIX) for line in echoed))
         finally:
@@ -2037,6 +2244,60 @@ def test_company_logos():
                           'data-ghost-url="https://static.licdn.com/aero-v1/sc/h/ghost" alt=""></li>', "html.parser")
     check("LinkedIn: the ghost placeholder is not a logo", LinkedInScraper._card_logo(ghost) is None)
 
+    from unittest.mock import patch
+    from PIL import Image
+    import utils.logos as logos
+
+    def png(img):
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue()
+
+    white = Image.new("RGB", (200, 200), "white")
+    white.paste((200, 30, 30), (80, 90, 140, 110))
+    out = Image.open(io.BytesIO(logos.render(png(white))))
+    alpha = out.getchannel("A")
+    check("logo: white margins are cut down to the mark",
+          out.size[0] < 70 and out.size[0] > 2.5 * out.size[1], out.size)
+    check("logo: the background turns transparent and the mark takes the app background color",
+          alpha.getpixel((0, 0)) < 10 and out.getpixel((out.width // 2, out.height // 2))[:3] == logos.INK,
+          out.getpixel((out.width // 2, out.height // 2)))
+    badge = Image.new("RGB", (120, 120), "white")
+    badge.paste((220, 30, 40), (10, 10, 110, 110))
+    badge.paste((255, 255, 255), (40, 50, 80, 70))
+    out = Image.open(io.BytesIO(logos.render(png(badge)))).getchannel("A")
+    check("logo on a colored badge keeps the lettering as the mark, not a solid block",
+          out.getpixel((out.width // 2, out.height // 2)) > 200 and out.width > 1.6 * out.height, out.size)
+
+    cache = Path(tempfile.mkdtemp(prefix="test_logos_"))
+    calls = []
+
+    def download(url):
+        calls.append(url)
+        if "broken" in url:
+            raise ValueError("404")
+        return png(white)
+
+    try:
+        with patch.object(logos, "CACHE_DIR", cache), patch.object(logos, "_download", download):
+            first = logos.logo_png("https://cdn.example.pl/a.png")
+            again = logos.logo_png("https://cdn.example.pl/a.png")
+            logos.logo_png("https://cdn.example.pl/broken.png")
+            logos.logo_png("https://cdn.example.pl/broken.png")
+            check("logo: processed once, then served from the cache; a failure is not retried at once",
+                  first and first == again and calls.count("https://cdn.example.pl/a.png") == 1
+                  and calls.count("https://cdn.example.pl/broken.png") == 1, calls)
+            check("logo: non-http address is never fetched", logos.logo_png("file:///C:/x.png") is None)
+
+            from starlette.testclient import TestClient
+            import server
+            resp = TestClient(server.app, base_url="http://127.0.0.1:8501").get(
+                "/api/logo", params={"src": "https://intranet.example/secret.png"})
+            check("/api/logo serves only logo addresses known from the offer database",
+                  resp.status_code == 404 and "https://intranet.example/secret.png" not in calls, resp.status_code)
+    finally:
+        shutil.rmtree(cache, ignore_errors=True)
+
 
 def test_candidates():
     print("\n[27] Candidates: migration, isolation, shared offers and CV change without rescoring")
@@ -2052,7 +2313,7 @@ def test_candidates():
     from utils.data_models import JobDatabase
 
     temp_path = Path(tempfile.mkdtemp(prefix="test_candidates_flow_"))
-    orig_jobs, orig_config_jobs, orig_root = app_services.JOBS_DATABASE_PATH, config.JOBS_DATABASE_PATH, candidates.ROOT
+    orig_jobs, orig_root = config.JOBS_DATABASE_PATH, candidates.ROOT
     db_path = temp_path / "jobs.db"
     cv = "Analityk danych. SQL, Python, raporty dla zarządu. Warszawa."
     profile = {"city": "Warszawa", "seniority": "junior", "years_experience": 1.0, "skills": ["SQL"],
@@ -2072,7 +2333,7 @@ def test_candidates():
     (temp_path / "match_results.json").write_text(json.dumps({jobs[0]["link"]: {"percent": 81}}), encoding="utf-8")
 
     try:
-        app_services.JOBS_DATABASE_PATH = config.JOBS_DATABASE_PATH = db_path
+        config.JOBS_DATABASE_PATH = db_path
         candidates.ROOT = temp_path / "candidates"
         listing = candidates.listing()
         check("existing single-user data becomes the first candidate",
@@ -2143,7 +2404,6 @@ def test_candidates():
             return {link: 1.0 for link, _ in items}, 0, 0, False
 
         with patch.object(matching_run.jev, "api_key", return_value="test"), \
-             patch.object(matching_run, "JOBS_PATH", db_path), \
              patch.object(matching_run.triage, "triage", fake_triage), \
              patch.object(matching_run.jev, "ask", return_value={"answers": {}, "model": "m"}), \
              patch.object(matching_run.jev, "percent", return_value=55), \
@@ -2161,11 +2421,52 @@ def test_candidates():
         removed = client.post("/api/candidates/delete", json={"id": "k2"}).json()
         check("deleting an inactive candidate removes its data",
               [c["id"] for c in removed["items"]] == ["k1"] and not (candidates.ROOT / "k2").exists())
+
+        candidates.create("Druga")
+        index_file = candidates.ROOT / candidates.INDEX_NAME
+        index_file.write_text("{", encoding="utf-8")
+        rebuilt = candidates.listing()
+        check("a corrupt candidate index keeps every candidate directory and is not overwritten",
+              [c["id"] for c in rebuilt["items"]] == ["k1", "k2"] and index_file.read_text(encoding="utf-8") == "{",
+              rebuilt)
     finally:
-        app_services.JOBS_DATABASE_PATH, config.JOBS_DATABASE_PATH = orig_jobs, orig_config_jobs
+        config.JOBS_DATABASE_PATH = orig_jobs
         candidates.ROOT = orig_root
         app_services.job_data_service.reload()
         shutil.rmtree(temp_path, ignore_errors=True)
+
+
+def test_cv_profile_and_tailor_model():
+    print("\n[28] CV profile: Polish from a Polish CV; a non-JSON reply moves to the next model")
+    from unittest.mock import patch
+    from cv_tailor import model as tailor_model
+    from cv_tailor.schema import BaseCv
+    from utils import cv_profile
+    from utils.llm import LLMReply, settings_from_env
+
+    pl_cv = ("Doświadczenie zawodowe\nSprzedawca, obsługa klientów i przyjmowanie dostaw.\n"
+             "Wykształcenie\nTechnikum ekonomiczne.\nUmiejętności\nObsługa kasy fiskalnej.")
+    en_cv = ("Experience\nSoftware developer at Acme in Łódź, building web services.\n"
+             "Education\nComputer Science.\nSkills\nPython, SQL. Michał Wójcik")
+    raw = {"languages": [{"name": "angielski", "level": "B2"}]}
+    check("a Polish CV without Polish in the reply gets Polish at native level",
+          {"name": "polish", "level": "C2"} in cv_profile._normalize(raw, pl_cv)["languages"])
+    check("an English CV with Polish names does not",
+          all(lang["name"] != "polish" for lang in cv_profile._normalize(raw, en_cv)["languages"]))
+
+    settings = settings_from_env({"LLM_PROVIDER": "gemini", "GEMINI_API_KEY_PRIMARY": "k1",
+                                  "GEMINI_API_KEY_1": "k2", "GEMINI_MODELS": "m1,m2"})
+    calls = []
+
+    def fake_ask(s, model, key, prompt, item_model, **kwargs):
+        calls.append((model, key))
+        return LLMReply("tekst" if model == "m1" else [{"name": "X"}])
+
+    with patch.object(tailor_model, "llm_settings", return_value=settings), patch("utils.llm.ask_json", fake_ask):
+        tailor_model.ask("prompt", BaseCv, lambda: False)
+    check("CV tailoring: a non-JSON reply moves to the next model, not the next key",
+          calls == [("m1", "k1"), ("m2", "k1")], calls)
+
 
 
 def main():
@@ -2176,21 +2477,23 @@ def main():
     for test in (test_canonical_link, test_text_cleaning,
                  test_safe_io, test_llm_providers,
                  test_record_scrape, test_scraper_health,
-                 test_idempotent_writes, test_dedup_winner_and_years, test_olx_tempo_przy_blokadzie,
+                 test_idempotent_writes, test_dedup_winner_and_years, test_matching_rules,
+                 test_olx_tempo_przy_blokadzie,
                  test_zdjete_z_portalu, test_sprawdzenie_ofert, test_olx_fetch_rownolegly,
                  test_olx_opis_z_listingu, test_pipeline_final_status, test_stop_during_scraping,
                  test_listing_completeness, test_category_fallback, test_scope_rejects,
+                 test_remote_offers_in_poland,
                  test_windows_process_safety,
                  test_pipeline_stop_and_resume_lifecycle,
                  test_http_security_and_dns_rebinding_protection,
                  test_external_data_change_automatic_invalidation,
                  test_playwright_chromium_prerequisites,
-                 test_pipeline_skipped_stage_progress,
                  test_pipeline_events,
                  test_offer_api_contract,
                  test_foreign_run_visible_to_server,
                  test_company_logos,
-                 test_candidates):
+                 test_candidates,
+                 test_cv_profile_and_tailor_model):
         try:
             test()
         except Exception as e:

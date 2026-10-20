@@ -39,7 +39,8 @@ export function MarkSentModal({ state, onClose }: { state: MarkSentState; onClos
       const prevLabel = offer.next_step?.label ?? '';
       const prevDue = offer.next_step?.due?.slice(0, 10) ?? '';
       if (label.trim() !== prevLabel || due !== prevDue) {
-        updated = (await api.saveNextStep(offer.link, label.trim(), label.trim() && due ? due : null)).offer;
+        const nextDue = due === prevDue ? (offer.next_step?.due ?? '') : due;
+        updated = (await api.saveNextStep(offer.link, label.trim(), label.trim() && nextDue ? nextDue : null)).offer;
       }
       finish(updated, 'Zapisano aplikację.');
     } catch (err) {

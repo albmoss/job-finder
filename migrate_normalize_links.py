@@ -23,7 +23,7 @@ import config
 from utils import candidates, telemetry
 from utils.data_models import JobDatabase
 from utils.links import canonical_link as normalize
-from utils.safe_io import load_json_safe, save_json_atomic
+from utils.safe_io import DECISIONS_KEEP, load_json_safe, save_json_atomic
 
 
 def decision_richness(val) -> int:
@@ -89,7 +89,7 @@ def _migrate_decisions(path):
 
     print(f"  {label}: {len(decisions)} -> {len(merged)} (kolizje: {collisions})")
     if list(merged) != list(decisions):
-        save_json_atomic(path, merged, backup=True)
+        save_json_atomic(path, merged, backup=True, keep=DECISIONS_KEEP)
 
 
 def main():

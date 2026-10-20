@@ -15,6 +15,8 @@ pewnym odrzuceniem, więc taka oferta przechodzi.
 
 from __future__ import annotations
 
+import re
+
 from utils.data_models import Job
 from utils.offer_fields import SENIORITY, _fold, norm_seniority, norm_work_modes
 
@@ -23,8 +25,13 @@ _RANK = {code: i for i, code in enumerate(SENIORITY)}
 MAX_LEVEL_GAP = 1
 # Wymagane lata ponad doświadczenie z CV, które jeszcze przepuszczamy.
 YEARS_SLACK = 2
-# Stanowiska, dla których sam tytuł jest twardym sygnałem poziomu.
-_TITLE_LEVELS = ("senior", "lead", "manager")
+# Słowa, które w tytule są twardym sygnałem poziomu. Samo „manager” nim nie jest:
+# „Project Manager”, „Account Manager”, „Office Manager” to nazwy zawodów, nie szczebel.
+_TITLE_LEVELS = (
+    (re.compile(r"\bsenior(?:ka)?\b|\bstarsz[ya]\b"), "senior"),
+    (re.compile(r"\blead(?:er)?\b(?!\s*generation)|\blider"), "lead"),
+    (re.compile(r"kierownik|dyrektor|director|head of"), "manager"),
+)
 # Nazwy miast w innych językach, których nie da się dostać samym zdjęciem polskich znaków.
 _CITY_ALIASES = {"warszawa": ("warsaw", "varsovie", "warschau"), "krakow": ("cracow", "krakau")}
 # Lokalizacje bez miasta: nie wiadomo, gdzie jest praca, więc to nie jest pewne odrzucenie.
@@ -35,6 +42,19 @@ _COUNTRY_ONLY = {"polska", "poland", "cala polska"}
 def _min_rank(levels) -> int | None:
     ranks = [_RANK[c] for c in levels or () if c in _RANK]
     return min(ranks) if ranks else None
+
+
+def _title_rank(title: str | None) -> int | None:
+    """
+    Poziom z samego tytułu albo None. Liczy się tylko twardy sygnał (_TITLE_LEVELS);
+    niższy poziom w tym samym tytule („Junior / Mid Project Manager”, „Mid/Senior”) wygrywa,
+    więc taki tytuł nie jest pewnym odrzuceniem.
+    """
+    codes = norm_seniority(title) or []
+    if any(code not in ("senior", "lead", "manager") for code in codes):
+        return None
+    folded = _fold(title or "")
+    return _min_rank([code for pattern, code in _TITLE_LEVELS if pattern.search(folded)])
 
 
 def outside_city(job: Job, city: str | None) -> bool:
@@ -69,8 +89,7 @@ def reject_reason(job: Job, profile: dict) -> str | None:
         return "poziom"
     # Tytuł „Senior …”, „Kierownik …” przy pustym polu poziomu.
     if offer_rank is None:
-        title_levels = [c for c in norm_seniority(job.title) or () if c in _TITLE_LEVELS]
-        title_rank = _min_rank(title_levels)
+        title_rank = _title_rank(job.title)
         if title_rank is not None and title_rank - cand_rank > MAX_LEVEL_GAP:
             return "poziom"
 

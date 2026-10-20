@@ -164,6 +164,11 @@ class JobDatabase:
         self._rev = self._store.rev
         return self._jobs
 
+    def get(self, link: str) -> Optional[Job]:
+        from utils.links import canonical_link
+        self.load_jobs()
+        return self._index().get(canonical_link(link))
+
     def load_records(self) -> list[dict]:
         return list(self._store.load().values())
 
@@ -308,10 +313,6 @@ class ScraperStatusManager:
         with self._lock:
             return self._read()
 
-    def save_status(self, status_data: dict):
-        with self._lock:
-            self._write(status_data)
-
     def is_scraped_today(self, source_name: str) -> bool:
         """Czy źródło zostało dziś poprawnie zescrapowane dla aktywnego kandydata."""
         from datetime import datetime
@@ -378,7 +379,7 @@ class ScraperStatusManager:
                 if entry.pop('liveness', None) is None:
                     return
             elif (entry.get('liveness') or {}).get('scope') != scope:
-                entry['liveness'] = {'scope': scope, 'since': datetime.now().date().isoformat()}
+                entry['liveness'] = {'scope': scope, 'since': datetime.now().isoformat(timespec='seconds')}
             else:
                 return
             self._write(data)

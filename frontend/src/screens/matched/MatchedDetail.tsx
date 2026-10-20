@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowUpRight,
   Bookmark,
   BookmarkCheck,
   Download,
-  Ellipsis,
   FilePenLine,
   FileText,
   Link,
@@ -14,40 +13,41 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import { api } from '../../api';
+import { api, errorMessage } from '../../api';
+import { useApp } from '../../app_context';
 import { formatRelativeDay } from '../../format';
 import { plural } from '../../plural';
 import { navigate, paths } from '../../router';
 import type { CvVersionSummary, DescriptionBlock, OfferDetail } from '../../types';
 import { CompanyLogo } from '../offer/CompanyLogo';
 import { capitalize, contractText, locationLine, offerSkills, seniorityText } from '../offer/offer_format';
+import '../../styles/matched.css';
 
 const NUMBERS = ['liczba', 'liczby', 'liczb'] as const;
 
 interface MatchedDetailProps {
   offer: OfferDetail;
   busy: boolean;
-  onSave: () => void;
   onUnsave: () => void;
-  onHide: () => void;
-  onRestore: () => void;
   onMarkSent: () => void;
-  onCopyLink: () => void;
+  onSave?: () => void;
+  onHide?: () => void;
+  onRestore?: () => void;
+  children?: ReactNode;
 }
 
 export function MatchedDetail({
   offer,
   busy,
-  onSave,
   onUnsave,
+  onMarkSent,
+  onSave,
   onHide,
   onRestore,
-  onMarkSent,
-  onCopyLink,
+  children,
 }: MatchedDetailProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const { toast } = useApp();
   const [moreBelow, setMoreBelow] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const hidden = offer.status === 'reject';
   const saved = offer.status === 'save';
@@ -63,21 +63,14 @@ export function MatchedDetail({
     ...(contract ? ([['Umowa', contract]] as [string, string][]) : []),
   ];
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onPointer = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointer);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onPointer);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [menuOpen]);
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(offer.link);
+      toast('Skopiowano link.', { icon: Link });
+    } catch (err) {
+      toast(`Nie udało się skopiować linku: ${errorMessage(err)}`);
+    }
+  };
 
   useEffect(() => {
     const body = bodyRef.current;
@@ -94,11 +87,6 @@ export function MatchedDetail({
     };
   }, []);
 
-  const runMenu = (action: () => void) => {
-    setMenuOpen(false);
-    action();
-  };
-
   return (
     <article className="panel mo-detail">
       <header className="mo-detail-source">
@@ -106,26 +94,15 @@ export function MatchedDetail({
           {offer.source}
           {added && ` / dodana ${added}`}
         </span>
-        <div className="mo-menu-anchor" ref={menuRef}>
-          <button
-            type="button"
-            className="btn-quiet mo-more"
-            aria-label="Więcej działań"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            <Ellipsis />
-          </button>
-          {menuOpen && (
-            <div className="menu panel mo-menu-right" role="menu">
-              <button type="button" className="menu-item" role="menuitem" onClick={() => runMenu(onCopyLink)}>
-                <Link />
-                Skopiuj link
-              </button>
-            </div>
-          )}
-        </div>
+        <button
+          type="button"
+          className="btn-quiet mo-more"
+          aria-label="Skopiuj link"
+          title="Skopiuj link"
+          onClick={() => void copyLink()}
+        >
+          <Link />
+        </button>
       </header>
 
       <div className="mo-identity">
@@ -154,7 +131,10 @@ export function MatchedDetail({
             )}
           </p>
           {offer.is_gone && (
-            <p className="label warn">Ogłoszenie zdjęte z portalu.{hidden ? '' : ' Możesz je odrzucić.'}</p>
+            <p className="label warn">
+              Ogłoszenie zdjęte z portalu.
+              {hidden ? '' : saved ? ' Możesz je usunąć z zapisanych.' : ' Możesz je odrzucić.'}
+            </p>
           )}
         </div>
         {offer.match_percentage !== null && (
@@ -166,6 +146,7 @@ export function MatchedDetail({
       </div>
 
       <div ref={bodyRef} className={`mo-detail-body scroll${moreBelow ? ' has-more' : ''}`}>
+        {children}
         <dl className="mo-facts">
           {facts.map(([label, value]) => (
             <div key={label} className="mo-fact">
@@ -209,7 +190,7 @@ export function MatchedDetail({
           <Send />
           Wysłane
         </button>
-        {!hidden && (
+        {!hidden && !saved && (
           <button type="button" className="btn" disabled={busy} onClick={onHide}>
             <X />
             Odrzuć

@@ -5,12 +5,13 @@ Wystawia API REST dla frontendu React/TypeScript, zarządza procesami, danymi i 
 
 import asyncio
 from datetime import datetime
+import hashlib
 import logging
 import math
 import os
 from pathlib import Path
 import re
-from typing import List, Optional
+from typing import Optional
 from urllib.parse import urlparse
 
 import uvicorn
@@ -35,6 +36,7 @@ from app_services import (
     get_cv_info,
     get_env_fields_status,
     job_data_service,
+    latest_cv_by_link,
     pdf_is_current,
     save_env_keys,
     save_manual_job,
@@ -45,6 +47,7 @@ from app_services import (
 from cv_tailor import store as cv_store
 from cv_tailor.routes import routes as cv_tailor_routes
 from utils import candidates
+from utils.logos import logo_png
 from utils.offer_check import sprawdz_oferty
 from pipeline_manager import PipelineProcessManager
 
@@ -61,16 +64,11 @@ PAGE_SIZE = 5
 CHECK_LIMIT = 10
 
 
-def sanitize_log_line(line: str) -> str:
-    if not line:
-        return ""
-    line = re.sub(r"AIza[0-9A-Za-z\-_]{4,}", "[KLUCZ_UKRYTY]", line)
-    line = re.sub(r"Key\[\d+\]\s+[A-Za-z0-9\._\-]+", "Key[UKRYTY]", line)
-    return line
+PRIVATE_STATE_KEYS = ("logs", "cmd", "pid", "create_time")
 
 
-def sanitize_logs(logs: List[str]) -> List[str]:
-    return [sanitize_log_line(line) for line in logs]
+def _public_state(state: dict) -> dict:
+    return {k: v for k, v in state.items() if k not in PRIVATE_STATE_KEYS}
 
 
 # --- Middleware: Ochrona przed atakami typu Cross-Origin Mutation ---
@@ -99,11 +97,6 @@ async def origin_check_middleware(request: Request, call_next):
 
 # --- Endpointy API ---
 
-def api_stats(request: Request) -> JSONResponse:
-    job_data_service.ensure_loaded()
-    return JSONResponse(job_data_service.get_stats())
-
-
 def api_offers(request: Request) -> JSONResponse:
     """Zwraca stronicowaną listę ofert dla zakładki (Dopasowane, Ukryte, Zapisane)."""
     tab = request.query_params.get("tab", "Dopasowane")
@@ -120,7 +113,7 @@ def api_offers(request: Request) -> JSONResponse:
     except ValueError:
         page_size = PAGE_SIZE
     job_data_service.ensure_loaded()
-    items = job_data_service.ws_collect(tab, search, sort)
+    items = job_data_service.ws_collect(tab, search, sort, loaded=True)
     total = len(items)
     total_pages = max(1, math.ceil(total / page_size)) if total else 1
     page = min(page, total_pages)
@@ -131,7 +124,9 @@ def api_offers(request: Request) -> JSONResponse:
     fresh_since = job_data_service.fresh_since()
     fresh_count = job_data_service.fresh_count(
         items, fresh_since, cache_key=None if search else f"fresh:{tab}:{sort}")
-    rows = [job_data_service.list_item(job, rec, fresh_since) for job, rec in items[start : start + page_size]]
+    latest_cv = latest_cv_by_link()
+    rows = [job_data_service.list_item(job, rec, fresh_since, latest_cv)
+            for job, rec in items[start : start + page_size]]
 
     return JSONResponse({
         "items": rows,
@@ -141,7 +136,7 @@ def api_offers(request: Request) -> JSONResponse:
         "page_size": page_size,
         "fresh_count": fresh_count,
         "fresh_since": fresh_since,
-        "hidden_count": job_data_service.hidden_count(),
+        "hidden_count": job_data_service.hidden_count(loaded=True),
     })
 
 
@@ -210,7 +205,9 @@ def api_decision_restore(body: dict) -> JSONResponse:
     if not link:
         return JSONResponse({"error": "Pole 'link' jest wymagane"}, status_code=400)
 
-    changed = job_data_service.restore_decision(link)
+    ok, changed = job_data_service.restore_decision(link)
+    if not ok:
+        return JSONResponse({"error": "Błąd zapisu decyzji do pliku"}, status_code=500)
     return JSONResponse({"ok": True, "changed": changed, "offer": job_data_service.get_offer_detail(link)})
 
 
@@ -257,6 +254,20 @@ def api_applications(request: Request) -> JSONResponse:
     return JSONResponse(job_data_service.get_applications())
 
 
+def api_logo(request: Request) -> Response:
+    url = request.query_params.get("src", "")
+    if not url or not job_data_service.known_logo(url):
+        return Response(status_code=404)
+    png = logo_png(url)
+    if png is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    etag = '"' + hashlib.sha1(png).hexdigest()[:16] + '"'
+    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    return Response(png, media_type="image/png", headers=headers)
+
+
 def api_tool_fetch_link(body: dict) -> JSONResponse:
     """Pobiera dane oferty ze wskazanego adresu URL za pomocą modułu link_fetcher."""
     url = (body.get("url") or "").strip()
@@ -279,10 +290,9 @@ def api_tool_save_manual_job(body: dict) -> JSONResponse:
     if status is not None and status not in ("save", "apply"):
         return JSONResponse({"error": "Pole 'status' przyjmuje save albo apply"}, status_code=400)
 
-    ok, msg = save_manual_job(body)
+    ok, msg, link = save_manual_job(body)
     if not ok:
         return JSONResponse({"error": msg}, status_code=400)
-    link = body.get("link", "")
     if status and not job_data_service.update_decision(link, status):
         return JSONResponse({"error": "Oferta zapisana, ale nie udało się zapisać decyzji"}, status_code=500)
 
@@ -292,11 +302,8 @@ def api_tool_save_manual_job(body: dict) -> JSONResponse:
 # --- Pipeline & Narzędzia ---
 
 def api_pipeline_state(request: Request) -> JSONResponse:
-    """Zwraca aktualny stan menedżera procesu pipeline'u, etapy i logi."""
-    mgr = PipelineProcessManager.get_instance()
-    state = mgr.get_state()
-    state["logs"] = sanitize_logs(state.get("logs", []))
-    return JSONResponse(state)
+    """Zwraca aktualny stan menedżera procesu pipeline'u i etapy."""
+    return JSONResponse(_public_state(PipelineProcessManager.get_instance().get_state()))
 
 
 def api_pipeline_prerequisites(request: Request) -> JSONResponse:
@@ -312,8 +319,7 @@ def api_pipeline_start(body: dict) -> JSONResponse:
 
     mgr = PipelineProcessManager.get_instance()
     ok, msg = mgr.start_pipeline(mode=mode)
-    state = mgr.get_state()
-    state["logs"] = sanitize_logs(state.get("logs", []))
+    state = _public_state(mgr.get_state())
     if not ok:
         return JSONResponse({"ok": False, "error": msg, "state": state}, status_code=400)
     return JSONResponse({"ok": True, "message": msg, "state": state})
@@ -323,8 +329,7 @@ def api_pipeline_stop(request: Request) -> JSONResponse:
     """Kooperatywne zatrzymanie pipeline'u na granicy bieżącej paczki."""
     mgr = PipelineProcessManager.get_instance()
     ok, msg = mgr.stop_pipeline(force=False)
-    state = mgr.get_state()
-    state["logs"] = sanitize_logs(state.get("logs", []))
+    state = _public_state(mgr.get_state())
     return JSONResponse({"ok": ok, "message": msg, "state": state})
 
 
@@ -517,7 +522,6 @@ async def spa_index_fallback(request: Request) -> Response:
 
 
 routes = [
-    Route("/api/stats", api_stats, methods=["GET"]),
     Route("/api/offers", api_offers, methods=["GET"]),
     Route("/api/offers/detail", api_offer_detail, methods=["GET"]),
     Route("/api/offers/decision", json_endpoint(api_decision_update), methods=["POST"]),
@@ -526,6 +530,7 @@ routes = [
     Route("/api/offers/next-step", json_endpoint(api_next_step_update), methods=["POST"]),
     Route("/api/offers/check", json_endpoint(api_offers_check), methods=["POST"]),
     Route("/api/applications", api_applications, methods=["GET"]),
+    Route("/api/logo", api_logo, methods=["GET"]),
     Route("/api/tools/fetch-link", json_endpoint(api_tool_fetch_link), methods=["POST"]),
     Route("/api/tools/save-manual-job", json_endpoint(api_tool_save_manual_job), methods=["POST"]),
     Route("/api/pipeline/state", api_pipeline_state, methods=["GET"]),

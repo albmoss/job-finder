@@ -49,7 +49,10 @@ def ask_batch(jobs: list[Job], candidate: dict, key: str,
         for i, job in enumerate(jobs)
     }
     reply = jev.ask({"kandydat": candidate}, key, session, questions=questions)
-    chances = [float(reply["answers"][f"o{i}"]["noul"]) for i in range(len(jobs))]
+    try:
+        chances = [float(reply["answers"][f"o{i}"]["noul"]) for i in range(len(jobs))]
+    except (KeyError, TypeError, ValueError) as e:
+        raise jev.JevError(f"TypeSafe: niepoprawna wstępna ocena ({type(e).__name__}: {e})") from e
     return chances, int((reply.get("usage") or {}).get("input_tokens") or 0)
 
 
@@ -76,10 +79,10 @@ def triage(items: list[tuple[str, Job]], candidate: dict, key: str, session: req
                 batch = pending.pop(fut)
                 try:
                     values, used = fut.result()
-                except jev.JevError as e:
+                except Exception as e:
                     errors += len(batch)
-                    print(f"   Jev error: {e}")
-                    if "klucz" in str(e):
+                    print(f"   Jev error: {type(e).__name__}: {e}")
+                    if isinstance(e, jev.JevError) and "klucz" in str(e):
                         stopped = True
                     continue
                 tokens += used

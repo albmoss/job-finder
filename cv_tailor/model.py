@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from cv_tailor.schema import BaseCv
 from cv_tailor.store import ROOT
 from utils import candidates
+from utils.cv_profile import cv_text
 from utils.safe_io import load_json_safe, save_json_atomic
 
 _base_lock = threading.Lock()
@@ -32,14 +33,6 @@ def llm_settings():
     return settings_from_env({**os.environ, **env_file})
 
 
-def cv_text() -> str | None:
-    try:
-        text = candidates.path(candidates.CV_TEXT).read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        return None
-    return text or None
-
-
 def _llm_message(err) -> str:
     kind = getattr(err, "kind", "other")
     if kind == "rate_limit":
@@ -53,33 +46,21 @@ def _llm_message(err) -> str:
 
 def ask(prompt: str, item_model: type[BaseModel], cancelled: Callable[[], bool],
         max_tokens: int = 32000) -> dict:
-    from utils.llm import LLMError, ask_json
+    from utils.llm import LLMError, ask_object
 
     settings = llm_settings()
     if not settings.api_keys:
         raise TailorError(settings.error or "Brak klucza modelu. Dodaj go w ustawieniach.")
-    last_error: Exception | None = None
-    for model in settings.models:
-        for key in settings.api_keys:
-            if cancelled():
-                raise Cancelled()
-            try:
-                reply = ask_json(settings, model, key, prompt, item_model,
-                                 max_tokens=max_tokens, temperature=0.3)
-            except LLMError as e:
-                last_error = e
-                if e.kind in ("rate_limit", "invalid_key"):
-                    continue
-                break
-            data = reply.data[0] if isinstance(reply.data, list) and reply.data else reply.data
-            if isinstance(data, dict):
-                return data
-            last_error = TailorError("Odpowiedź modelu nie jest obiektem JSON.")
-    if cancelled():
+    try:
+        got = ask_object(settings, prompt, item_model, max_tokens=max_tokens,
+                         temperature=0.3, cancelled=cancelled)
+    except LLMError as e:
+        if cancelled():
+            raise Cancelled() from e
+        raise TailorError(_llm_message(e)) from e
+    if got is None:
         raise Cancelled()
-    if last_error is None:
-        raise TailorError("Brak modelu w ustawieniach.")
-    raise TailorError(_llm_message(last_error))
+    return got[0]
 
 
 def _sha(text: str) -> str:
@@ -132,16 +113,19 @@ def ensure_base_cv(cancelled: Callable[[], bool]) -> dict:
     if text is None:
         raise TailorError("Brak CV. Najpierw wgraj CV.")
     sha = _sha(text)
+    path = candidates.path(candidates.BASE_CV)
     with _base_lock:
-        cached = load_json_safe(candidates.path(candidates.BASE_CV), default={})
+        cached = load_json_safe(path, default={})
         if isinstance(cached, dict) and cached.get("_metadata", {}).get("cv_sha256") == sha \
                 and isinstance(cached.get("cv"), dict):
             return normalize_cv(cached["cv"])
         raw = ask(_BASE_PROMPT.format(cv=text[:20000]), BaseCv, cancelled, max_tokens=16000)
+        if cancelled():
+            raise Cancelled()
         cv = normalize_cv(raw)
         if not cv["name"] and not cv["experience"] and not cv["projects"]:
             raise TailorError("Model nie odczytał treści CV. Spróbuj ponownie.")
-        save_json_atomic(candidates.path(candidates.BASE_CV), {
+        save_json_atomic(path, {
             "_metadata": {"cv_sha256": sha, "generated_at": datetime.now().isoformat(timespec="seconds")},
             "cv": cv,
         }, backup=False)

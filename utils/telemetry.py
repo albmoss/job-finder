@@ -16,8 +16,11 @@ _write_lock = threading.Lock()
 def emit(event: str, **data) -> None:
     line = PREFIX + json.dumps({"event": event, "at": round(time.time(), 1), **data}, ensure_ascii=False)
     with _write_lock:
-        sys.stdout.write(line + "\n")
-        sys.stdout.flush()
+        try:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+        except OSError:
+            pass
 
 
 def parse(line: str):
@@ -30,3 +33,13 @@ def parse(line: str):
     if isinstance(payload, dict) and isinstance(payload.get("event"), str):
         return payload
     return None
+
+
+def split(line: str):
+    i = line.find(PREFIX)
+    if i < 0:
+        return line, None
+    event = parse(line[i:])
+    if event is None:
+        return line, None
+    return line[:i], event

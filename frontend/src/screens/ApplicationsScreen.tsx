@@ -17,6 +17,7 @@ import { formatDayLong, parseDate } from '../format';
 import { navigate, paths } from '../router';
 import { STAGES } from '../stages';
 import type { ApplicationItem, NextStep, Stage } from '../types';
+import { useDismiss } from '../use_dismiss';
 import { AddFromLinkModal } from './add/AddFromLinkModal';
 import type { ScreenProps } from './types';
 import '../styles/applications.css';
@@ -169,21 +170,7 @@ export function ApplicationsScreen({ route }: ScreenProps) {
     }
   };
 
-  useEffect(() => {
-    if (!menuFor) return;
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target as Element).closest?.('.ap-menu-wrap')) setMenuFor(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenuFor(null);
-    };
-    window.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [menuFor]);
+  useDismiss(!!menuFor, () => setMenuFor(null), (target) => !!(target as Element).closest?.('.ap-menu-wrap'));
 
   const now = Date.now();
   const upcoming = (items ?? [])
@@ -480,13 +467,14 @@ function NextStepEditor({
   onCancel: () => void;
   onSave: (label: string, due: string) => Promise<void>;
 }) {
+  const savedDue = item.next_step?.due ?? '';
   const [label, setLabel] = useState(item.next_step?.label ?? '');
-  const [due, setDue] = useState(toInputValue(item.next_step?.due));
+  const [due, setDue] = useState(toInputValue(savedDue));
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
     setBusy(true);
-    await onSave(label, due);
+    await onSave(label, due === toInputValue(savedDue) ? savedDue : due);
     setBusy(false);
   };
 

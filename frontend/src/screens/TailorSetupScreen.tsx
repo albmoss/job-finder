@@ -37,7 +37,10 @@ export function TailorSetupScreen({ route }: ScreenProps) {
         if (!alive) return;
         setOffer(detail);
         const previous = detail.cv_versions[0];
-        if (!previous) return;
+        if (!previous) {
+          setLanguage(detail.language);
+          return;
+        }
         const settings = await api.getCvVersion(previous.id);
         if (!alive) return;
         setLanguage(settings.language);

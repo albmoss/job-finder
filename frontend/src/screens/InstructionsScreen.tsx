@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, Check, RotateCcw, ShieldCheck } from 'lucide-react';
 import { api, errorMessage } from '../api';
 import { useApp } from '../app_context';
-import { navigate, paths } from '../router';
+import { blockNavigation, navigate, paths } from '../router';
 import { Modal } from '../shell/Modal';
 import type { TailorInstructions } from '../types';
 import type { ScreenProps } from './types';
@@ -59,6 +59,8 @@ export function InstructionsScreen(_props: ScreenProps) {
     return () => document.removeEventListener('click', onClick, true);
   }, [dirty]);
 
+  useEffect(() => (dirty ? blockNavigation(setLeaveTarget) : undefined), [dirty]);
+
   const apply = async (action: () => Promise<TailorInstructions>, success: string, failure: string) => {
     setBusy(true);
     try {
@@ -93,11 +95,7 @@ export function InstructionsScreen(_props: ScreenProps) {
   return (
     <div className="in-screen">
       <aside className="in-intro">
-        <button
-          type="button"
-          className="btn"
-          onClick={() => (dirty ? setLeaveTarget(paths.cv) : navigate(paths.cv))}
-        >
+        <button type="button" className="btn" onClick={() => navigate(paths.cv)}>
           <ArrowLeft />
           Wróć do Mojego CV
         </button>
@@ -163,7 +161,7 @@ export function InstructionsScreen(_props: ScreenProps) {
             <button type="button" className="btn" onClick={() => setLeaveTarget(null)}>
               Zostań
             </button>
-            <button type="button" className="btn btn-primary" onClick={() => navigate(leaveTarget)}>
+            <button type="button" className="btn btn-primary" onClick={() => navigate(leaveTarget, { force: true })}>
               Wyjdź bez zapisywania
             </button>
           </div>

@@ -51,7 +51,6 @@ export function LaunchModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Poszukać nowych ofert?" onClose={onClose} closeButton={false}>
       <p className="muted">{cv?.ready ? profileLine(cv.profile) : 'Brak CV. Dodaj je w ustawieniach.'}</p>
-      <p className="muted">Dopasowanie: Jev. Model odczytu CV: z ustawień.</p>
       {issues.length > 0 && (
         <div className="lm-issues">
           {issues.map((issue) => (
@@ -75,7 +74,6 @@ export function LaunchModal({ onClose }: { onClose: () => void }) {
         <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} />
         Zgadzam się na przetwarzanie CV przez modele i koszt API.
       </label>
-      <p className="label">Zgoda jest odznaczona przy każdym uruchomieniu.</p>
       <div className="modal-actions modal-actions-end">
         <button type="button" className="btn" onClick={onClose}>
           Anuluj

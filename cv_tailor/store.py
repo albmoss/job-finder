@@ -86,11 +86,6 @@ def list_versions(link: str | None = None) -> list[dict]:
         return [to_summary(v) for v in reversed(items)]
 
 
-def latest_for(link: str) -> dict | None:
-    items = list_versions(link)
-    return items[0] if items else None
-
-
 def get(version_id: str) -> dict | None:
     with _lock:
         v = _find(version_id)

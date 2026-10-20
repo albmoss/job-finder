@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -84,7 +85,21 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _normalize(raw: dict) -> dict:
+_POLISH_LETTERS = set("ąćęłńóśźż")
+_POLISH_SECTIONS = re.compile(
+    r"\b(do[sś]wiadczenie|wykszta[lł]cenie|umiej[eę]tno[sś]ci|j[eę]zyki|zainteresowania|"
+    r"zatrudnienia|szkolenia|o\s+mnie)\b")
+
+
+def is_polish(text: str) -> bool:
+    words = [w for w in re.findall(r"[^\W\d_]+", text) if w[0].islower()]
+    letters = sum(len(w) for w in words)
+    if letters and sum(ch in _POLISH_LETTERS for w in words for ch in w) / letters >= 0.02:
+        return True
+    return len(set(_POLISH_SECTIONS.findall(text.lower()))) >= 2
+
+
+def _normalize(raw: dict, text: str) -> dict:
     languages = []
     for item in raw.get("languages") or []:
         code = norm_language(item.get("name"))
@@ -93,6 +108,8 @@ def _normalize(raw: dict) -> dict:
             if level and level.lower().startswith(("ojczyst", "native")):
                 level = "C2"
             languages.append({"name": code, "level": level})
+    if all(lang["name"] != "polish" for lang in languages) and is_polish(text):
+        languages.append({"name": "polish", "level": "C2"})
     skills: list[str] = []
     for skill in raw.get("skills") or []:
         skill = str(skill).strip()
@@ -112,32 +129,23 @@ def _normalize(raw: dict) -> dict:
 def build_profile(text: str) -> dict:
     """Jedno zapytanie do modelu z utils/llm.py (kaskada modeli profilu i rotacja kluczy)."""
     from config import LLM
-    from utils.llm import LLMError, ask_json
+    from utils.llm import LLMError, ask_object
 
     if not LLM.api_keys:
         raise RuntimeError(LLM.error or "Brak klucza modelu w .env")
-    prompt = _PROMPT.format(cv=text[:12000])
-    last_error: Exception | None = None
-    for model in LLM.models:
-        for key in LLM.api_keys:
-            try:
-                reply = ask_json(LLM, model, key, prompt, CandidateProfile, max_tokens=4096, temperature=0)
-            except LLMError as e:
-                last_error = e
-                if e.kind in ("rate_limit", "invalid_key"):
-                    continue
-                break
-            items = reply.data if isinstance(reply.data, list) else [reply.data]
-            if items and isinstance(items[0], dict):
-                profile = _normalize(items[0])
-                profile["_metadata"] = {
-                    "cv_sha256": _sha(text),
-                    "generated_at": datetime.now().isoformat(timespec="seconds"),
-                    "model": model,
-                    "name": (items[0].get("full_name") or "").strip() or None,
-                }
-                return profile
-    raise RuntimeError(f"Nie udało się wyciągnąć profilu z CV: {last_error}")
+    try:
+        raw, model = ask_object(LLM, _PROMPT.format(cv=text[:12000]), CandidateProfile,
+                                max_tokens=4096, temperature=0)
+    except LLMError as e:
+        raise RuntimeError(f"Nie udało się wyciągnąć profilu z CV: {e}") from e
+    profile = _normalize(raw, text)
+    profile["_metadata"] = {
+        "cv_sha256": _sha(text),
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "model": model,
+        "name": (raw.get("full_name") or "").strip() or None,
+    }
+    return profile
 
 
 def ensure_profile(force: bool = False) -> dict | None:

@@ -5,7 +5,7 @@ Sygnałem jest `last_seen`: udany przebieg stempluje nim oferty, które w listin
 faktycznie były. Brak oferty w nowszym przebiegu znaczy „zdjęta" tylko wtedy, gdy
 listing tego źródła obejmuje wszystko w swoim zakresie, a oferta była widziana
 już przy obecnym zakresie. Oba warunki zapisuje main_scraper w `scraper_status.json`
-(pole `liveness`: `scope` i `since`, dzień pierwszego przebiegu z tym zakresem);
+(pole `liveness`: `scope` i `since`, chwila pierwszego przebiegu z tym zakresem);
 źródło bez tego pola nie oznacza ofert jako zdjętych.
 
 Drugi sygnał to data ważności podana przez portal (`valid_through`): oferta, której
@@ -47,7 +47,7 @@ def zdjete_z_portalu(jobs, status: dict):
     Zbiór linków ofert, których portal już nie wystawia.
 
     `status` to zawartość `scraper_status.json`. Oferta jest zdjęta, gdy jej źródło
-    ma wpis `liveness`, oferta była widziana w dniu `since` albo później, a źródło
+    ma wpis `liveness`, oferta była widziana od chwili `since`, a źródło
     zwróciło coś w dniu późniejszym niż jej `last_seen`.
 
     Świadomie NIE kasujemy takich ofert z bazy: gdyby reguła kiedyś się myliła,
@@ -63,7 +63,7 @@ def zdjete_z_portalu(jobs, status: dict):
         znacznik = _pole(job, "last_seen")
         if not wpis.get("since") or not koniec or not znacznik:
             continue
-        if wpis["since"] <= znacznik[:10] < koniec:
+        if wpis["since"] <= znacznik and znacznik[:10] < koniec:
             link = _pole(job, "link")
             if link:
                 zdjete.add(link)

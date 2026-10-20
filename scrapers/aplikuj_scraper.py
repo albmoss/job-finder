@@ -24,6 +24,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from utils import stop
+from utils.data_models import Job
 from utils.links import canonical_link, logo_url
 
 logger = logging.getLogger(__name__)
@@ -128,30 +129,18 @@ class AplikujScraper(LdJsonPortalScraper):
     def __init__(self, config: dict):
         super().__init__(config)
         self.city_slug = self.cfg.get("city_slug") or self.city_slug
-        self.extra_paths: List[str] = self.cfg.get("extra_paths", [])
+        self.categories: Optional[List[str]] = None
 
-        catalog = fetch_aplikuj_categories()
+    def run(self) -> List[Job]:
         from utils.portal_categories import pick_categories
-        picked = pick_categories("aplikuj", catalog)
+        picked = pick_categories("aplikuj", fetch_aplikuj_categories())
         if picked is not None:
-            self.categories: Optional[List[str]] = picked
+            self.categories = picked
             logger.info(f"aplikuj.pl: {len(picked)} categories from CV")
-        else:
-            self.categories = None
+        return super().run()
 
     def build_listing_url(self, page: int) -> str:
         base = f"https://www.aplikuj.pl/praca/{self.city_slug}"
-        if self.categories and len(self.categories) == 1:
-            cat_base = f"{base}/{self.categories[0]}"
-            return cat_base if page <= 1 else f"{cat_base}/strona-{page}"
-
-        if self.extra_paths:
-            if page <= self.max_pages - len(self.extra_paths):
-                return base if page <= 1 else f"{base}/strona-{page}"
-            idx = page - (self.max_pages - len(self.extra_paths)) - 1
-            if 0 <= idx < len(self.extra_paths):
-                return f"{base}/{self.extra_paths[idx]}"
-
         return base if page <= 1 else f"{base}/strona-{page}"
 
     def build_category_url(self, category: str, page: int = 1) -> str:

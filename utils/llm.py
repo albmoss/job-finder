@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import requests
 from pydantic import BaseModel
@@ -136,10 +136,6 @@ def settings_from_env(env: Mapping[str, str]) -> LLMSettings:
     return LLMSettings(provider, models, keys, base_url, bool(custom), error)
 
 
-def mask_key(key: str) -> str:
-    return f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "***"
-
-
 # --- zapytanie --------------------------------------------------------------
 
 class LLMError(Exception):
@@ -153,8 +149,6 @@ class LLMError(Exception):
 @dataclass
 class LLMReply:
     data: Any
-    in_tokens: int | None = None
-    out_tokens: int | None = None
 
 
 def ask_json(settings: LLMSettings, model: str, api_key: str, prompt: str,
@@ -176,6 +170,38 @@ def ask_json(settings: LLMSettings, model: str, api_key: str, prompt: str,
     if pid == "anthropic":
         return _ask_anthropic(settings.base_url, model, api_key, prompt, schema, max_tokens)
     raise LLMError("other", f"Nieobsługiwany dostawca: {pid}")
+
+
+def ask_object(settings: LLMSettings, prompt: str, item_model: type[BaseModel], *,
+               max_tokens: int, temperature: float | None,
+               cancelled: Callable[[], bool] = lambda: False) -> tuple[dict, str] | None:
+    """
+    Jeden obiekt `item_model` z pierwszego modelu, który odpowie. Limit albo odrzucony
+    klucz przechodzi do następnego klucza, inny błąd i odpowiedź bez obiektu do następnego
+    modelu. Zwraca (obiekt, model) albo None, gdy `cancelled()`; po wyczerpaniu podnosi
+    ostatni `LLMError`.
+    """
+    last_error = LLMError("other", "Brak modelu w ustawieniach.")
+    for model in settings.models:
+        for key in settings.api_keys:
+            if cancelled():
+                return None
+            try:
+                reply = ask_json(settings, model, key, prompt, item_model,
+                                 max_tokens=max_tokens, temperature=temperature)
+            except LLMError as e:
+                last_error = e
+                if e.kind in ("rate_limit", "invalid_key"):
+                    continue
+                break
+            data = reply.data[0] if isinstance(reply.data, list) and reply.data else reply.data
+            if isinstance(data, dict):
+                return data, model
+            last_error = LLMError("other", "Odpowiedź modelu nie jest obiektem JSON.")
+            break
+    if cancelled():
+        return None
+    raise last_error
 
 
 def strict_schema(schema: dict) -> dict:
@@ -293,10 +319,7 @@ def _ask_gemini(model, api_key, prompt, item_model, max_tokens, temperature) -> 
             model=model, contents=prompt, config=types.GenerateContentConfig(**config))
     except Exception as e:
         raise LLMError(_classify_gemini(str(e)), str(e)) from e
-    usage = getattr(resp, "usage_metadata", None)
-    return LLMReply(_unwrap(_parse(resp.text), item_model is not None),
-                    getattr(usage, "prompt_token_count", None),
-                    getattr(usage, "candidates_token_count", None))
+    return LLMReply(_unwrap(_parse(resp.text), item_model is not None))
 
 
 # --- OpenAI i zgodne ---------------------------------------------------------
@@ -343,9 +366,7 @@ def _ask_openai(base_url, model, api_key, prompt, schema) -> LLMReply:
     message = choice.get("message") or {}
     if message.get("refusal"):
         raise LLMError("other", f"Model odmówił: {message['refusal'][:200]}")
-    usage = data.get("usage") or {}
-    return LLMReply(_unwrap(_parse(message.get("content") or ""), schema is not None),
-                    usage.get("prompt_tokens"), usage.get("completion_tokens"))
+    return LLMReply(_unwrap(_parse(message.get("content") or ""), schema is not None))
 
 
 # --- Anthropic ----------------------------------------------------------------
@@ -370,6 +391,4 @@ def _ask_anthropic(base_url, model, api_key, prompt, schema, max_tokens) -> LLMR
     if data.get("stop_reason") == "refusal":
         raise LLMError("other", "Model odmówił odpowiedzi (stop_reason=refusal).")
     text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
-    usage = data.get("usage") or {}
-    return LLMReply(_unwrap(_parse(text), schema is not None),
-                    usage.get("input_tokens"), usage.get("output_tokens"))
+    return LLMReply(_unwrap(_parse(text), schema is not None))

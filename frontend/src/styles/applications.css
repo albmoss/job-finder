@@ -204,10 +204,6 @@
   cursor: default;
 }
 
-.ap-menu.panel {
-  background: linear-gradient(180deg, rgb(30 30 33), rgb(22 22 24));
-}
-
 .ap-menu .menu-item {
   text-decoration: none;
 }

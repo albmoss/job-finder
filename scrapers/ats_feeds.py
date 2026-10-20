@@ -49,6 +49,7 @@ from utils.offer_fields import (
     norm_work_modes,
 )
 from utils.safe_io import load_json_safe, save_json_atomic
+from utils.links import canonical_link
 from utils.text_cleaner import strip_html
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,8 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 CACHE_FILE = BASE_DIR / "ats_slugs_cache.json"
 STATE_FILE = BASE_DIR / "ats_state.json"
+
+_SR_LINK_RE = re.compile(r"^https://jobs\.smartrecruiters\.com/[^/]+/(\d+)")
 
 # Publiczny zbiór danych o slugach ATS (licencja MIT, Riley Dorrington)
 UPSTREAM_SLUG_URLS = {
@@ -163,8 +166,10 @@ class BaseATSHandler:
     """Bazowy interfejs dla pojedynczego systemu ATS."""
     ATS_NAME = ""
 
-    def __init__(self, session_headers: Optional[dict] = None):
+    def __init__(self, session_headers: Optional[dict] = None, known: Optional[Set[str]] = None):
         self.headers = session_headers or {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        self.known = known or set()
+        self.seen_again: List[str] = []
 
     def fetch_json(self, url: str, timeout: int = 10) -> Optional[Any]:
         req = urllib.request.Request(url, headers=self.headers)
@@ -386,6 +391,10 @@ class AshbyFeed(BaseATSHandler):
 class SmartRecruitersFeed(BaseATSHandler):
     ATS_NAME = "SmartRecruiters"
 
+    def __init__(self, session_headers: Optional[dict] = None, known: Optional[Set[str]] = None):
+        super().__init__(session_headers, known)
+        self.known_ids = {m.group(1): link for link in self.known if (m := _SR_LINK_RE.match(link))}
+
     def get_jobs(self, slug: str, target_city: str, timeout: int = 10) -> List[Job]:
         # Filtrujemy po stronie API SmartRecruiters dla Polski: country=pl
         url = f"https://api.smartrecruiters.com/v1/companies/{slug}/postings?country=pl"
@@ -416,7 +425,10 @@ class SmartRecruitersFeed(BaseATSHandler):
             if not in_scope:
                 continue
 
-            posting_id = item.get("id")
+            posting_id = str(item.get("id") or "")
+            if posting_id in self.known_ids:
+                self.seen_again.append(self.known_ids[posting_id])
+                continue
             det_url = f"https://api.smartrecruiters.com/v1/companies/{slug}/postings/{posting_id}"
             det = self.fetch_json(det_url, timeout=timeout) or {}
 
@@ -603,6 +615,10 @@ class WorkableFeed(BaseATSHandler):
 
             # Workable: detail call wykonujemy TYLKO dla ofert, które zakwalifikowały się do Polski/remote
             shortcode = item.get("shortcode")
+            link = item.get("url") or item.get("shortlink") or f"https://apply.workable.com/j/{shortcode}"
+            if canonical_link(link) in self.known:
+                self.seen_again.append(link)
+                continue
             det_url = f"https://apply.workable.com/api/v1/accounts/{slug}/jobs/{shortcode}"
             det = self.fetch_json(det_url, timeout=timeout) or {}
 
@@ -612,7 +628,7 @@ class WorkableFeed(BaseATSHandler):
             jobs.append(Job(
                 title=title,
                 company=account_name,
-                link=item.get("url") or item.get("shortlink") or f"https://apply.workable.com/j/{shortcode}",
+                link=link,
                 description=desc,
                 source="ATS Feeds",
                 location=city or target_city,
@@ -811,7 +827,9 @@ class ATSFeedsScraper(BaseScraper):
         error_count = 0
 
         # Inicjalizacja adapterów
-        handlers = {ats: ATS_HANDLERS[ats]() for ats in self.enabled_ats if ats in ATS_HANDLERS}
+        from utils.known_links import known_links
+        known = set() if getattr(self, "force", False) else known_links()
+        handlers = {ats: ATS_HANDLERS[ats](known=known) for ats in self.enabled_ats if ats in ATS_HANDLERS}
 
         def process_slug(item: Tuple[str, str, bool]) -> Tuple[str, str, List[Job], bool]:
             ats, slug, is_active = item
@@ -862,7 +880,10 @@ class ATSFeedsScraper(BaseScraper):
                         f"{self.SOURCE_NAME}: osiągnięto budżet czasowy ({elapsed:.1f}s > {self.time_budget_seconds}s) "
                         f"- przerwano po zbadaniu {completed_count}/{total_items} firm"
                     )
+                    executor.shutdown(wait=False, cancel_futures=True)
                     break
+
+        self.seen_again_links = [link for handler in handlers.values() for link in handler.seen_again]
 
         # Podsumowanie telemetrii
         logger.info(f"{self.SOURCE_NAME}: fetched {completed_count}/{total_items} descriptions")

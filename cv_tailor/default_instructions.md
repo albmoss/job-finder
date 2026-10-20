@@ -264,7 +264,7 @@ Everything else is minor.
   list; none of the AI signs.
 - **application_ready**: no spelling or grammar mistakes; no placeholders; the same names,
   dates and tool names across sections; core sections present (contact, summary,
-  experience or projects, education, skills); a file name.
+  experience or projects, education, skills).
 
 For every category also list what is already done well in `strengths`. Bands: 90 or more
 means ready to send; 50–89 means a solid base with fixes left; below 50 means the CV needs
@@ -324,7 +324,6 @@ Return one JSON object and nothing else:
     }
   ],
   "section_order": [],
-  "file_name": "First Last – Job Title",
   "review": {
     "score": 84,
     "categories": {

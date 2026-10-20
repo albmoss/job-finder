@@ -9,7 +9,7 @@ import {
   TriangleAlert,
   Upload,
 } from 'lucide-react';
-import { api, errorMessage } from '../api';
+import { api, CV_FILE_ACCEPT, errorMessage } from '../api';
 import { useApp } from '../app_context';
 import { navigate, paths } from '../router';
 import { CV_REPLACED_TOAST } from '../shell/SettingsModal';
@@ -168,7 +168,7 @@ export function MyCvScreen(_props: ScreenProps) {
         <input
           ref={fileRef}
           type="file"
-          accept=".pdf,.docx,.doc,.txt,.md"
+          accept={CV_FILE_ACCEPT}
           hidden
           onChange={(e) => {
             const file = e.target.files?.[0];

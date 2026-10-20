@@ -18,7 +18,6 @@ from utils.safe_io import load_json_safe, save_json_atomic
 logger = logging.getLogger(__name__)
 
 STATE_LOCK_FILE = Path(__file__).parent / "pipeline_run_state.json"
-CHECKPOINT_FILE = Path(__file__).parent / "pipeline_checkpoint.json"
 STOP_REQUESTED_MSG = ("Wysłano żądanie zatrzymania. Pipeline zapisze oferty pobrane do tej chwili "
                       "(w dopasowaniu - rozpoczęte oceny) i zakończy pracę.")
 STAGE_OF = {"phase0_5": "phase0"}
@@ -123,7 +122,11 @@ def _get_child_pids(parent_pid):
         queue = [parent_pid]
         while queue:
             curr = queue.pop(0)
+            curr_time = _get_process_creation_time(curr)
             for child in tree.get(curr, []):
+                child_time = _get_process_creation_time(child)
+                if curr_time is None or child_time is None or child_time < curr_time:
+                    continue
                 children.append(child)
                 queue.append(child)
         return children
@@ -169,9 +172,11 @@ def _terminate_process_tree(pid, expected_create_time=None):
 
 class PipelineProcessManager:
     """
-    Niezależny od UI menedżer procesu pipeline'u.
-    Gwarantuje przetrwanie procesu, bezpieczny reattachment,
-    ochronę przed wielokrotnym uruchomieniem i bezpieczne zatrzymanie (stop).
+    Niezależny od UI menedżer procesu pipeline'u: ochrona przed wielokrotnym
+    uruchomieniem, bezpieczne zatrzymanie (stop) i odczyt przebiegu z pliku stanu.
+    Przebieg przeżywa zamknięcie serwera (wyjście bez czytelnika jest pomijane);
+    nowy serwer pokazuje go z pliku stanu, bez zdarzeń po zamknięciu poprzedniego,
+    a wynik końcowy zapisuje wtedy sam przebieg.
     """
     _singleton_lock = threading.RLock()
     _instance = None
@@ -659,17 +664,17 @@ class PipelineProcessManager:
         try:
             for raw_line in proc.stdout:
                 line = raw_line.rstrip()
-                event = telemetry.parse(line)
-                if event is None and self._echo:
-                    self._echo(raw_line.rstrip("\r\n"))
+                text, event = telemetry.split(line)
+                if self._echo and (event is None or text):
+                    self._echo(raw_line.rstrip("\r\n") if event is None else text)
                 if not line:
                     continue
 
                 with self._lock:
                     changed = False
-                    if event is None:
-                        self._logs.append(line)
-                    else:
+                    if text.strip():
+                        self._logs.append(text)
+                    if event is not None:
                         changed = self._apply_event(event)
                     self._sync_state_to_disk(force=changed)
             code = proc.wait()
@@ -734,47 +739,6 @@ class PipelineProcessManager:
             self._release_finished_process()
             if self._process is not None:
                 is_alive = self._process.poll() is None
-                if not is_alive and self._status == "running":
-                    if self._exit_code is not None:
-                        is_standalone = bool(self._cmd and not any("run_final_pipeline" in str(arg) for arg in self._cmd))
-                        if self._pipeline_stopped_seen or self._status == "stopping":
-                            self._status = "stopped"
-                        elif is_standalone:
-                            self._status = "completed" if self._exit_code == 0 else "failed"
-                        elif self._exit_code == 0 and self._pipeline_complete_seen and not self._pipeline_incomplete_seen:
-                            self._status = "completed"
-                        else:
-                            self._status = "failed"
-
-                current_title = (self._stages[self._active_stage_idx]["title"]
-                                 if self._active_stage_idx < len(self._stages) else "")
-                total = len(self._stages)
-                done_count = sum(1 for s in self._stages if s.get("status") in ("done", "skipped"))
-                has_unfinished = any(s.get("status") not in ("done", "skipped") for s in self._stages)
-                can_resume = not is_alive and self._status in ("stopped", "failed") and has_unfinished
-
-                if self._status == "completed":
-                    progress_percent = 100.0
-                    progress_label = f"Ukończono wszystkie etapy ({done_count}/{total})"
-                elif self._status == "idle":
-                    progress_percent = None
-                    progress_label = "Oczekuje na uruchomienie"
-                elif self._status == "stopping":
-                    progress_percent = round((done_count / total) * 100, 1) if total else None
-                    progress_label = f"Zatrzymywanie po bieżącym etapie ({current_title})..."
-                elif self._status == "running":
-                    progress_percent = round((done_count / total) * 100, 1) if total else None
-                    progress_label = f"Etap {self._active_stage_idx + 1} z {total}: {current_title}"
-                elif self._status == "stopped":
-                    progress_percent = round((done_count / total) * 100, 1) if total else None
-                    progress_label = f"Zatrzymano na etapie {self._active_stage_idx + 1}/{total}: {current_title}"
-                elif self._status == "failed":
-                    progress_percent = round((done_count / total) * 100, 1) if total else None
-                    progress_label = f"Błąd na etapie {self._active_stage_idx + 1}/{total}: {current_title}"
-                else:
-                    progress_percent = round((done_count / total) * 100, 1) if total else None
-                    progress_label = current_title
-
                 return {
                     "running": is_alive,
                     "pid": self._process.pid,
@@ -787,14 +751,12 @@ class PipelineProcessManager:
                     "logs": list(self._logs),
                     "events": list(self._events),
                     "current_stage_idx": self._active_stage_idx,
-                    "current_stage_title": current_title,
+                    "current_stage_title": (self._stages[self._active_stage_idx]["title"]
+                                            if self._active_stage_idx < len(self._stages) else ""),
                     "success": self._success,
                     "exit_code": self._exit_code,
                     "error_message": self._error_message,
                     "status": self._status,
-                    "can_resume": can_resume,
-                    "progress_percent": progress_percent,
-                    "progress_label": progress_label,
                 }
 
             if STATE_LOCK_FILE.exists():
@@ -832,35 +794,6 @@ class PipelineProcessManager:
                                 disk_state["success"] = (status == "completed")
 
                         disk_state["status"] = status
-                        stages = disk_state.get("stages", [])
-                        total = len(stages)
-                        done_count = sum(1 for s in stages if s.get("status") in ("done", "skipped"))
-                        has_unfinished = any(s.get("status") not in ("done", "skipped") for s in stages)
-                        can_resume = not is_alive and status in ("stopped", "failed") and has_unfinished
-                        disk_state["can_resume"] = can_resume
-
-                        current_idx = disk_state.get("current_stage_idx", 0)
-                        current_title = disk_state.get("current_stage_title", "")
-
-                        if status == "completed":
-                            disk_state["progress_percent"] = 100.0
-                            disk_state["progress_label"] = f"Ukończono wszystkie etapy ({done_count}/{total})"
-                        elif status == "idle":
-                            disk_state["progress_percent"] = None
-                            disk_state["progress_label"] = "Oczekuje na uruchomienie"
-                        elif status == "stopping":
-                            disk_state["progress_percent"] = round((done_count / total) * 100, 1) if total else None
-                            disk_state["progress_label"] = f"Zatrzymywanie po bieżącym etapie ({current_title})..."
-                        elif status == "running":
-                            disk_state["progress_percent"] = round((done_count / total) * 100, 1) if total else None
-                            disk_state["progress_label"] = f"Etap {current_idx + 1} z {total}: {current_title}"
-                        elif status == "stopped":
-                            disk_state["progress_percent"] = round((done_count / total) * 100, 1) if total else None
-                            disk_state["progress_label"] = f"Zatrzymano na etapie {current_idx + 1}/{total}: {current_title}"
-                        elif status == "failed":
-                            disk_state["progress_percent"] = round((done_count / total) * 100, 1) if total else None
-                            disk_state["progress_label"] = f"Błąd na etapie {current_idx + 1}/{total}: {current_title}"
-
                         disk_state.setdefault("started_at", None)
                         disk_state.setdefault("finished_at", None)
                         disk_state.setdefault("events", [])
@@ -873,19 +806,6 @@ class PipelineProcessManager:
                 except Exception as e:
                     logger.warning(f"Błąd odczytu stanu procesu z dysku: {e}")
 
-            can_resume_fallback = False
-            if CHECKPOINT_FILE.exists():
-                try:
-                    cp_data = load_json_safe(CHECKPOINT_FILE, default={}) or {}
-                    completed = set(cp_data.get("completed_stages", []))
-                    if any(s["id"] not in completed for s in self._stages if s["status"] != "skipped"):
-                        can_resume_fallback = True
-                except Exception:
-                    pass
-
-            total = len(self._stages)
-            current_title = (self._stages[self._active_stage_idx]["title"]
-                             if self._active_stage_idx < len(self._stages) else "")
             return {
                 "running": False,
                 "pid": None,
@@ -898,13 +818,11 @@ class PipelineProcessManager:
                 "logs": list(self._logs),
                 "events": list(self._events),
                 "current_stage_idx": self._active_stage_idx,
-                "current_stage_title": current_title,
+                "current_stage_title": (self._stages[self._active_stage_idx]["title"]
+                                        if self._active_stage_idx < len(self._stages) else ""),
                 "success": self._success,
                 "exit_code": self._exit_code,
                 "error_message": self._error_message,
-                "status": "idle" if not can_resume_fallback else "stopped",
-                "can_resume": can_resume_fallback,
-                "progress_percent": None,
-                "progress_label": "Oczekuje na uruchomienie" if not can_resume_fallback else "Gotowy do wznowienia",
+                "status": "idle",
             }
 

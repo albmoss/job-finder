@@ -15,17 +15,20 @@ from datetime import datetime
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from utils.console import force_utf8
+from utils.console import force_utf8, output_lost, tolerate_lost_output
 
 force_utf8()
+if os.environ.get("PIPELINE_MANAGED"):
+    tolerate_lost_output()
 
 from main_scraper import run_all_scrapers
 from utils.data_models import JobDatabase
 from utils.safe_io import load_json_safe, save_json_atomic
-from config import JOBS_DATABASE_PATH
+import config
 from utils import candidates, stop, telemetry
 import clean_db
 import purge_stale_offers
@@ -250,12 +253,13 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
         save_checkpoint(completed_stages, options, stopped=True)
         return _finish(phase_results, stopped=True)
 
-    offers = JobDatabase(str(JOBS_DATABASE_PATH)).count()
+    offers = JobDatabase(str(config.JOBS_DATABASE_PATH)).count()
     logger.info(f"The database holds {offers} offers.")
     if not offers:
         logger.error("Database empty - aborting before matching.")
         phase_results["Database validation"] = False
         save_checkpoint(completed_stages, options, failed_stage="phase3")
+        telemetry.emit("stage", id="phase3", state="failed")
         return _finish(phase_results)
 
     # 3. Dopasowanie: przesiew w kodzie + ocena Jev
@@ -300,10 +304,34 @@ def run_in_manager(argv) -> int:
     return 1 if code is None else code
 
 
-if __name__ == "__main__":
+def _record_result_without_server(ok: bool) -> None:
+    import pipeline_manager
+
+    state = load_json_safe(pipeline_manager.STATE_LOCK_FILE, default=None)
+    if not isinstance(state, dict) or state.get("pid") not in (os.getpid(), os.getppid()):
+        return
+    checkpoint = load_checkpoint()
+    status = "completed" if ok else "stopped" if checkpoint.get("stopped") else "failed"
+    failed = pipeline_manager.STAGE_OF.get(checkpoint.get("failed_stage"), checkpoint.get("failed_stage"))
+    for stage in state.get("stages") or []:
+        if status == "completed" and stage.get("status") != "skipped":
+            stage["status"] = "done"
+        elif status == "failed" and stage.get("id") == failed:
+            stage["status"] = "failed"
+    state.update(running=False, status=status, success=ok, exit_code=0 if ok else 1,
+                 finished_at=time.time(), stopped=status == "stopped")
+    save_json_atomic(pipeline_manager.STATE_LOCK_FILE, state, backup=False)
+
+
+def main(argv) -> int:
     if not os.environ.get("PIPELINE_MANAGED"):
-        sys.exit(run_in_manager(sys.argv[1:]))
-    skip_scraping = "--skip-scraping" in sys.argv
-    rescore_all = "--rescore-all" in sys.argv
-    resume = "--resume" in sys.argv
-    sys.exit(0 if run_pipeline(skip_scraping=skip_scraping, rescore_all=rescore_all, resume=resume) else 1)
+        return run_in_manager(argv)
+    ok = run_pipeline(skip_scraping="--skip-scraping" in argv, rescore_all="--rescore-all" in argv,
+                      resume="--resume" in argv)
+    if output_lost():
+        _record_result_without_server(ok)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
