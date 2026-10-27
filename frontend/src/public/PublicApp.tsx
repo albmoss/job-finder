@@ -116,9 +116,10 @@ export function PublicApp() {
   else if (state?.status === 'error') body = <ErrorView message={state.error} onReset={reset} />;
   else body = <ProgressView state={state} />;
 
-  const start = !page && !searchId;
+  const searching = !!searchId && !(state?.status === 'done' && state.result) && state?.status !== 'error';
+  const wide = !page && (!searchId || searching);
   return (
-    <div className={`pb${start ? ' is-wide' : ''}`}>
+    <div className={`pb${wide ? ' is-wide' : ''}`}>
       <header className="pb-header">
         <a className="pb-brand" href="/" aria-label="traffy.pl">
           <LogoMark />
@@ -338,27 +339,58 @@ function ProgressView({ state }: { state: SearchState | null }) {
   ];
 
   return (
-    <section className="pb-card panel pb-progress" aria-live="polite">
-      <h1 className="title-lg">Szukamy ofert dla Twojego doświadczenia</h1>
-      {status === 'queued' && state && state.queue > 0 && <p className="label">Za chwilę zaczynamy, jesteś w kolejce.</p>}
-      <ol className="pb-steps">
-        {steps.map((step) => (
-          <li key={step.title} className={`pb-step is-${step.state}`}>
-            <span className="pb-step-mark">
-              {step.state === 'done' ? <Check /> : step.state === 'active' ? <span className="spinner" /> : null}
-            </span>
-            <div>
-              <p className="pb-step-title">{step.title}</p>
-              {step.detail && step.state !== 'todo' && <p className="label">{step.detail}</p>}
-            </div>
-          </li>
-        ))}
-      </ol>
-      <span className="meter is-indeterminate">
-        <span className="meter-fill" />
-      </span>
-      <p className="label">Kończymy, gdy trzy oferty naprawdę pasują.</p>
+    <section className="pb-start pb-searching" aria-live="polite">
+      <div className="pb-start-copy">
+        <h1 className="pb-display">
+          Szukamy ofert <span>dla Twojego doświadczenia.</span>
+        </h1>
+        {status === 'queued' && state && state.queue > 0 && <p className="muted">Za chwilę zaczynamy, jesteś w kolejce.</p>}
+        <ol className="pb-steps">
+          {steps.map((step) => (
+            <li key={step.title} className={`pb-step is-${step.state}`}>
+              <span className="pb-step-mark">
+                {step.state === 'done' ? <Check /> : step.state === 'active' ? <span className="spinner" /> : null}
+              </span>
+              <div>
+                <p className="pb-step-title">{step.title}</p>
+                {step.detail && step.state !== 'todo' && <p className="label">{step.detail}</p>}
+              </div>
+            </li>
+          ))}
+        </ol>
+        <p className="pb-terms">Kończymy, gdy trzy oferty naprawdę pasują.</p>
+      </div>
+      <ScanVisual tags={tags} />
     </section>
+  );
+}
+
+function ScanVisual({ tags }: { tags: string[] }) {
+  return (
+    <div className="pb-demo" aria-hidden="true">
+      <div className="pb-demo-cv">
+        <div className="pb-demo-person">
+          <span className="pb-demo-avatar" />
+          <span className="pb-scan-name">
+            <i />
+            <i />
+          </span>
+        </div>
+        {[92, 78, 85, 60, 0, 88, 70, 82, 54, 0, 76, 90, 64].map((width, i) =>
+          width ? <i key={i} style={{ width: `${width}%` }} /> : <b key={i} />,
+        )}
+        <span className="pb-demo-scan is-loop" />
+      </div>
+      {tags.length > 0 && (
+        <div className="pb-scan-tags">
+          {tags.map((tag) => (
+            <span key={tag} className="pb-scan-tag glass">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -439,11 +471,10 @@ function LockedSection({ teasers, roles }: { teasers: number[]; roles: string[] 
         <div className="pb-teasers" aria-hidden="true">
           {teasers.map((percent, i) => (
             <div key={i} className="pb-teaser glass">
-              <span className="pb-teaser-lock">
-                <Lock />
-              </span>
               <div className="pb-teaser-content">
-                <span className="pb-teaser-logo" />
+                <span className="pb-teaser-mark">
+                  <Lock />
+                </span>
                 <div className="pb-offer-body">
                   <p className="pb-offer-title">{roles[i % Math.max(roles.length, 1)] ?? 'Oferta pracy'}</p>
                   <p className="pb-offer-company">Nazwa firmy</p>
