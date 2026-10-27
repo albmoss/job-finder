@@ -313,35 +313,46 @@ class ScraperStatusManager:
         with self._lock:
             return self._read()
 
+    @staticmethod
+    def _key(source_name: str) -> str:
+        from utils.candidate_scope import all_poland
+        return f"{source_name}|all" if all_poland() else source_name
+
+    @staticmethod
+    def _owner() -> str:
+        from utils import candidates
+        from utils.candidate_scope import all_poland
+        return "all" if all_poland() else candidates.active_id()
+
     def is_scraped_today(self, source_name: str) -> bool:
         """Czy źródło zostało dziś poprawnie zescrapowane dla aktywnego kandydata."""
         from datetime import datetime
         from utils import candidates
 
         with self._lock:
-            entry = self._read().get(source_name, {})
+            entry = self._read().get(self._key(source_name), {})
 
         return (entry.get('last_run_date') == datetime.now().date().isoformat()
                 and entry.get('status') == 'success'
-                and entry.get('candidate', candidates.FIRST_ID) == candidates.active_id())
+                and entry.get('candidate', candidates.FIRST_ID) == self._owner())
 
     def mark_as_completed(self, source_name: str, jobs_count: int):
         """Odnotowuje udany dzisiejszy scraping źródła."""
         from datetime import datetime
-        from utils import candidates
 
+        key, owner = self._key(source_name), self._owner()
         now = datetime.now()
         with self._lock:
             data = self._read()
-            entry = data.get(source_name, {})
+            entry = data.get(key, {})
             entry.update({
                 'last_run_date': now.date().isoformat(),
                 'status': 'success',
                 'jobs_count': jobs_count,
                 'timestamp': now.isoformat(),
-                'candidate': candidates.active_id(),
+                'candidate': owner,
             })
-            data[source_name] = entry
+            data[key] = entry
             self._write(data)
 
     def record_yield(self, source_name: str, jobs_count: int):
@@ -362,7 +373,7 @@ class ScraperStatusManager:
         now = datetime.now()
         with self._lock:
             data = self._read()
-            entry = data.setdefault(source_name, {})
+            entry = data.setdefault(self._key(source_name), {})
             history = entry.get('history') or []
             history.append({'date': now.date().isoformat(), 'count': jobs_count})
             entry['history'] = history[-HISTORY_LEN:]
@@ -374,7 +385,7 @@ class ScraperStatusManager:
 
         with self._lock:
             data = self._read()
-            entry = data.setdefault(source_name, {})
+            entry = data.setdefault(self._key(source_name), {})
             if scope is None:
                 if entry.pop('liveness', None) is None:
                     return
@@ -387,7 +398,7 @@ class ScraperStatusManager:
     def get_history(self, source_name: str) -> list:
         """Ostatnie przebiegi źródła; pusta lista, gdy nic o nim nie wiemy."""
         with self._lock:
-            return (self._read().get(source_name, {}) or {}).get('history') or []
+            return (self._read().get(self._key(source_name), {}) or {}).get('history') or []
 
     # --- jedyne miejsce dotykające pliku -------------------------------------
 

@@ -24,6 +24,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from utils import stop
+from utils.candidate_scope import all_poland
 from utils.data_models import Job
 from utils.links import canonical_link, logo_url
 
@@ -132,15 +133,16 @@ class AplikujScraper(LdJsonPortalScraper):
         self.categories: Optional[List[str]] = None
 
     def run(self) -> List[Job]:
-        from utils.portal_categories import pick_categories
-        picked = pick_categories("aplikuj", fetch_aplikuj_categories())
-        if picked is not None:
-            self.categories = picked
-            logger.info(f"aplikuj.pl: {len(picked)} categories from CV")
+        if not all_poland():
+            from utils.portal_categories import pick_categories
+            picked = pick_categories("aplikuj", fetch_aplikuj_categories())
+            if picked is not None:
+                self.categories = picked
+                logger.info(f"aplikuj.pl: {len(picked)} categories from CV")
         return super().run()
 
     def build_listing_url(self, page: int) -> str:
-        base = f"https://www.aplikuj.pl/praca/{self.city_slug}"
+        base = "https://www.aplikuj.pl/praca" if all_poland() else f"https://www.aplikuj.pl/praca/{self.city_slug}"
         return base if page <= 1 else f"{base}/strona-{page}"
 
     def build_category_url(self, category: str, page: int = 1) -> str:

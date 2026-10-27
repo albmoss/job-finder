@@ -16,7 +16,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import stop
-from utils.candidate_scope import scope_city, scope_levels
+from utils.candidate_scope import all_poland, scope_city, scope_levels
 from utils.data_models import Job
 from utils.offer_fields import (
     norm_contracts,
@@ -134,7 +134,7 @@ class JoobleAPIScraper:
         seen_links = set()
         
         # Search with multiple keyword sets to maximize coverage
-        keyword_sets = self._keyword_sets_from_levels(scope_levels())
+        keyword_sets = [""] if all_poland() else self._keyword_sets_from_levels(scope_levels())
         
         for keywords in keyword_sets:
             page = 1

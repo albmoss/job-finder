@@ -307,6 +307,11 @@ class PipelineProcessManager:
                 stage["finished_at"] = now
                 changed = True
             return changed
+        if state == "skipped":
+            if stage["status"] != "skipped":
+                stage["status"] = "skipped"
+                changed = True
+            return changed
         for prev in self._stages[:idx]:
             if prev["status"] not in ("skipped", "failed", "done"):
                 prev["status"] = "done"

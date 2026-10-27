@@ -102,6 +102,18 @@ class RecordStore:
     def load(self) -> dict[str, dict]:
         return {key: json.loads(text) for key, text in self.load_raw().items()}
 
+    def iter_records(self):
+        with closing(self._connect()) as conn:
+            for key, text in conn.execute("SELECT key, data FROM records"):
+                yield key, json.loads(text)
+
+    def get_many(self, keys: Iterable[str]) -> dict[str, dict]:
+        keys = list(keys)
+        with closing(self._connect()) as conn:
+            rows = conn.execute(f"SELECT key, data FROM records WHERE key IN ({','.join('?' * len(keys))})",
+                                keys).fetchall() if keys else []
+        return {key: json.loads(text) for key, text in rows}
+
     def keys(self) -> list[str]:
         with closing(self._connect()) as conn:
             return [k for (k,) in conn.execute("SELECT key FROM records ORDER BY rowid")]

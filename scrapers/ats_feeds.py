@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from scrapers.base_scraper import BaseScraper
 from utils import stop, telemetry
-from utils.candidate_scope import scope_city
+from utils.candidate_scope import COUNTRY, all_poland, scope_city
 from utils.data_models import Job
 from utils.offer_fields import (
     _fold,
@@ -121,8 +121,10 @@ GLOBAL_REMOTE_REGIONS = (
 )
 
 
-def matches_target_city(text: str, target_city: str) -> bool:
+def matches_target_city(text: str, target_city: Optional[str]) -> bool:
     """Sprawdza, czy tekst lokalizacji pasuje do docelowego miasta kandydata."""
+    if target_city is None:
+        return True
     if not text:
         return False
     folded = _fold(text)
@@ -811,8 +813,8 @@ class ATSFeedsScraper(BaseScraper):
     def run(self) -> List[Job]:
         """Główna pętla wykonania scrapera ATS."""
         start_time = time.time()
-        target_city = scope_city()
-        logger.info(f"{self.SOURCE_NAME}: uruchamianie feedów dla miasta docelowego: {target_city}...")
+        target_city = None if all_poland() else scope_city()
+        logger.info(f"{self.SOURCE_NAME}: uruchamianie feedów dla miasta docelowego: {target_city or COUNTRY}...")
 
         all_slugs = self._load_or_fetch_slugs()
         state = self._load_state()

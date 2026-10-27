@@ -34,7 +34,7 @@ from typing import List, Optional
 from bs4 import BeautifulSoup
 
 from utils import stop, telemetry
-from utils.candidate_scope import city_slug, scope_city, scope_levels
+from utils.candidate_scope import all_poland, city_slug, scope_city, scope_config, scope_levels
 from utils.data_models import Job
 from utils.links import canonical_link, logo_url
 from utils.offer_fields import (
@@ -156,7 +156,7 @@ class PracujOptimizedScraper:
 
     def __init__(self, config: dict):
         self.config = config
-        cfg = config.get("pracuj_pl", {}) or {}
+        cfg = scope_config(config.get("pracuj_pl"))
         self.cfg = cfg
 
         city = scope_city(default=cfg.get("location") or config.get("location", "Warszawa"))
@@ -169,6 +169,7 @@ class PracujOptimizedScraper:
             et_codes = [1, 3, 17]
         self.et_param = ",".join(str(c) for c in et_codes)
         self.days = cfg.get("days_param", 7)
+        self.max_pages = cfg.get("max_pages", 100)
 
         self.categories: Optional[List[str]] = None
         self.cc_param = ""
@@ -213,6 +214,8 @@ class PracujOptimizedScraper:
         return "Pracuj.pl"
 
     def build_search_url(self, page: int = 1) -> str:
+        if all_poland():
+            return f"{self.BASE_URL}/praca?itth={self.days}&pn={page}"
         url = f"{self.BASE_URL}/praca/{self.city_slug};wp?et={self.et_param}&itth={self.days}&pn={page}"
         if self.cc_param:
             url += f"&cc={self.cc_param}"
@@ -419,7 +422,7 @@ class PracujOptimizedScraper:
             logger.warning("Pracuj.pl: No jobs found on first page")
             return []
 
-        total_pages = 100
+        total_pages = self.max_pages
         logger.info(f"Pracuj.pl: Scanning up to {total_pages} pages with {self.parallel_threads} threads...")
 
         consecutive_empty = 0
@@ -597,7 +600,8 @@ class PracujOptimizedScraper:
             logger.info(f"Pracuj.pl: {len(picked)} categories from CV")
 
     def run(self) -> List[Job]:
-        self._pick_categories()
+        if not all_poland():
+            self._pick_categories()
         cat_info = f", cc={self.cc_param}" if self.cc_param else ""
         logger.info(f"{self.get_source_name()}: Starting scrape (lokalizacja: {self.city}, et={self.et_param}{cat_info})")
         all_items = self.fetch_all_listings()

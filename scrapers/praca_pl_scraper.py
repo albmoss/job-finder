@@ -16,6 +16,8 @@ działa bez filtra kategorii i przeszukuje listing miejski.
 
 import re
 
+from utils.candidate_scope import all_poland
+
 from .ldjson_scraper_base import LdJsonPortalScraper
 
 
@@ -23,9 +25,9 @@ class PracaPlScraper(LdJsonPortalScraper):
     SOURCE_NAME = "praca.pl"
     CONFIG_KEY = "praca_pl"
 
-    # Oferty to /{slug}_{id}.html. Negatywny lookahead na "s-" odcina linki
-    # paginacji (/s-warszawa_2.html), które mają identyczny kształt.
-    OFFER_LINK_RE = re.compile(r"https://www\.praca\.pl/(?!s-)[a-z0-9\-]+_\d+\.html")
+    # Oferty to /{slug}_{id}.html. Negatywny lookahead na "s-" i "oferty-pracy_" odcina linki
+    # paginacji (/s-warszawa_2.html, /oferty-pracy_2.html), które mają identyczny kształt.
+    OFFER_LINK_RE = re.compile(r"https://www\.praca\.pl/(?!s-|oferty-pracy_)[a-z0-9\-]+_\d+\.html")
 
     DEFAULT_MAX_PAGES = 15
     DEFAULT_MAX_OFFERS = 400
@@ -37,6 +39,7 @@ class PracaPlScraper(LdJsonPortalScraper):
         self.city_slug = self.cfg.get("city_slug") or self.city_slug
 
     def build_listing_url(self, page: int) -> str:
+        base = "oferty-pracy" if all_poland() else f"s-{self.city_slug}"
         if page <= 1:
-            return f"https://www.praca.pl/s-{self.city_slug}.html"
-        return f"https://www.praca.pl/s-{self.city_slug}_{page}.html"
+            return f"https://www.praca.pl/{base}.html"
+        return f"https://www.praca.pl/{base}_{page}.html"

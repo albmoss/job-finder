@@ -23,7 +23,7 @@ import requests
 
 from scrapers.base_scraper import BaseScraper
 from utils import stop
-from utils.candidate_scope import scope_city, scope_levels
+from utils.candidate_scope import all_poland, scope_city, scope_config, scope_levels
 from utils.portal_categories import pick_categories
 from utils.data_models import Job
 from utils.links import canonical_link, logo_url
@@ -209,19 +209,23 @@ class CandidateAPIScraper(BaseScraper):
         raw_levels = scope_levels()
         levels = list(dict.fromkeys(CANDIDATE_API_LEVEL_MAP[lv] for lv in raw_levels if lv in CANDIDATE_API_LEVEL_MAP)) or ["junior", "intern"]
 
-        catalog = self._fetch_category_catalog(session)
-        portal_key = self.PORTAL_KEY or self.CONFIG_KEY
-        picked_categories = pick_categories(portal_key, catalog) if catalog else None
-        if picked_categories is not None:
-            logger.info(f"{self.SOURCE_NAME}: {len(picked_categories)} kategorii z CV")
-            cat_params = [("categories", c) for c in picked_categories]
+        if all_poland():
+            picked_categories = None
+            queries = [(lv, [("experienceLevels", lv), ("itemsCount", 100)]) for lv in levels]
         else:
-            cat_params = []
+            catalog = self._fetch_category_catalog(session)
+            portal_key = self.PORTAL_KEY or self.CONFIG_KEY
+            picked_categories = pick_categories(portal_key, catalog) if catalog else None
+            if picked_categories is not None:
+                logger.info(f"{self.SOURCE_NAME}: {len(picked_categories)} kategorii z CV")
+                cat_params = [("categories", c) for c in picked_categories]
+            else:
+                cat_params = []
 
-        queries = [
-            ("city", [("city", city)] + [("experienceLevels", lv) for lv in levels] + cat_params),
-            ("remote", [("isRemote", "true")] + [("experienceLevels", lv) for lv in levels] + cat_params),
-        ]
+            queries = [
+                ("city", [("city", city)] + [("experienceLevels", lv) for lv in levels] + cat_params),
+                ("remote", [("isRemote", "true")] + [("experienceLevels", lv) for lv in levels] + cat_params),
+            ]
 
         complete = True
         offers_by_slug = {}
@@ -275,7 +279,7 @@ class CandidateAPIScraper(BaseScraper):
         Zostawiamy tylko oferty z docelowego miasta ORAZ zdalne z firm w Polsce
         (współrzędne w POLAND_BOUNDS) - zdalne z Los Angeles czy Lizbony odpadają.
         """
-        if str(offer.get("workplaceType", "")).lower() == "remote":
+        if str(offer.get("workplaceType", "")).lower() == "remote" or all_poland():
             places = [offer, *(loc for loc in offer.get("locations") or [] if isinstance(loc, dict))]
             return any(in_poland(place) for place in places)
 
@@ -438,6 +442,9 @@ class CandidateAPIScraper(BaseScraper):
         portal_cfg = self.config.get(self.CONFIG_KEY, {}) or {}
         default_city = portal_cfg.get("location") or self.config.get("location", "Warszawa")
         location = offer.get("city") or detail.get("city") or scope_city(default_city)
+        if all_poland():
+            cities = [offer.get("city"), *(loc.get("city") for loc in offer.get("locations") or [] if isinstance(loc, dict))]
+            location = ", ".join(dict.fromkeys(c for c in cities if c)) or location
 
         return Job(
             title=title,
@@ -499,13 +506,14 @@ class CandidateAPIScraper(BaseScraper):
 
             # Szczegóły równolegle, ale delikatnie - to najwolniejsza faza.
             with_slug = [o for o in offers if o.get("slug")]
-            to_detail = with_slug[: self.MAX_DETAIL_FETCH]
+            max_detail = scope_config(portal_cfg).get("max_detail_fetch", self.MAX_DETAIL_FETCH)
+            to_detail = with_slug[:max_detail]
             logger.info(f"{self.SOURCE_NAME}: fetching descriptions for {len(to_detail)} offers...")
             if len(with_slug) > len(to_detail):
                 # Podsumowanie niżej liczy procent tylko z pobieranych ofert, więc limit widać tylko tutaj.
                 logger.warning(
                     f"{self.SOURCE_NAME}: {len(with_slug) - len(to_detail)} offers over the "
-                    f"{self.MAX_DETAIL_FETCH} detail limit saved without a description - "
+                    f"{max_detail} detail limit saved without a description - "
                     f"the next run fetches them"
                 )
 

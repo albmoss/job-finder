@@ -14,7 +14,7 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-5A70FF?style=flat-square&logo=typescript&logoColor=white)
 ![Vite](https://img.shields.io/badge/Vite-5A70FF?style=flat-square&logo=vite&logoColor=white)
 
-[How it works](#how-it-works) · [Pipeline](#pipeline) · [Quick start](#quick-start) · [Matching](#matching) · [CV per offer](#cv-per-offer) · [CV reader](#cv-reader) · [Design notes](#design-notes)
+[How it works](#how-it-works) · [Pipeline](#pipeline) · [Quick start](#quick-start) · [Matching](#matching) · [CV per offer](#cv-per-offer) · [CV reader](#cv-reader) · [Public site](#public-site) · [Design notes](#design-notes)
 
 <br>
 
@@ -139,6 +139,24 @@ the UI:
 server: OpenRouter, Groq, DeepSeek, Mistral, or a local Ollama / LM Studio. Your own list
 goes in `GEMINI_MODELS`, `OPENAI_MODELS` or `ANTHROPIC_MODELS`, comma-separated. Extra keys
 (`…_1` to `…_4`) take over when one hits a rate limit.
+
+## Public site
+
+`public_server.py` is a second, smaller app for other people. A visitor uploads a CV and gets
+the three best matching offers from the shared database; nothing is scraped for them. To keep
+the cost per visitor low, code ranks the offers first (role and skill words from the CV against
+titles, skills and categories), Jev's first pass reads them in batches of 100 from the top, the
+most promising ones get the full score eight at a time, and the search stops once three
+different offers reach 40%. In a real run that took one batch and eight full scores. The file
+is deleted as soon as its text is read, and results stay in memory for two hours.
+
+```bash
+cd frontend && npm run build:public && cd ..
+PYTHONIOENCODING=utf-8 python public_server.py                  # → http://127.0.0.1:8600
+python publish_offers.py user@host:/srv/jobfinder/data/offers   # copy jobs.db to the server
+python publish_offers.py /srv/jobfinder/data/offers             # or snapshot into a local directory
+docker compose -f docker-compose.public.yml up -d --build       # on the server
+```
 
 ## Design notes
 

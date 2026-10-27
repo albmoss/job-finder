@@ -14,7 +14,7 @@ from typing import List
 import requests
 
 from utils import stop
-from utils.candidate_scope import scope_city, scope_levels
+from utils.candidate_scope import all_poland, scope_city, scope_levels
 from utils.data_models import Job
 from utils.offer_fields import (
     make_salary,
@@ -69,6 +69,8 @@ class AdzunaAPIScraper:
             "results_per_page": 50,
             "content-type": "application/json",
         }
+        if all_poland():
+            del params["what"], params["where"]
         url = f"{BASE_URL}/{page}"
         
         for attempt in range(1, retries + 1):

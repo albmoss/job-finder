@@ -1,5 +1,6 @@
 # Sekrety
 .env
+.env.public
 
 # Python
 __pycache__/
@@ -22,6 +23,7 @@ benchmark_results.json
 scraper_status.json
 waterfall_state.json
 olx_category_state.json
+olx_category_state_all.json
 scope_rejects.json
 last_scrape_run.json
 pipeline_run_state.json
@@ -48,6 +50,8 @@ cv_versions.json
 cv_versions/
 cv_tailor_instructions.md
 candidates/
+public_data/
+data/
 
 # Kopie zapasowe plików danych (utils/safe_io.py)
 backups/
@@ -65,4 +69,5 @@ node_modules/
 dist/
 frontend/node_modules/
 frontend/dist/
+frontend/dist-public/
 *.tsbuildinfo

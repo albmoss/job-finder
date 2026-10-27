@@ -14,7 +14,7 @@ from base64 import b64encode
 import requests
 
 from utils import stop
-from utils.candidate_scope import scope_city, scope_levels
+from utils.candidate_scope import all_poland, scope_city, scope_levels
 from utils.data_models import Job
 from utils.offer_fields import (
     make_salary,
@@ -141,7 +141,7 @@ class CareerjetAPIScraper:
         all_jobs = []
         seen_links = set()
         
-        keyword_sets = self._keyword_sets_from_levels(scope_levels())
+        keyword_sets = [""] if all_poland() else self._keyword_sets_from_levels(scope_levels())
         
         for keywords in keyword_sets:
             page = 1

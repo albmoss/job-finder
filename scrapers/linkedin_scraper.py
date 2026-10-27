@@ -25,7 +25,7 @@ from bs4 import BeautifulSoup
 
 from config import USER_AGENTS
 from utils import stop
-from utils.candidate_scope import scope_city, scope_levels
+from utils.candidate_scope import all_poland, scope_city, scope_config, scope_levels
 from utils.data_models import Job
 from utils.links import canonical_link, logo_url
 from utils.known_links import known_links
@@ -66,7 +66,7 @@ class LinkedInScraper:
 
     def __init__(self, config: dict):
         self.config = config
-        self.cfg = config.get("linkedin", {}) or {}
+        self.cfg = scope_config(config.get("linkedin"))
         self.session = requests.Session()
         self.seen_again_links = []
         self.force = getattr(self, "force", False)
@@ -94,9 +94,8 @@ class LinkedInScraper:
 
     def build_search_url(self, start: int = 0) -> str:
         """Zbuduj URL zapytania seeMoreJobPostings z filtrem miasta i f_E."""
-        city = scope_city(default="Warszawa")
-        levels = scope_levels()
-        f_e = self._map_f_e_param(levels)
+        city = "Poland" if all_poland() else scope_city(default="Warszawa")
+        f_e = "" if all_poland() else f"&f_E={self._map_f_e_param(scope_levels())}"
 
         job_types = self.cfg.get("job_types", ["F", "P"])
         jt_param = ",".join(job_types) if job_types else "F,P"
@@ -104,7 +103,7 @@ class LinkedInScraper:
         loc_encoded = urllib.parse.quote(city)
         url = (
             f"{self.SEARCH_ENDPOINT}?keywords=&location={loc_encoded}"
-            f"&f_E={f_e}&f_JT={jt_param}&f_TPR=r2592000&start={start}"
+            f"{f_e}&f_JT={jt_param}&f_TPR=r2592000&start={start}"
         )
         return url
 

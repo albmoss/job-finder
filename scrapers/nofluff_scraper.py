@@ -17,7 +17,7 @@ from datetime import datetime
 
 from scrapers.base_scraper import BaseScraper
 from utils import stop, telemetry
-from utils.candidate_scope import scope_city, scope_levels
+from utils.candidate_scope import all_poland, scope_city, scope_config, scope_levels
 from utils.portal_categories import pick_categories
 from utils.data_models import Job
 from utils.links import logo_url
@@ -105,7 +105,7 @@ class NoFluffScraper(BaseScraper):
 
     def __init__(self, config: dict):
         super().__init__(config)
-        portal_cfg = config.get("nofluffjobs", {}) or {}
+        portal_cfg = scope_config(config.get("nofluffjobs"))
         self.skip_known_details = portal_cfg.get("skip_known_details", True)
         self.max_details = portal_cfg.get("max_details", self.DEFAULT_MAX_DETAILS)
         self.seen_again_links = []
@@ -229,7 +229,7 @@ class NoFluffScraper(BaseScraper):
     @classmethod
     def _in_scope(cls, posting: dict, target_city: str) -> bool:
         """Oferta z docelowego miasta albo z możliwością pracy zdalnej."""
-        if cls._remote_possible(posting):
+        if all_poland() or cls._remote_possible(posting):
             return True
         target = target_city.lower()
         location = posting.get("location") or {}
@@ -269,12 +269,17 @@ class NoFluffScraper(BaseScraper):
         raw_levels = scope_levels()
         seniority = list(dict.fromkeys(NFJ_LEVEL_MAP[lv] for lv in raw_levels if lv in NFJ_LEVEL_MAP)) or ["trainee", "junior"]
 
-        criteria = {"seniority": seniority, "country": ["poland"]}
-        catalog = self._fetch_category_catalog(session)
-        picked_categories = pick_categories("nofluffjobs", catalog) if catalog else None
-        if picked_categories is not None:
-            logger.info(f"NoFluffJobs: {len(picked_categories)} kategorii z CV")
-            criteria["category"] = picked_categories
+        if all_poland():
+            seniority = ["all"]
+            criteria = {"country": ["poland"]}
+            picked_categories = None
+        else:
+            criteria = {"seniority": seniority, "country": ["poland"]}
+            catalog = self._fetch_category_catalog(session)
+            picked_categories = pick_categories("nofluffjobs", catalog) if catalog else None
+            if picked_categories is not None:
+                logger.info(f"NoFluffJobs: {len(picked_categories)} kategorii z CV")
+                criteria["category"] = picked_categories
 
         label_cats = f" [{len(picked_categories)} cats]" if picked_categories else ""
         postings, complete = self._search(
@@ -430,6 +435,8 @@ class NoFluffScraper(BaseScraper):
         default_city = (cfg.get("nofluffjobs", {}) or {}).get("location") or cfg.get("location", "Warszawa")
         target = scope_city(default_city).lower()
         location = next((c for c in cities if target in c.lower()), None) or (cities[0] if cities else None)
+        if all_poland() and cities:
+            location = ", ".join(dict.fromkeys(cities))
         if not location and "remote" in (work_modes or ()):
             location = "Polska"
 

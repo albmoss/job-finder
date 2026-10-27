@@ -1474,6 +1474,224 @@ def test_remote_offers_in_poland():
                   {"city": "Kraków", "latitude": 50.06, "longitude": 19.94}]), "Warszawa") is True)
 
 
+def test_all_poland_scope():
+    print("\n[14g] --all-poland: whole country, all levels, no CV, separate status keys")
+    from unittest.mock import MagicMock, patch
+    import run_final_pipeline as pipeline
+    from config import SCRAPER_CONFIG
+    from pipeline_manager import PipelineProcessManager
+    from scrapers import candidate_api_base, nofluff_scraper, solid_jobs_api
+    from scrapers.aplikuj_scraper import AplikujScraper
+    from scrapers.gowork_scraper import GoWorkScraper
+    from scrapers.justjoin_scraper import JustJoinScraper
+    from scrapers.ldjson_scraper_base import LdJsonPortalScraper
+    from scrapers.linkedin_scraper import LinkedInScraper
+    from scrapers.nofluff_scraper import NoFluffScraper
+    from scrapers.praca_pl_scraper import PracaPlScraper
+    from scrapers.pracuj_optimized_scraper import PracujOptimizedScraper
+    from scrapers.solid_jobs_api import SolidJobsAPIScraper
+    from utils import candidate_scope, portal_categories
+    from utils.candidate_scope import SCOPE_ENV, all_poland, scope_city, scope_levels
+    from utils.data_models import Job
+    from utils.offer_fields import SENIORITY
+
+    os.environ.pop(SCOPE_ENV, None)
+    whole_country = lambda: patch.dict(os.environ, {SCOPE_ENV: "all"})
+    profile = patch.object(candidate_scope, "load_profile", return_value={"city": "Kraków", "seniority": "junior"})
+    no_pick = MagicMock(side_effect=AssertionError("pick_categories called in --all-poland"))
+    cfg = dict(SCRAPER_CONFIG)
+
+    with profile:
+        check("candidate mode: levels are the CV window", scope_levels() == ["intern", "junior", "mid"], scope_levels())
+        check("candidate mode: city comes from the CV", scope_city() == "Kraków")
+        with whole_country():
+            check("all-poland: every level", scope_levels() == list(SENIORITY), scope_levels())
+            check("all-poland: the CV city is ignored", scope_city() == "Polska" and all_poland())
+    check("no env var = candidate mode", not all_poland())
+
+    with profile:
+        cand = [PracujOptimizedScraper(cfg), PracaPlScraper(cfg), GoWorkScraper(cfg), AplikujScraper(cfg)]
+        linkedin_cand = LinkedInScraper(cfg).build_search_url()
+        with whole_country():
+            glob = [PracujOptimizedScraper(cfg), PracaPlScraper(cfg), GoWorkScraper(cfg), AplikujScraper(cfg)]
+            urls_glob = [s.build_listing_url(2) if hasattr(s, "build_listing_url") else s.build_search_url(2) for s in glob]
+            linkedin_glob = LinkedInScraper(cfg).build_search_url()
+    urls_cand = [s.build_listing_url(2) if hasattr(s, "build_listing_url") else s.build_search_url(2) for s in cand]
+    check("candidate mode: listing URLs keep the CV city and levels", urls_cand == [
+        "https://www.pracuj.pl/praca/krakow;wp?et=1,3,4,17&itth=7&pn=2",
+        "https://www.praca.pl/s-krakow_2.html",
+        "https://www.gowork.pl/praca/krakow;l/2;pg",
+        "https://www.aplikuj.pl/praca/krakow/strona-2"], urls_cand)
+    check("all-poland: country-wide listing URLs", urls_glob == [
+        "https://www.pracuj.pl/praca?itth=7&pn=2",
+        "https://www.praca.pl/oferty-pracy_2.html",
+        "https://www.gowork.pl/praca/2;pg",
+        "https://www.aplikuj.pl/praca/strona-2"], urls_glob)
+    check("candidate mode: config limits unchanged", (cand[0].max_pages, cand[1].max_pages, cand[1].max_offers) == (100, 35, 2500))
+    check("all-poland: limits from the config `all_poland` key",
+          (glob[0].max_pages, glob[1].max_pages, glob[2].max_pages, glob[3].max_offers) == (1000, 260, 700, 42500))
+    check("LinkedIn: CV city with f_E vs Poland without a level filter",
+          "location=Krak%C3%B3w&f_E=1,2,3,4" in linkedin_cand and "location=Poland&f_JT" in linkedin_glob,
+          (linkedin_cand, linkedin_glob))
+    check("praca.pl: country pagination links are not offers",
+          not PracaPlScraper.OFFER_LINK_RE.findall('href="https://www.praca.pl/oferty-pracy_2.html"'))
+
+    with whole_country():
+        ld = PracaPlScraper(cfg)
+        senior_far = Job(title="Senior Java Developer", company="F", link="https://www.praca.pl/x_1.html",
+                         description="Opis", source="praca.pl", location="Gdańsk")
+        check("all-poland: a senior offer from another city is in scope", ld._in_scope(senior_far, {}))
+    with profile:
+        check("candidate mode: the same offer stays out of scope", not PracaPlScraper(cfg)._in_scope(senior_far, {}))
+
+    with whole_country(), patch("utils.portal_categories.pick_categories", no_pick), \
+         patch.object(LdJsonPortalScraper, "run", return_value=[]):
+        aplikuj = AplikujScraper(cfg)
+        aplikuj.run()
+        pracuj = PracujOptimizedScraper(cfg)
+        pracuj.fetch_all_listings = lambda: []
+        pracuj.run()
+        check("all-poland: aplikuj and Pracuj do not pick categories",
+              not no_pick.called and aplikuj.categories is None and pracuj.cc_param == "")
+
+    calls = []
+
+    class Session:
+        def get(self, url, params=None, **kwargs):
+            calls.append((url, list(params or [])))
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = {"data": [], "meta": {"totalItems": 0}}
+            return resp
+
+    with whole_country(), patch.object(candidate_api_base, "pick_categories", no_pick):
+        jj = JustJoinScraper(cfg)
+        jj._fetch_listing(Session())
+    check("all-poland: candidate-api asks once per level, no city, no categories",
+          [p for _, p in calls] == [[("experienceLevels", lv), ("itemsCount", 100), ("from", 0)]
+                                    for lv in ("intern", "junior", "mid", "senior")]
+          and not no_pick.called, calls)
+    abroad = {"city": "Barcelona", "workplaceType": "office", "latitude": 41.39, "longitude": 2.17}
+    with whole_country():
+        check("all-poland: candidate-api keeps any Polish city, drops offices abroad",
+              jj._matches_location({"city": "Gdańsk", "latitude": 54.35, "longitude": 18.65}, "Polska")
+              and not jj._matches_location(abroad, "Polska"))
+        multi = jj._parse({"title": "T", "slug": "t", "city": "Warszawa",
+                           "locations": [{"city": "Warszawa"}, {"city": "Kraków"}]}, {})
+        check("all-poland: an offer in several cities lists all of them", multi.location == "Warszawa, Kraków", multi.location)
+    calls.clear()
+    with profile, patch.object(candidate_api_base, "pick_categories", return_value=None), \
+         patch.object(JustJoinScraper, "_fetch_category_catalog", return_value={"it": "IT"}):
+        JustJoinScraper(cfg)._fetch_listing(Session())
+    check("candidate mode: candidate-api still asks for the CV city and remote",
+          [p[:2] for _, p in calls] == [[("city", "Kraków"), ("experienceLevels", "intern")],
+                                        [("isRemote", "true"), ("experienceLevels", "intern")]], calls)
+
+    criteria = []
+    with whole_country(), patch.object(nofluff_scraper, "pick_categories", no_pick), \
+         patch.object(NoFluffScraper, "_search", lambda self, s, c, label: (criteria.append(c), ([], True))[1]):
+        nfj = NoFluffScraper(cfg)
+        nfj._fetch_listings(MagicMock())
+    check("all-poland: NoFluffJobs searches all of Poland without level or category filters",
+          criteria == [{"country": ["poland"]}] and not no_pick.called and nfj.max_details == 5000, criteria)
+
+    offer = {"title": "Dev", "company": "X", "url": "https://solid.jobs/offer/1",
+             "experienceLevel": "Senior", "locations": ["Gdańsk", "Gdynia"]}
+    with whole_country(), patch.object(solid_jobs_api, "pick_categories", no_pick), \
+         patch.object(solid_jobs_api.time, "sleep"), \
+         patch.object(SolidJobsAPIScraper, "_fetch_category_catalog", side_effect=AssertionError("catalog")), \
+         patch.object(SolidJobsAPIScraper, "_fetch_division", side_effect=lambda d: [offer] if d == "it" else []):
+        solid = SolidJobsAPIScraper(cfg).run()
+    check("all-poland: SOLID.Jobs keeps every level and city, without the category catalog",
+          [j.location for j in solid] == ["Gdańsk, Gdynia"] and not no_pick.called, solid)
+    with profile, patch.object(solid_jobs_api.time, "sleep"), \
+         patch.object(solid_jobs_api, "pick_categories", return_value=None), \
+         patch.object(SolidJobsAPIScraper, "_fetch_category_catalog", return_value={}), \
+         patch.object(SolidJobsAPIScraper, "_fetch_division", side_effect=lambda d: [offer] if d == "it" else []):
+        check("candidate mode: SOLID.Jobs still drops a senior offer from another city",
+              SolidJobsAPIScraper(cfg).run() == [])
+
+    tmp = Path(tempfile.mkdtemp(prefix="test_all_poland_"))
+    try:
+        mgr = ScraperStatusManager(str(tmp / "status.json"))
+        mgr.mark_as_completed("X", 10)
+        mgr.record_yield("X", 10)
+        mgr.record_liveness_scope("X", "krakow|35|2500")
+        mgr._write({**mgr.load_status(), "X": {**mgr.load_status()["X"],
+                                              "liveness": {"scope": "krakow|35|2500", "since": "2026-09-01"}}})
+        with whole_country():
+            check("a candidate run does not mark the global run as done", not mgr.is_scraped_today("X"))
+            mgr.mark_as_completed("X", 900)
+            mgr.record_yield("X", 900)
+            mgr.record_liveness_scope("X", "polska|260|13000")
+            check("the global run is done today", mgr.is_scraped_today("X"))
+            check("global history is its own", [h["count"] for h in mgr.get_history("X")] == [900])
+        status = mgr.load_status()
+        check("the global run keeps its own status key", status["X|all"]["liveness"]["scope"] == "polska|260|13000")
+        check("the global run does not shift the candidate liveness `since`",
+              status["X"]["liveness"] == {"scope": "krakow|35|2500", "since": "2026-09-01"}, status["X"])
+        check("the candidate run is still done today, with its own history",
+              mgr.is_scraped_today("X") and [h["count"] for h in mgr.get_history("X")] == [10])
+        status["X"]["last_run_date"] = "2000-01-01"
+        mgr._write(status)
+        with whole_country():
+            check("a stale candidate entry does not affect the global one", mgr.is_scraped_today("X"))
+
+        ensure = MagicMock(return_value={"seniority": "mid", "city": "Warszawa", "skills": []})
+        match = MagicMock(return_value=0)
+        scrape_scope = []
+        last_run = candidates.path(candidates.LAST_SCRAPE_RUN)
+        last_run.unlink(missing_ok=True)
+
+        def run(dedup=lambda: True, **options):
+            with patch.object(pipeline, "CHECKPOINT_FILE", tmp / "checkpoint.json"), \
+                 patch.object(pipeline, "purge_stale_offers") as p0, \
+                 patch.object(pipeline, "migrate_normalize_links") as p1_5, \
+                 patch.object(pipeline, "deduplicate_db") as p2, \
+                 patch.object(pipeline, "clean_db") as p2_5, \
+                 patch.object(pipeline, "JobDatabase"), \
+                 patch.object(pipeline, "run_all_scrapers", lambda: scrape_scope.append(all_poland()) or []), \
+                 patch("utils.cv_profile.ensure_profile", ensure), \
+                 patch("matching.run.main", match), \
+                 patch.object(stop, "STOP_FLAG_FILE", tmp / "stop.flag"):
+                p0.main, p1_5.main, p2.run, p2_5.run = (lambda: True), (lambda: True), dedup, (lambda: True)
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    ok = pipeline.run_pipeline(**options)
+            return ok, out.getvalue(), load_json_safe(tmp / "checkpoint.json", default={})
+
+        ok, out, _ = run(all_poland=True)
+        check("all-poland pipeline: completes without a CV profile or matching",
+              ok and "PIPELINE COMPLETE" in out and not ensure.called and not match.called, out[-400:])
+        check("all-poland pipeline: scrapers see the global scope", scrape_scope == [True], scrape_scope)
+        from utils import telemetry
+        events = [telemetry.parse(line) for line in out.splitlines()]
+        check("all-poland pipeline: matching is reported as skipped",
+              any(e and e["event"] == "stage" and e.get("id") == "phase3" and e.get("state") == "skipped"
+                  for e in events), out[-400:])
+        check("all-poland pipeline: the candidate's last_scrape_run is untouched", not last_run.exists())
+
+        ok, out, cp = run(all_poland=True, dedup=lambda: False)
+        check("a failed global run checkpoints its scope", not ok and cp.get("options", {}).get("all_poland") is True, cp)
+        os.environ.pop(SCOPE_ENV, None)
+        ok, out, _ = run(resume=True)
+        check("--resume restores the global scope from the checkpoint",
+              ok and not ensure.called and not match.called and all_poland(), out[-400:])
+
+        scrape_scope.clear()
+        ok, out, _ = run()
+        check("candidate pipeline right after: profile, candidate scope and matching are back",
+              ok and ensure.called and match.called and scrape_scope == [False] and not all_poland()
+              and last_run.exists(), scrape_scope)
+    finally:
+        os.environ.pop(SCOPE_ENV, None)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    track = PipelineProcessManager()
+    track._init_stages("full")
+    track._apply_event({"event": "stage", "id": "phase3", "state": "skipped"})
+    check("the stage track shows skipped matching", track._stages[-1]["status"] == "skipped", track._stages[-1])
+
+
 def test_windows_process_safety():
     print("\n[17] Windows process identity and child management")
     from pipeline_manager import _get_process_creation_time, _is_pid_alive
@@ -2482,7 +2700,7 @@ def main():
                  test_zdjete_z_portalu, test_sprawdzenie_ofert, test_olx_fetch_rownolegly,
                  test_olx_opis_z_listingu, test_pipeline_final_status, test_stop_during_scraping,
                  test_listing_completeness, test_category_fallback, test_scope_rejects,
-                 test_remote_offers_in_poland,
+                 test_remote_offers_in_poland, test_all_poland_scope,
                  test_windows_process_safety,
                  test_pipeline_stop_and_resume_lifecycle,
                  test_http_security_and_dns_rebinding_protection,

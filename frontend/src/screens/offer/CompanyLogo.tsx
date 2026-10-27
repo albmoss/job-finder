@@ -23,16 +23,17 @@ interface CompanyLogoProps {
   url: string | null;
   source: string;
   size: 'sm' | 'lg';
+  endpoint?: string;
 }
 
-export function CompanyLogo({ url, source, size }: CompanyLogoProps) {
+export function CompanyLogo({ url, source, size, endpoint = '/api/logo' }: CompanyLogoProps) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
 
   if (url && url !== failedUrl) {
     return (
       <span className={`logo-tile logo-${size} has-image`} aria-hidden="true">
         <img
-          src={`/api/logo?src=${encodeURIComponent(url)}`}
+          src={`${endpoint}?src=${encodeURIComponent(url)}`}
           alt=""
           loading="lazy"
           decoding="async"

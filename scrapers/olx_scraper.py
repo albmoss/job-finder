@@ -257,14 +257,16 @@ class OLXScraper(BaseScraper):
             "wykladanie-ekspozycja-towaru": "Wykładanie i ekspozycja towaru", "zdrowie": "Zdrowie",
             "praktyki-staze": "Praktyki i staże", "inne-oferty-pracy": "Pozostałe oferty pracy",
         }
+        from utils.candidate_scope import all_poland
         from utils.portal_categories import pick_categories
-        picked = pick_categories("olx", all_categories)
+        picked = None if all_poland() else pick_categories("olx", all_categories)
         categories = picked if picked is not None else list(all_categories)
         logger.info(f"OLX Praca: {len(categories)}/{len(all_categories)} categories from CV")
         
         import os, json
         from pathlib import Path
-        state_file = Path(__file__).resolve().parent.parent / "olx_category_state.json"
+        state_file = Path(__file__).resolve().parent.parent / (
+            "olx_category_state_all.json" if all_poland() else "olx_category_state.json")
         
         completed_categories = []
         if getattr(self, "force", False) and os.path.exists(state_file):
@@ -300,13 +302,16 @@ class OLXScraper(BaseScraper):
 
             # Lokalizacja, promien i filtr poziomu z CV (candidate_scope)
             from config import SCRAPER_CONFIG
-            from utils.candidate_scope import scope_city, city_slug, scope_levels
-            city = city_slug(scope_city(default=SCRAPER_CONFIG.get("location", "Warszawa")))
-            radius = SCRAPER_CONFIG.get("radius_km", 15)
-            levels = scope_levels()
-            exp_filter = set(levels).issubset({"intern", "junior"})
-            exp_query = "&search%5Bfilter_enum_experience%5D%5B0%5D=exp_no" if exp_filter else ""
-            search_url = f"https://www.olx.pl/praca/{category}/{city}/?search%5Border%5D=created_at%3Adesc&search%5Bdist%5D={radius}{exp_query}"
+            from utils.candidate_scope import scope_city, scope_config, city_slug, scope_levels
+            if all_poland():
+                search_url = f"https://www.olx.pl/praca/{category}/?search%5Border%5D=created_at%3Adesc"
+            else:
+                city = city_slug(scope_city(default=SCRAPER_CONFIG.get("location", "Warszawa")))
+                radius = SCRAPER_CONFIG.get("radius_km", 15)
+                levels = scope_levels()
+                exp_filter = set(levels).issubset({"intern", "junior"})
+                exp_query = "&search%5Bfilter_enum_experience%5D%5B0%5D=exp_no" if exp_filter else ""
+                search_url = f"https://www.olx.pl/praca/{category}/{city}/?search%5Border%5D=created_at%3Adesc&search%5Bdist%5D={radius}{exp_query}"
             logger.info(f"Navigating to OLX Category URL (Sorted by Newest): {search_url}")
             html_strony = self._wejdz_i_wez_html(search_url)
             if html_strony is None:
@@ -333,7 +338,7 @@ class OLXScraper(BaseScraper):
                 pass
                 
             page_num = 1
-            max_pages = 5 # Reduced to 5 as requested to focus on most recent offers
+            max_pages = scope_config(SCRAPER_CONFIG.get("olx_praca")).get("max_pages", 5) # Reduced to 5 as requested to focus on most recent offers
             urwana = False
             
             while page_num <= max_pages:

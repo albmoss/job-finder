@@ -30,6 +30,7 @@ from utils.data_models import JobDatabase
 from utils.safe_io import load_json_safe, save_json_atomic
 import config
 from utils import candidates, stop, telemetry
+from utils.candidate_scope import SCOPE_ENV
 import clean_db
 import purge_stale_offers
 import deduplicate_db
@@ -107,7 +108,14 @@ def _finish(phase_results, stopped=False):
 
     return complete
 
-def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
+def _set_scope(all_poland: bool) -> None:
+    if all_poland:
+        os.environ[SCOPE_ENV] = "all"
+    else:
+        os.environ.pop(SCOPE_ENV, None)
+
+
+def run_pipeline(skip_scraping=False, rescore_all=False, resume=False, all_poland=False):
     print("\n" + "=" * 60)
     print("PIPELINE: CV profile -> scraping -> matching")
     print("=" * 60)
@@ -116,25 +124,30 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
         "skip_scraping": skip_scraping,
         "rescore_all": rescore_all,
         "candidate": candidates.active_id(),
+        "all_poland": all_poland,
     }
 
     checkpoint = load_checkpoint() if resume else {}
-    if resume and checkpoint.get("options", {}).get("candidate", candidates.FIRST_ID) != options["candidate"]:
+    saved_options = checkpoint.get("options", {})
+    if (resume and not saved_options.get("all_poland")
+            and saved_options.get("candidate", candidates.FIRST_ID) != options["candidate"]):
         logger.info("Checkpoint belongs to another candidate - starting from the beginning.")
         resume = False
     if resume:
         completed_stages = set(checkpoint.get("completed_stages", []))
-        saved_options = checkpoint.get("options", {})
         if "skip_scraping" in saved_options:
             skip_scraping = saved_options["skip_scraping"]
         if "rescore_all" in saved_options:
             rescore_all = saved_options["rescore_all"]
+        all_poland = bool(saved_options.get("all_poland"))
         options.update(saved_options)
+        options["all_poland"] = all_poland
         logger.info(f"Resuming pipeline from checkpoint (completed stages: {', '.join(sorted(completed_stages)) or 'none'}).")
     else:
         completed_stages = set()
         clear_checkpoint()
         save_checkpoint(completed_stages, options, current_stage="phase0")
+    _set_scope(all_poland)
 
     # Do not clear the stop flag here: the manager unlinks stale tokens before Popen,
     # so any existing token represents an immediate user stop request for this run.
@@ -187,13 +200,19 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
               f"{len(profile.get('skills') or [])} skills")
         return True
 
-    ok, stopped = _execute_stage(
-        "phase0_5",
-        "PHASE 0.5: Candidate profile from CV",
-        _profile,
-    )
-    if not ok:
-        return _finish(phase_results, stopped=stopped)
+    if all_poland:
+        logger.info("PHASE 0.5: skipped (--all-poland: scope does not come from a CV)")
+        phase_results["PHASE 0.5: Candidate profile from CV"] = True
+        completed_stages.add("phase0_5")
+        save_checkpoint(completed_stages, options, current_stage="phase0_5")
+    else:
+        ok, stopped = _execute_stage(
+            "phase0_5",
+            "PHASE 0.5: Candidate profile from CV",
+            _profile,
+        )
+        if not ok:
+            return _finish(phase_results, stopped=stopped)
 
     # 1. Scraping
     if skip_scraping:
@@ -205,8 +224,8 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
         def _scrape():
             # Granica „nowych” ofert na liście. Wznowienie zostawia start przerwanego
             # pobierania, żeby oferty z pierwszej części nie straciły oznaczenia.
-            last_run = candidates.path(candidates.LAST_SCRAPE_RUN)
-            if not (resume and last_run.exists()):
+            last_run = None if all_poland else candidates.path(candidates.LAST_SCRAPE_RUN)
+            if last_run and not (resume and last_run.exists()):
                 save_json_atomic(
                     last_run,
                     {"started_at": datetime.now().isoformat(timespec="seconds")},
@@ -263,16 +282,21 @@ def run_pipeline(skip_scraping=False, rescore_all=False, resume=False):
         return _finish(phase_results)
 
     # 3. Dopasowanie: przesiew w kodzie + ocena Jev
-    def _match():
-        from matching import run as matching_run
-        return matching_run.main(["--rescore-all"] if rescore_all else [])
-    ok, stopped = _execute_stage(
-        "phase3",
-        "PHASE 3: Matching (prefilter + Jev)",
-        _match,
-    )
-    if not ok:
-        return _finish(phase_results, stopped=stopped)
+    if all_poland:
+        logger.info("PHASE 3: skipped (--all-poland: no candidate to match)")
+        telemetry.emit("stage", id="phase3", state="skipped")
+        phase_results["PHASE 3: Matching (prefilter + Jev)"] = True
+    else:
+        def _match():
+            from matching import run as matching_run
+            return matching_run.main(["--rescore-all"] if rescore_all else [])
+        ok, stopped = _execute_stage(
+            "phase3",
+            "PHASE 3: Matching (prefilter + Jev)",
+            _match,
+        )
+        if not ok:
+            return _finish(phase_results, stopped=stopped)
 
     clear_checkpoint()
     return _finish(phase_results, stopped=False)
@@ -324,10 +348,12 @@ def _record_result_without_server(ok: bool) -> None:
 
 
 def main(argv) -> int:
+    all_poland = "--all-poland" in argv
     if not os.environ.get("PIPELINE_MANAGED"):
+        _set_scope(all_poland)
         return run_in_manager(argv)
     ok = run_pipeline(skip_scraping="--skip-scraping" in argv, rescore_all="--rescore-all" in argv,
-                      resume="--resume" in argv)
+                      resume="--resume" in argv, all_poland=all_poland)
     if output_lost():
         _record_result_without_server(ok)
     return 0 if ok else 1

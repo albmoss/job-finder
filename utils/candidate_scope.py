@@ -14,11 +14,26 @@ Bez profilu (CV jeszcze nie wczytane) wartości biorą się z SCRAPER_CONFIG,
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
 from utils import candidates
 from utils.offer_fields import SENIORITY, _fold
+
+SCOPE_ENV = "JOBFINDER_SCOPE"
+COUNTRY = "Polska"
+
+
+def all_poland() -> bool:
+    return os.environ.get(SCOPE_ENV) == "all"
+
+
+def scope_config(cfg: dict | None) -> dict:
+    cfg = cfg or {}
+    if not all_poland():
+        return cfg
+    return {**cfg, **(cfg.get("all_poland") or {})}
 
 
 def profile_path() -> Path:
@@ -49,6 +64,8 @@ def load_profile(path: Path | None = None) -> dict | None:
 
 def scope_city(default: str = "Warszawa") -> str:
     """Miasto z CV, a bez profilu - `default` (zwykle SCRAPER_CONFIG["location"])."""
+    if all_poland():
+        return COUNTRY
     profile = load_profile()
     city = (profile or {}).get("city")
     return city.strip() if isinstance(city, str) and city.strip() else default
@@ -61,6 +78,8 @@ def city_slug(city: str) -> str:
 
 def scope_levels(default: tuple[str, ...] = ("intern", "junior")) -> list[str]:
     """Kody poziomów z utils/offer_fields.SENIORITY do ściągania z portali."""
+    if all_poland():
+        return list(SENIORITY)
     profile = load_profile()
     level = (profile or {}).get("seniority")
     if level not in SENIORITY:

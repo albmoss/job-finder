@@ -35,7 +35,7 @@ from utils.offer_fields import (
     norm_work_modes,
     years_from_text,
 )
-from utils.candidate_scope import city_slug, scope_city, scope_levels
+from utils.candidate_scope import all_poland, city_slug, scope_city, scope_config, scope_levels
 logger = logging.getLogger(__name__)
 
 _LD_JSON_RE = re.compile(
@@ -98,7 +98,7 @@ class LdJsonPortalScraper:
 
     def __init__(self, config: dict):
         self.config = config
-        cfg = config.get(self.CONFIG_KEY, {}) or {}
+        cfg = scope_config(config.get(self.CONFIG_KEY))
         self.cfg = cfg
         city = scope_city(default=cfg.get("location") or config.get("location", "Warszawa"))
         self.city = city
@@ -236,7 +236,10 @@ class LdJsonPortalScraper:
                 data = loads(block.strip())
             except (JSONDecodeError, ValueError):
                 continue
-            for item in (data if isinstance(data, list) else [data]):
+            items = data if isinstance(data, list) else [data]
+            if isinstance(data, dict) and isinstance(data.get("@graph"), list):
+                items = data["@graph"]
+            for item in items:
                 if isinstance(item, dict) and item.get("@type") == "JobPosting":
                     yield item
 
@@ -380,7 +383,7 @@ class LdJsonPortalScraper:
         if self.skip_senior and _SENIOR_TITLE_RE.search(job.title):
             return False
 
-        if job.work_modes and "remote" in job.work_modes:
+        if job.work_modes and "remote" in job.work_modes or all_poland():
             return True
 
         haystack = f"{job.location or ''} {job.title}"

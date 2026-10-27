@@ -1,0 +1,23 @@
+services:
+  jobfinder-public:
+    build: .
+    restart: unless-stopped
+    env_file: .env.public
+    environment:
+      PUBLIC_TRUSTED_PROXY: "*"
+    ports:
+      - "127.0.0.1:8600:8600"
+    volumes:
+      - ./data/offers:/data/offers
+      - ./data/public:/data/public
+      - ./data/logo_cache:/app/logo_cache
+    mem_limit: 1g
+    cpus: 1.5
+    pids_limit: 256
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

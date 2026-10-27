@@ -35,6 +35,7 @@ from scrapers import (
 )
 
 from utils import stop, telemetry
+from utils.candidate_scope import SCOPE_ENV, all_poland
 from utils.data_models import JobDatabase, ScraperStatusManager
 
 logging.basicConfig(
@@ -119,7 +120,7 @@ def run_all_scrapers(only=None, force=False, refresh=False):
     """
 
     logger.info("=" * 60)
-    logger.info("Starting Job Search Scraper")
+    logger.info("Starting Job Search Scraper" + (" (all of Poland)" if all_poland() else ""))
     logger.info("=" * 60)
     
     # Konfiguracja scrapera razem z pulą user-agentów
@@ -352,8 +353,8 @@ def run_all_scrapers(only=None, force=False, refresh=False):
                         f"{touched} still listed")
             telemetry.emit("source_saved", name=source, added=added, seen=touched)
 
-    # Playwright nie znosi wielu instancji naraz - stąd ostrzejszy limit
-    groups = [(api_scrapers, 5, "Phase 1 (API/HTTP)"), (browser_scrapers, 2, "Phase 1 (browser)")]
+    groups = [(api_scrapers, config.PARALLEL_SOURCES, "Phase 1 (API/HTTP)"),
+              (browser_scrapers, config.PARALLEL_BROWSERS, "Phase 1 (browser)")]
     executors, futures = [], {}
     try:
         for scrapers, max_workers, label in groups:
@@ -470,7 +471,11 @@ if __name__ == "__main__":
     parser.add_argument("--refresh", action="store_true",
                         help="Usuń stare oferty tych źródeł i pobierz od nowa "
                              "(po poprawce scrapera; oferty z Twoją decyzją zostają)")
+    parser.add_argument("--all-poland", action="store_true",
+                        help="Cała Polska, wszystkie poziomy i kategorie portali, bez CV")
     args = parser.parse_args()
+    if args.all_poland:
+        os.environ[SCOPE_ENV] = "all"
 
     try:
         jobs = run_all_scrapers(only=args.only, force=args.force, refresh=args.refresh)

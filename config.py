@@ -12,6 +12,8 @@ load_dotenv(Path(__file__).parent / ".env")
 
 BASE_DIR = Path(__file__).parent
 JOBS_DATABASE_PATH = BASE_DIR / "jobs.db"
+PARALLEL_SOURCES = int(os.environ.get("SCRAPER_PARALLEL_SOURCES", "5"))
+PARALLEL_BROWSERS = int(os.environ.get("SCRAPER_PARALLEL_BROWSERS", "2"))
 
 # Model czytający CV (profil kandydata w utils/cv_profile.py): dostawca, modele i pula
 # kluczy (LLM_PROVIDER w .env; domyślnie Gemini) - patrz utils/llm.py i .env.example.
@@ -54,27 +56,30 @@ SCRAPER_CONFIG = {
         # 21 = Prezes (manager)
         # 2 = Pracownik fizyczny
         "days_param": 7,  # itth=7, czyli ostatnie 7 dni
+        "all_poland": {"max_pages": 1000},
     },
     
     "olx_praca": {
         # Zakres (miasto i filtr poziomu) wyznaczany przez CV (utils/candidate_scope.py),
         # kategorie przez utils/portal_categories.py.
         # bez-doswiadczenia włączane tylko gdy poziomy to wyłącznie intern/junior.
+        "all_poland": {"max_pages": 25},
     },
     
     "linkedin": {
         # Zakres (miasto i filtr f_E) wyznaczany przez CV (utils/candidate_scope.py).
         "job_types": ["F", "P"],  # F = pełny etat, P = część etatu
+        "all_poland": {"max_offers": 1000},
     },
     
     # RocketJobs i JustJoin.it dzielą to samo candidate-api.
     # Zakres (miasto i poziomy) wyznaczany przez CV (utils/candidate_scope.py).
     # Candidate-api akceptuje wyłącznie: intern, junior, mid, senior.
-    "rocketjobs": {},
+    "rocketjobs": {"all_poland": {"max_detail_fetch": 15000}},
 
     # NoFluffJobs: zakres wyznaczany przez CV (utils/candidate_scope.py).
     # criteriaSearch.seniority: trainee, junior, mid, senior, expert, lead.
-    "nofluffjobs": {},
+    "nofluffjobs": {"all_poland": {"max_details": 5000}},
 
     # SOLID.Jobs: zakres wyznaczany przez CV (utils/candidate_scope.py).
     # experienceLevel w API: Intern / Junior / Regular / Senior
@@ -82,7 +87,7 @@ SCRAPER_CONFIG = {
          "keep_unknown_level": True,   # oferty bez podanego poziomu zostawiamy
     },
 
-    "justjoinit": {},
+    "justjoinit": {"all_poland": {"max_detail_fetch": 15000}},
 
     # === Portale ogólne (nie-IT) ===
     # Wspólna baza: scrapers/ldjson_scraper_base.py - listing daje linki,
@@ -96,17 +101,20 @@ SCRAPER_CONFIG = {
     "praca_pl": {
         "max_pages": 35,
         "max_offers": 2500,
+        "all_poland": {"max_pages": 260, "max_offers": 13000},
     },
 
     "aplikuj": {
         "max_pages": 100,
         "max_offers": 6000,
         # Kategorie dobierane automatycznie do profilu CV przez utils/portal_categories.py
+        "all_poland": {"max_pages": 850, "max_offers": 42500},
     },
 
     "gowork": {
         "max_pages": 100,
         "max_offers": 5000,
+        "all_poland": {"max_pages": 700, "max_offers": 28000},
     },
 
     # Indeed jest z założenia niskonakładowy - paginacja jest za ścianą logowania,

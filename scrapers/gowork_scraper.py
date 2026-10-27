@@ -17,6 +17,8 @@ branżowych w listingach, więc scraper działa bez filtra kategorii.
 
 import re
 
+from utils.candidate_scope import all_poland
+
 from .ldjson_scraper_base import LdJsonPortalScraper
 
 
@@ -47,7 +49,7 @@ class GoWorkScraper(LdJsonPortalScraper):
         self.city_slug = self.cfg.get("city_slug") or self.city_slug
 
     def build_listing_url(self, page: int) -> str:
-        base = f"https://www.gowork.pl/praca/{self.city_slug};l"
+        base = "https://www.gowork.pl/praca" if all_poland() else f"https://www.gowork.pl/praca/{self.city_slug};l"
         return base if page <= 1 else f"{base}/{page};pg"
 
     def extract_offer_links(self, html: str):

@@ -16,7 +16,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils import stop
-from utils.candidate_scope import scope_city, scope_levels
+from utils.candidate_scope import all_poland, scope_city, scope_levels
 from utils.portal_categories import pick_categories
 from utils.data_models import Job
 from utils.links import logo_url
@@ -115,6 +115,8 @@ class SolidJobsAPIScraper:
         z całej Polski, z czego 31% wprost seniorskich, a tylko ~2% juniorskich.
         Przy medianie opisu ~3800 znaków to był największy pożeracz tokenów w systemie.
         """
+        if all_poland():
+            return True
         level = (offer.get("experienceLevel") or "").strip().lower()
         if level:
             if level not in self.allowed_levels:
@@ -281,7 +283,7 @@ class SolidJobsAPIScraper:
         # Lokalizacja
         locations = offer.get("locations", [])
         if isinstance(locations, list) and locations:
-            location = str(locations[0])
+            location = ", ".join(dict.fromkeys(str(loc) for loc in locations)) if all_poland() else str(locations[0])
         else:
             loc = offer.get("city", offer.get("location", ""))
             if isinstance(loc, dict):
@@ -322,7 +324,7 @@ class SolidJobsAPIScraper:
         fetched = 0
         skipped = 0
 
-        catalog = self._fetch_category_catalog()
+        catalog = {} if all_poland() else self._fetch_category_catalog()
         picked_divisions = pick_categories("solid_jobs", catalog) if catalog else None
         if picked_divisions is not None:
             logger.info(f"SOLID.Jobs: {len(picked_divisions)} kategorii z CV")

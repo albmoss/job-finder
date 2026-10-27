@@ -38,6 +38,9 @@ class _Language(BaseModel):
 
 
 class CandidateProfile(BaseModel):
+    is_cv: bool = Field(description=(
+        "true, gdy tekst to CV albo życiorys zawodowy osoby; false dla każdego innego dokumentu "
+        "(faktura, umowa, artykuł, oferta pracy, praca naukowa)"))
     full_name: Optional[str] = Field(description=(
         "Imię i nazwisko kandydata z CV, np. z nagłówka albo danych kontaktowych; "
         "null, gdy CV ich nie podaje"))
@@ -139,6 +142,7 @@ def build_profile(text: str) -> dict:
     except LLMError as e:
         raise RuntimeError(f"Nie udało się wyciągnąć profilu z CV: {e}") from e
     profile = _normalize(raw, text)
+    profile["is_cv"] = bool(raw.get("is_cv", True))
     profile["_metadata"] = {
         "cv_sha256": _sha(text),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
