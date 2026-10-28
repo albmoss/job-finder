@@ -30,11 +30,17 @@ body,
 .pb-brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  font-size: 21px;
+  gap: 12px;
+  font-size: 26px;
   font-weight: 700;
   letter-spacing: -0.6px;
   text-decoration: none;
+}
+
+.pb-brand svg {
+  flex: none;
+  width: 34px;
+  height: 34px;
 }
 
 .pb-brand-tld {
@@ -98,6 +104,7 @@ body,
 .pb-display span {
   display: block;
   color: var(--muted);
+  line-height: 1;
 }
 
 .pb-sources {

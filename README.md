@@ -150,11 +150,16 @@ most promising ones get the full score eight at a time, and the search stops onc
 different offers reach 40%. In a real run that took one batch and eight full scores. The file
 is deleted as soon as its text is read, and results stay in memory for two hours.
 
+The server reads published snapshots of `jobs.db`, never the live file. Publishing adds a word
+index to the snapshot (title, skill and category words per offer, and the logo allowlist), so
+ranking runs as SQLite lookups and the process holds no offers in memory: about 90 MB with
+150,000 offers, against 570 MB when the index was built in Python.
+
 ```bash
 cd frontend && npm run build:public && cd ..
+python publish_offers.py public_data/offers                    # snapshot the server reads by default
 PYTHONIOENCODING=utf-8 python public_server.py                  # → http://127.0.0.1:8600
-python publish_offers.py user@host:/srv/jobfinder/data/offers   # copy jobs.db to the server
-python publish_offers.py /srv/jobfinder/data/offers             # or snapshot into a local directory
+python publish_offers.py user@host:/srv/jobfinder/data/offers   # or copy a snapshot to the server
 docker compose -f docker-compose.public.yml up -d --build       # on the server
 ```
 

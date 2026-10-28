@@ -36,8 +36,8 @@ logger = logging.getLogger("public")
 
 BASE_DIR = Path(__file__).parent
 DIST_DIR = BASE_DIR / "frontend" / "dist-public"
-DB_PATH = Path(os.environ.get("PUBLIC_DB_PATH") or config.JOBS_DATABASE_PATH)
 DATA_DIR = Path(os.environ.get("PUBLIC_DATA_DIR") or BASE_DIR / "public_data")
+DB_PATH = Path(os.environ.get("PUBLIC_DB_PATH") or DATA_DIR / "offers")
 FREE_WINDOW_DAYS = int(os.environ.get("PUBLIC_FREE_WINDOW_DAYS", "30"))
 UNLIMITED_IPS = {ip.strip() for ip in os.environ.get("PUBLIC_UNLIMITED_IPS", "").split(",") if ip.strip()}
 DAILY_LIMIT = int(os.environ.get("PUBLIC_DAILY_LIMIT", "300"))
@@ -65,7 +65,6 @@ searches: dict[str, dict] = {}
 searches_lock = threading.Lock()
 started_all: deque = deque()
 limits_lock = threading.Lock()
-logos_cache: dict = {"key": None, "urls": frozenset()}
 
 
 def current_index() -> quick.OfferIndex:
@@ -79,7 +78,6 @@ def current_index() -> quick.OfferIndex:
         if index_holder["path"] != path:
             index_holder.update(path=path, index=quick.OfferIndex(path))
         index = index_holder["index"]
-    index.refresh()
     return index
 
 
@@ -202,7 +200,7 @@ def _run_search(search_id: str, data: bytes, ip_hash: str | None) -> None:
         _update(search_id, status="done", finished=time.time(), result={
             "picks": picks, "good": result.good, "teasers": teasers,
         })
-        logger.info(f"search {search_id[:8]}: pool {result.pool}, triaged {result.triaged}, "
+        logger.info(f"search {search_id[:8]}: ranked {result.ranked}, triaged {result.triaged}, "
                     f"scored {result.scored}, good {result.good}, errors {result.errors}")
     except UserError as e:
         _refund(ip_hash)
@@ -280,11 +278,7 @@ async def api_waitlist(request: Request) -> Response:
 
 def api_logo(request: Request) -> Response:
     url = request.query_params.get("src", "")
-    index = current_index()
-    if logos_cache["key"] != (index.store.path, index.rev):
-        logos_cache.update(key=(index.store.path, index.rev),
-                           urls=frozenset(o.job.logo_url for o in index.offers if o.job.logo_url))
-    if url not in logos_cache["urls"]:
+    if not url or not current_index().has_logo(url):
         return Response(status_code=404)
     png = logo_png(url)
     if png is None:

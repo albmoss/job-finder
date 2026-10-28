@@ -3,12 +3,14 @@ from __future__ import annotations
 import concurrent.futures as cf
 import copy
 import heapq
+import json
 import math
 import re
+import sqlite3
 import sys
-import threading
-from collections import Counter
+from contextlib import closing
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import requests
 
@@ -16,7 +18,6 @@ from matching import jev, triage
 from matching.prefilter import reject_reason
 from utils.data_models import Job
 from utils.offer_fields import _fold, text_features
-from utils.sqlite_store import RecordStore
 
 WANTED = 3
 GOOD = 40
@@ -34,66 +35,155 @@ _STOP = {
     "starszy", "starsza", "junior", "senior", "mid", "regular", "lead", "intern", "stazysta", "stazystka",
     "staz", "praktykant", "praktykantka", "kobieta", "mezczyzna", "kandydat",
 }
-_FIELD_WEIGHT = {"title": 3.0, "skills": 2.0, "category": 1.0}
+_FIELDS = (3.0, 2.0, 1.0)
+_DROPPED = ("description", "posted_date", "scraped_at", "valid_through", "times_seen", "also_on", "last_seen")
+_CHUNK = 900
+_SCHEMA = """
+DROP TABLE IF EXISTS search_postings;
+DROP TABLE IF EXISTS search_offers;
+DROP TABLE IF EXISTS search_logos;
+CREATE TABLE search_offers (id INTEGER PRIMARY KEY, title_folded TEXT NOT NULL, last_seen TEXT NOT NULL);
+CREATE TABLE search_postings (token TEXT NOT NULL, id INTEGER NOT NULL, fields INTEGER NOT NULL,
+                              PRIMARY KEY (token, id)) WITHOUT ROWID;
+CREATE TABLE search_logos (url TEXT PRIMARY KEY) WITHOUT ROWID;
+"""
 
 
 def _tokens(text: str | None) -> frozenset[str]:
     return frozenset(sys.intern(t[:_STEM]) for t in _TOKEN_RE.findall(_fold(text or "")) if t not in _STOP)
 
 
-_DROPPED = ("description", "posted_date", "scraped_at", "valid_through", "times_seen", "also_on", "last_seen")
-_SHARED = ("source", "location", "category", "company")
+def _chunks(items: list, size: int = _CHUNK):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+def _field_masks(job: Job) -> dict[str, int]:
+    texts = (job.title, " ".join(map(str, (job.skills_required or []) + (job.skills_nice or []))), job.category)
+    masks: dict[str, int] = {}
+    for bit, text in enumerate(texts):
+        for token in _tokens(text):
+            masks[token] = masks.get(token, 0) | 1 << bit
+    return masks
+
+
+def build_index(db_path) -> int:
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("PRAGMA cache_size = -100000")
+        conn.executescript(_SCHEMA)
+        offers, postings, logos, count = [], [], [], 0
+
+        def flush() -> None:
+            conn.executemany("INSERT INTO search_offers VALUES (?, ?, ?)", offers)
+            conn.executemany("INSERT INTO search_postings VALUES (?, ?, ?)", postings)
+            conn.executemany("INSERT OR IGNORE INTO search_logos VALUES (?)", logos)
+            offers.clear()
+            postings.clear()
+            logos.clear()
+
+        for rowid, text in conn.cursor().execute("SELECT rowid, data FROM records ORDER BY rowid"):
+            job = Job.from_dict(json.loads(text))
+            if not job.title:
+                continue
+            offers.append((rowid, _fold(job.title), job.last_seen or job.scraped_at or ""))
+            postings.extend((token, rowid, mask) for token, mask in _field_masks(job).items())
+            if job.logo_url:
+                logos.append((job.logo_url,))
+            count += 1
+            if len(offers) >= 2000:
+                flush()
+        flush()
+        conn.execute("CREATE INDEX search_offers_recent ON search_offers (last_seen DESC, id)")
+        conn.commit()
+    return count
 
 
 @dataclass(slots=True)
 class _Offer:
     key: str
     job: Job
-    fields: dict[str, frozenset[str]]
     title_folded: str
     last_seen: str
 
 
+def _offer(key: str, record: dict) -> _Offer:
+    job = Job.from_dict(record)
+    if job.years_required is None and job.languages is None:
+        for name, value in text_features(job.description).items():
+            setattr(job, name, value)
+    last_seen = job.last_seen or job.scraped_at or ""
+    for name in _DROPPED:
+        setattr(job, name, None)
+    return _Offer(key, job, _fold(job.title), last_seen)
+
+
 class OfferIndex:
     def __init__(self, db_path):
-        self.store = RecordStore(db_path)
-        self.rev: int | None = None
-        self.offers: list[_Offer] = []
-        self.df: Counter = Counter()
-        self._lock = threading.Lock()
+        self.path = Path(db_path)
+        self._uri = self.path.resolve().as_uri() + "?mode=ro"
+        with closing(self._connect()) as conn:
+            try:
+                self.total = conn.execute("SELECT COUNT(*) FROM search_offers").fetchone()[0]
+            except sqlite3.OperationalError:
+                raise RuntimeError(f"{self.path.name} nie ma indeksu wyszukiwania, "
+                                   f"opublikuj bazę przez publish_offers.py") from None
 
-    def refresh(self) -> None:
-        with self._lock:
-            rev = self.store.revision()
-            if rev == self.rev:
-                return
-            offers, df = [], Counter()
-            for key, record in RecordStore(self.store.path).iter_records():
-                job = Job.from_dict(record)
-                if not job.title:
-                    continue
-                if job.years_required is None and job.languages is None:
-                    for name, value in text_features(job.description).items():
-                        setattr(job, name, value)
-                last_seen = job.last_seen or job.scraped_at or ""
-                for name in _DROPPED:
-                    setattr(job, name, None)
-                for name in _SHARED:
-                    value = getattr(job, name)
-                    if isinstance(value, str):
-                        setattr(job, name, sys.intern(value))
-                fields = {
-                    "title": _tokens(job.title),
-                    "skills": _tokens(" ".join(map(str, (job.skills_required or []) + (job.skills_nice or [])))),
-                    "category": _tokens(job.category),
-                }
-                for token in fields["title"] | fields["skills"] | fields["category"]:
-                    df[token] += 1
-                offers.append(_Offer(key, job, fields, _fold(job.title), last_seen))
-            self.offers, self.df, self.rev = offers, df, rev
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._uri, uri=True)
+
+    def _scores(self, conn: sqlite3.Connection, profile: dict) -> tuple[dict[int, float], dict[int, str]]:
+        weights, phrases = _query(profile)
+        scores: dict[int, float] = {}
+        for token, weight in weights.items():
+            rows = conn.execute("SELECT id, fields FROM search_postings WHERE token = ?", (token,)).fetchall()
+            idf = math.log(1 + self.total / (1 + len(rows)))
+            for oid, mask in rows:
+                best = next(w for bit, w in enumerate(_FIELDS) if mask >> bit & 1)
+                scores[oid] = scores.get(oid, 0.0) + weight * idf * best
+        recent: dict[int, str] = {}
+        for chunk in _chunks(list(scores)):
+            marks = ",".join("?" * len(chunk))
+            for oid, title_folded, last_seen in conn.execute(
+                    f"SELECT id, title_folded, last_seen FROM search_offers WHERE id IN ({marks})", chunk):
+                if any(p in title_folded for p in phrases):
+                    scores[oid] *= 1.5
+                recent[oid] = last_seen
+        return scores, recent
+
+    def _passing(self, conn: sqlite3.Connection, ids: list[int], profile: dict) -> list[_Offer]:
+        marks = ",".join("?" * len(ids))
+        rows = {rowid: (key, data) for rowid, key, data in conn.execute(
+            f"SELECT rowid, key, data FROM records WHERE rowid IN ({marks})", ids)}
+        offers = [_offer(rows[oid][0], json.loads(rows[oid][1])) for oid in ids]
+        return [o for o in offers if not reject_reason(o.job, profile)]
+
+    def ranked(self, profile: dict, limit: int) -> list[_Offer]:
+        with closing(self._connect()) as conn:
+            scores, recent = self._scores(conn, profile)
+            order = sorted(scores)
+            order.sort(key=lambda oid: (scores[oid], recent[oid]), reverse=True)
+            ranked: list[_Offer] = []
+            for chunk in _chunks(order, 200):
+                ranked += self._passing(conn, chunk, profile)
+                if len(ranked) >= limit:
+                    return ranked[:limit]
+            rest = [oid for (oid,) in conn.execute("SELECT id FROM search_offers ORDER BY last_seen DESC, id")
+                    if oid not in scores]
+            for chunk in _chunks(rest, 200):
+                ranked += self._passing(conn, chunk, profile)
+                if len(ranked) >= limit:
+                    break
+            return ranked[:limit]
+
+    def has_logo(self, url: str) -> bool:
+        with closing(self._connect()) as conn:
+            return conn.execute("SELECT 1 FROM search_logos WHERE url = ?", (url,)).fetchone() is not None
 
     def descriptions(self, keys: list[str]) -> dict[str, str]:
-        return {k: (r.get("description") or "") for k, r in self.store.get_many(keys).items()}
+        with closing(self._connect()) as conn:
+            marks = ",".join("?" * len(keys))
+            return {k: json.loads(d).get("description") or "" for k, d in conn.execute(
+                f"SELECT key, data FROM records WHERE key IN ({marks})", keys)}
 
 
 def _query(profile: dict) -> tuple[dict[str, float], list[str]]:
@@ -108,29 +198,11 @@ def _query(profile: dict) -> tuple[dict[str, float], list[str]]:
     return weights, phrases
 
 
-def local_rank(offers: list[_Offer], profile: dict, df: Counter, total: int) -> list[_Offer]:
-    weights, phrases = _query(profile)
-    idf = {t: math.log(1 + total / (1 + df.get(t, 0))) for t in weights}
-
-    def score(offer: _Offer) -> float:
-        value = 0.0
-        for token, weight in weights.items():
-            best = max((w for name, w in _FIELD_WEIGHT.items() if token in offer.fields[name]), default=0.0)
-            value += weight * idf[token] * best
-        if any(p in offer.title_folded for p in phrases):
-            value *= 1.5
-        return value
-
-    scored = [(score(o), o.last_seen, i) for i, o in enumerate(offers)]
-    scored.sort(key=lambda s: (s[0], s[1]), reverse=True)
-    return [offers[i] for _, _, i in scored]
-
-
 @dataclass
 class Result:
     picks: list[dict] = field(default_factory=list)
     good: int = 0
-    pool: int = 0
+    ranked: int = 0
     triaged: int = 0
     scored: int = 0
     promising: int = 0
@@ -162,11 +234,9 @@ def _distinct(ranked: list[tuple[int, _Offer]], limit: int) -> list[tuple[int, _
 
 def find_matches(index: OfferIndex, profile: dict, cv: str, key: str,
                  progress=lambda **_: None, cancelled=lambda: False) -> Result:
-    index.refresh()
-    pool = [o for o in index.offers if not reject_reason(o.job, profile)]
-    ranked = local_rank(pool, profile, index.df, len(index.offers))
-    result = Result(pool=len(pool))
-    progress(stage="ranking", pool=len(pool))
+    ranked = index.ranked(profile, MAX_TRIAGE)
+    result = Result(ranked=len(ranked))
+    progress(stage="ranking", ranked=len(ranked))
 
     candidate = jev.candidate_state(profile, cv)
     session = requests.Session()

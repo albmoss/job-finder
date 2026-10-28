@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 import config
+from matching.quick import build_index
 
 KEEP = 2
 
@@ -18,7 +19,7 @@ def snapshot(target: Path) -> int:
         conn.execute("VACUUM INTO ?", (str(target),))
     with closing(sqlite3.connect(target)) as conn:
         conn.execute("PRAGMA journal_mode = DELETE")
-        return conn.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+    return build_index(target)
 
 
 def publish_local(directory: Path) -> int:
@@ -28,7 +29,8 @@ def publish_local(directory: Path) -> int:
     part.chmod(0o660)
     part.rename(directory / name)
     for old in sorted(directory.glob("offers-*.db"))[:-KEEP]:
-        old.unlink()
+        for path in (old, old.with_name(old.name + "-wal"), old.with_name(old.name + "-shm")):
+            path.unlink(missing_ok=True)
     print(f"Opublikowano {name}: {count} ofert")
     return 0
 
@@ -54,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     quoted = shlex.quote(remote_dir)
     subprocess.run(["ssh", host, (
         f"cd {quoted} && mv {name}.part {name} && "
-        f"ls -1 offers-*.db | sort | head -n -{KEEP} | xargs -r rm -f"
+        f"ls -1 offers-*.db | sort | head -n -{KEEP} | sed 'p;s/$/-wal/p;s/-wal$/-shm/' | xargs -r rm -f"
     )], check=True)
     print(f"Opublikowano {name} na {host}:{remote_dir}")
     return 0
