@@ -22,7 +22,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
@@ -48,6 +48,9 @@ DAILY_LIMIT = int(os.environ.get("PUBLIC_DAILY_LIMIT", "300"))
 WORKERS = int(os.environ.get("PUBLIC_WORKERS", "2"))
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get("PUBLIC_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if h.strip()]
 SITE_URL = os.environ.get("PUBLIC_SITE_URL", "").strip().rstrip("/")
+UMAMI_ID = os.environ.get("PUBLIC_UMAMI_WEBSITE_ID", "").strip().lower()
+UMAMI_SCRIPT = "https://cloud.umami.is/script.js"
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PRO_SCORED = int(os.environ.get("PUBLIC_PRO_SCORED", "300"))
 PRO_DAILY = int(os.environ.get("PUBLIC_PRO_DAILY", "3"))
 LOGIN_MAILS_PER_IP_HOUR = 5
@@ -68,6 +71,7 @@ LEGAL = {
     "free_window_days": FREE_WINDOW_DAYS,
     "session_days": SESSION_TTL // DAY,
     "login_minutes": LOGIN_TTL // 60,
+    "analytics": bool(UUID_RE.match(UMAMI_ID)),
 }
 
 index_holder: dict = {"path": None, "index": None}
@@ -412,10 +416,11 @@ def api_login_request(request: Request, body: dict) -> Response:
         return JSONResponse({"error": "Logowanie jest chwilowo niedostępne. Spróbuj później."}, status_code=503)
     if not _login_mail_allowed(_client_ip(request)):
         return JSONResponse({"error": "Za dużo prób. Spróbuj za godzinę."}, status_code=429)
-    token = accounts.request_login(email)
+    utm = [str(body.get(k) or "").strip()[:100] or None for k in ("utm_source", "utm_campaign")]
+    token = accounts.request_login(email, *utm)
     if token is None:
         return JSONResponse({"ok": True})
-    base = SITE_URL or str(request.base_url).rstrip("/")
+    base = _site(request)
     try:
         send_login_link(email, f"{base}/#/zaloguj/{token}")
     except (MailUnavailable, OSError) as e:
@@ -550,6 +555,9 @@ def _connections(meta: dict, snapshot: str | None, error: str | None) -> list[di
         {"name": "Dane prowadzącego", "ok": bool(LEGAL["operator"] and LEGAL["email"]),
          "detail": "ustawione" if LEGAL["operator"] and LEGAL["email"] else
          "brak PUBLIC_OPERATOR_NAME / PUBLIC_OPERATOR_EMAIL"},
+        {"name": "Statystyki (Umami Cloud)", "ok": LEGAL["analytics"],
+         "detail": "skrypt na stronie" if LEGAL["analytics"] else
+         "brak albo zły PUBLIC_UMAMI_WEBSITE_ID, skryptu nie ma na stronie"},
         {"name": "Płatności", "ok": False, "detail": "niepodłączone, plan Pro nadaje admin"},
     ]
 
@@ -608,13 +616,48 @@ def api_logo(request: Request) -> Response:
     return Response(png, media_type="image/png", headers=headers)
 
 
-def spa(request: Request) -> Response:
-    if request.url.path.startswith("/api/"):
-        return JSONResponse({"error": "Not found"}, status_code=404)
+def _site(request: Request) -> str:
+    return SITE_URL or str(request.base_url).rstrip("/")
+
+
+def home(request: Request) -> Response:
     page = DIST_DIR / "public.html"
     if not page.exists():
         return Response("Brak builda frontendu: npm run build:public", status_code=503)
-    return FileResponse(page, headers={"Cache-Control": "no-cache"})
+    html = page.read_text(encoding="utf-8")
+    if LEGAL["analytics"]:
+        html = html.replace("<!--umami-->", f'<script defer src="{UMAMI_SCRIPT}" data-website-id="{UMAMI_ID}" '
+                                            'data-exclude-hash="true"></script>', 1)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
+def robots(request: Request) -> Response:
+    return PlainTextResponse(f"User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: {_site(request)}/sitemap.xml\n")
+
+
+def sitemap(request: Request) -> Response:
+    return Response('<?xml version="1.0" encoding="UTF-8"?>\n'
+                    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+                    f"  <url><loc>{_site(request)}/</loc></url>\n</urlset>\n", media_type="application/xml")
+
+
+def og_image(request: Request) -> Response:
+    path = DIST_DIR / "og.jpg"
+    if not path.exists():
+        return Response(status_code=404)
+    return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
+
+
+def not_found(request: Request) -> Response:
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return HTMLResponse(
+        '<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" '
+        'content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">'
+        '<title>Nie ma takiej strony · traffy.pl</title><style>body{margin:0;min-height:100vh;display:grid;'
+        'place-items:center;background:#0E0E10;color:#F5F5F4;font:16px/1.5 system-ui,sans-serif;text-align:center}'
+        'a{color:#F5F5F4}</style></head><body><main><h1>Nie ma takiej strony</h1>'
+        '<p><a href="/">Wróć na traffy.pl</a></p></main></body></html>', status_code=404)
 
 
 routes = [
@@ -635,7 +678,13 @@ routes = [
 ]
 if (DIST_DIR / "assets").exists():
     routes.append(Mount("/assets", StaticFiles(directory=str(DIST_DIR / "assets")), name="assets"))
-routes.append(Route("/{path:path}", spa, methods=["GET"]))
+routes += [
+    Route("/", home, methods=["GET"]),
+    Route("/robots.txt", robots, methods=["GET"]),
+    Route("/sitemap.xml", sitemap, methods=["GET"]),
+    Route("/og.jpg", og_image, methods=["GET"]),
+    Route("/{path:path}", not_found, methods=["GET"]),
+]
 
 app = Starlette(routes=routes, middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)])
 
@@ -647,6 +696,8 @@ if __name__ == "__main__":
         logger.warning("Brak PUBLIC_OPERATOR_NAME / PUBLIC_OPERATOR_EMAIL: polityka prywatności bez administratora")
     if mail_mode() == "off":
         logger.warning("Brak PUBLIC_SMTP_HOST / PUBLIC_SMTP_PASSWORD: logowanie nie działa")
+    if UMAMI_ID and not LEGAL["analytics"]:
+        logger.warning("PUBLIC_UMAMI_WEBSITE_ID nie wygląda na UUID: skrypt statystyk pominięty")
     threading.Thread(target=current_index, daemon=True).start()
     uvicorn.run(app, host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8600")),
                 proxy_headers=True, forwarded_allow_ips=os.environ.get("PUBLIC_TRUSTED_PROXY", "127.0.0.1"),

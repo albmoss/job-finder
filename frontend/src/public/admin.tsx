@@ -198,6 +198,7 @@ export function AdminView() {
               <th>E-mail</th>
               <th>Plan</th>
               <th>Założone</th>
+              <th>Źródło</th>
               <th>Ostatnie logowanie</th>
               <th>CV</th>
               <th className="num">Ofert</th>
@@ -211,6 +212,7 @@ export function AdminView() {
                 <td>{u.email}</td>
                 <td>{u.admin ? 'admin' : u.plan === 'pro' ? 'Pro' : 'darmowy'}</td>
                 <td>{when(u.created_at)}</td>
+                <td>{[u.utm_source, u.utm_campaign].filter(Boolean).join(' / ') || '-'}</td>
                 <td>{when(u.last_login)}</td>
                 <td>{u.has_cv ? 'tak' : 'nie'}</td>
                 <td className="num">{u.matches}</td>

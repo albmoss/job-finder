@@ -59,6 +59,7 @@ export interface LegalInfo {
   free_window_days: number;
   session_days: number;
   login_minutes: number;
+  analytics: boolean;
 }
 
 export interface SearchStats {
@@ -77,6 +78,8 @@ export interface AdminUser {
   has_cv: boolean;
   matches: number;
   pro_searches: number;
+  utm_source: string | null;
+  utm_campaign: string | null;
 }
 
 export interface AdminOverview {
@@ -147,7 +150,14 @@ export const publicApi = {
   start: (file: File) => upload<{ id: string }>('/api/public/search', file),
   state: (id: string) => call<SearchState>(`/api/public/search/${encodeURIComponent(id)}`),
   me: () => call<{ user: Me | null }>('/api/public/me'),
-  requestLogin: (email: string) => post<{ ok: boolean }>('/api/public/auth/request', { email }),
+  requestLogin: (email: string) => {
+    const params = new URLSearchParams(window.location.search);
+    return post<{ ok: boolean }>('/api/public/auth/request', {
+      email,
+      utm_source: params.get('utm_source'),
+      utm_campaign: params.get('utm_campaign'),
+    });
+  },
   verifyLogin: (token: string) => post<{ user: Me }>('/api/public/auth/verify', { token }),
   logout: () => post<{ ok: boolean }>('/api/public/auth/logout'),
   deleteAccount: () => post<{ ok: boolean }>('/api/public/me/delete'),

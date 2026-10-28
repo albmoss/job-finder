@@ -5,6 +5,7 @@ import { Meter } from '../shell/Meter';
 import { OFFERS, plural } from '../plural';
 import { formatDayLong } from '../format';
 import { publicApi, PublicApiError, type Decision, type Me, type ProOffer, type SearchProfile, type SearchState } from './public_api';
+import { track } from './track';
 
 export const ACCOUNT_HASH = '#/konto';
 export const LOGIN_HASH = '#/zaloguj';
@@ -52,6 +53,7 @@ export function LoginForm({ cta = 'Wyślij link do logowania' }: { cta?: string 
     setError(null);
     try {
       await publicApi.requestLogin(email.trim());
+      track('signup');
       setSentTo(email.trim());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -273,6 +275,7 @@ function ProPanel({ me, onMe }: { me: Me; onMe: (me: Me | null) => void }) {
     setSearch(null);
     try {
       const { id } = await publicApi.proSearch(file);
+      if (file) track('cv_upload', { plan: 'pro' });
       setSearchId(id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -459,7 +462,12 @@ function ProOfferCard({ offer, onDecide }: { offer: ProOffer; onDecide: (offer: 
       <CompanyLogo url={offer.logo_url} source={offer.source} size="lg" endpoint="/api/public/logo" />
       <div className="pb-offer-body">
         <h3 className="pb-offer-title">
-          <a href={offer.link} target="_blank" rel="noopener noreferrer">
+          <a
+            href={offer.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => track('offer_click', { portal: offer.source })}
+          >
             {offer.title}
             <ArrowUpRight className="pb-offer-arrow" aria-label="Otwórz ogłoszenie" />
           </a>

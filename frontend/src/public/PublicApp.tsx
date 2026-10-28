@@ -15,6 +15,7 @@ import {
   type SearchProfile,
   type SearchState,
 } from './public_api';
+import { track } from './track';
 import aplikujLogo from './logos/aplikuj.svg';
 import goworkLogo from './logos/gowork.svg';
 import justjoinLogo from './logos/justjoin.svg';
@@ -81,12 +82,17 @@ export function PublicApp() {
     if (!searchId) return;
     let cancelled = false;
     let timer = 0;
+    let sawRunning = false;
     const poll = async () => {
       try {
         const next = await publicApi.state(searchId);
         if (cancelled) return;
         setState(next);
+        if (next.status === 'done' && sawRunning && next.result && 'picks' in next.result) {
+          track('search_done', { result: next.result.picks.length ? 'matched' : 'none' });
+        }
         if (next.status === 'done' || next.status === 'error') return;
+        sawRunning = true;
       } catch (err) {
         if (cancelled) return;
         if (err instanceof PublicApiError && err.status === 404) {
@@ -224,6 +230,7 @@ function UploadView({ notice, me, onStarted }: { notice: string | null; me: Me |
     setError(null);
     try {
       const { id } = await publicApi.start(file);
+      track('cv_upload', { plan: 'guest' });
       onStarted(id);
     } catch (err) {
       if (err instanceof PublicApiError && err.code === 'free_used') setFreeUsed(true);
@@ -455,7 +462,13 @@ function ScanVisual({ tags }: { tags: string[] }) {
 function OfferCard({ pick }: { pick: PublicPick }) {
   const chips = [pick.location, pick.work_mode, pick.salary].filter(Boolean) as string[];
   return (
-    <a className="pb-offer glass" href={pick.link} target="_blank" rel="noopener noreferrer">
+    <a
+      className="pb-offer glass"
+      href={pick.link}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={() => track('offer_click', { portal: pick.source })}
+    >
       <CompanyLogo url={pick.logo_url} source={pick.source} size="lg" endpoint="/api/public/logo" />
       <div className="pb-offer-body">
         <h3 className="pb-offer-title">
@@ -654,6 +667,13 @@ function PrivacyView({ legal, backHash }: { legal: LegalInfo | null; backHash: s
           Komisji Europejskiej.
         </li>
         {legal?.hosting && <li>{legal.hosting}: dostawca serwera, na którym działa strona.</li>}
+        {legal?.analytics && (
+          <li>
+            Umami Cloud: liczy odwiedziny i kliknięcia bez plików cookie. Dostaje adres odwiedzanej strony, źródło
+            wejścia, język przeglądarki, rozdzielczość ekranu i adres IP, z którego przychodzi zapytanie. Nie dostaje
+            treści CV ani adresów e-mail.
+          </li>
+        )}
         <li>Dostawca poczty, przez którego wysyłamy linki do logowania: otrzymuje Twój adres e-mail.</li>
       </ul>
       <p>Dopasowanie liczy model AI. Wynik to tylko propozycja ofert i nie wywołuje wobec Ciebie skutków prawnych.</p>
@@ -668,7 +688,10 @@ function PrivacyView({ legal, backHash }: { legal: LegalInfo | null; backHash: s
       <h2 className="title-md">Pliki cookie</h2>
       <p>
         Po zalogowaniu strona zapisuje jeden plik cookie z identyfikatorem sesji. Jest niezbędny do logowania, ważny{' '}
-        {sessionDays} dni i znika po wylogowaniu. Nie używamy innych plików cookie ani narzędzi analitycznych.
+        {sessionDays} dni i znika po wylogowaniu.{' '}
+        {legal?.analytics
+          ? 'Odwiedziny liczy Umami Cloud bez plików cookie. Innych plików cookie nie używamy.'
+          : 'Nie używamy innych plików cookie ani narzędzi analitycznych.'}
       </p>
 
       <h2 className="title-md">Dla kogo jest strona</h2>

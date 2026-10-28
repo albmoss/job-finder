@@ -30,10 +30,13 @@ CREATE TABLE IF NOT EXISTS users (
     cv_text TEXT,
     cv_sha TEXT,
     profile TEXT,
-    cv_at REAL
+    cv_at REAL,
+    utm_source TEXT,
+    utm_campaign TEXT
 );
 CREATE TABLE IF NOT EXISTS login_tokens (
-    hash TEXT PRIMARY KEY, email TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL
+    hash TEXT PRIMARY KEY, email TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL,
+    utm_source TEXT, utm_campaign TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
     hash TEXT PRIMARY KEY,
@@ -87,7 +90,7 @@ class Accounts:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
-    def request_login(self, email: str) -> str | None:
+    def request_login(self, email: str, utm_source: str | None, utm_campaign: str | None) -> str | None:
         now = time.time()
         with closing(self._connect()) as conn, conn:
             conn.execute("DELETE FROM login_tokens WHERE expires < ?", (now,))
@@ -95,20 +98,21 @@ class Accounts:
                             (email, now - LOGIN_RESEND)).fetchone():
                 return None
             token = secrets.token_urlsafe(32)
-            conn.execute("INSERT INTO login_tokens VALUES (?, ?, ?, ?)", (_hash(token), email, now, now + LOGIN_TTL))
+            conn.execute("INSERT INTO login_tokens VALUES (?, ?, ?, ?, ?, ?)",
+                         (_hash(token), email, now, now + LOGIN_TTL, utm_source, utm_campaign))
         return token
 
     def verify_login(self, token: str) -> str | None:
         now = time.time()
         with closing(self._connect()) as conn, conn:
-            row = conn.execute("SELECT email FROM login_tokens WHERE hash = ? AND expires >= ?",
+            row = conn.execute("SELECT email, utm_source, utm_campaign FROM login_tokens WHERE hash = ? AND expires >= ?",
                                (_hash(token), now)).fetchone()
             if row is None:
                 return None
             if conn.execute("DELETE FROM login_tokens WHERE hash = ?", (_hash(token),)).rowcount != 1:
                 return None
-            conn.execute("INSERT INTO users(email, created_at) VALUES (?, ?) ON CONFLICT(email) DO NOTHING",
-                         (row["email"], now))
+            conn.execute("INSERT INTO users(email, created_at, utm_source, utm_campaign) VALUES (?, ?, ?, ?) "
+                         "ON CONFLICT(email) DO NOTHING", (row["email"], now, row["utm_source"], row["utm_campaign"]))
             user_id = conn.execute("SELECT id FROM users WHERE email = ?", (row["email"],)).fetchone()["id"]
             conn.execute("UPDATE users SET last_login = ? WHERE id = ?", (now, user_id))
             conn.execute("DELETE FROM sessions WHERE expires < ?", (now,))
@@ -197,6 +201,7 @@ class Accounts:
         with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT u.id, u.email, u.plan, u.created_at, u.last_login, u.cv_at IS NOT NULL AS has_cv, "
+                "u.utm_source, u.utm_campaign, "
                 "(SELECT COUNT(*) FROM matches m WHERE m.user_id = u.id) AS matches, "
                 "(SELECT COUNT(*) FROM search_log l WHERE l.user_id = u.id AND l.kind = 'pro') AS pro_searches "
                 "FROM users u ORDER BY u.created_at DESC").fetchall()
