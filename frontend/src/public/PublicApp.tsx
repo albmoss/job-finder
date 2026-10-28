@@ -1,9 +1,20 @@
-import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react';
-import { ArrowLeft, ArrowUpRight, Check, Lock, Mail, RotateCcw, TriangleAlert, Upload } from 'lucide-react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { ArrowLeft, ArrowRight, ArrowUpRight, Check, Lock, RotateCcw, TriangleAlert, Upload } from 'lucide-react';
 import { CompanyLogo } from '../screens/offer/CompanyLogo';
 import { LogoMark } from '../shell/LogoMark';
 import { OFFERS, plural } from '../plural';
-import { publicApi, PublicApiError, type LegalInfo, type PublicPick, type SearchProfile, type SearchState } from './public_api';
+import { ACCOUNT_HASH, AccountView, LOGIN_HASH, LoginForm, LoginView, profileTags, VerifyView } from './account';
+import { AdminView } from './admin';
+import {
+  publicApi,
+  PublicApiError,
+  type GuestResult,
+  type LegalInfo,
+  type Me,
+  type PublicPick,
+  type SearchProfile,
+  type SearchState,
+} from './public_api';
 import aplikujLogo from './logos/aplikuj.svg';
 import goworkLogo from './logos/gowork.svg';
 import justjoinLogo from './logos/justjoin.svg';
@@ -17,25 +28,24 @@ import solidjobsLogo from './logos/solidjobs.svg';
 const POLL_MS = 1200;
 const ACCEPT = '.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 const MAX_BYTES = 5 * 1024 * 1024;
-const SENIORITY: Record<string, string> = {
-  intern: 'staż',
-  junior: 'junior',
-  mid: 'mid',
-  senior: 'senior',
-  lead: 'lead',
-  manager: 'manager',
-};
 const PRIVACY_HASH = '#/prywatnosc';
 const TERMS_HASH = '#/regulamin';
+const ADMIN_HASH = '#/admin';
+const PAGES = { [PRIVACY_HASH]: 'privacy', [TERMS_HASH]: 'terms', [LOGIN_HASH]: 'login', [ACCOUNT_HASH]: 'account', [ADMIN_HASH]: 'admin' } as const;
+type Page = (typeof PAGES)[keyof typeof PAGES];
 const DEMO_OFFERS = [
   { logo: 'B', title: 'Specjalistka ds. marketingu', company: 'Brightway, Warszawa', percent: 94 },
   { logo: 'N', title: 'Content Marketing Manager', company: 'Nordlake, zdalnie', percent: 89 },
   { logo: 'K', title: 'Brand Specialist', company: 'Kwadrat Studio, Kraków', percent: 86 },
 ];
 
-function legalPage(): 'privacy' | 'terms' | null {
-  const hash = window.location.hash;
-  return hash === PRIVACY_HASH ? 'privacy' : hash === TERMS_HASH ? 'terms' : null;
+function pageFromHash(): Page | null {
+  return PAGES[window.location.hash as keyof typeof PAGES] ?? null;
+}
+
+function loginToken(): string | null {
+  const match = window.location.hash.match(/^#\/zaloguj\/([\w-]+)$/);
+  return match ? match[1] : null;
 }
 
 function resultIdFromHash(): string | null {
@@ -43,24 +53,24 @@ function resultIdFromHash(): string | null {
   return match ? match[1] : null;
 }
 
-function profileTags(profile: SearchProfile | null): string[] {
-  if (!profile) return [];
-  return [profile.city ?? 'cała Polska', profile.seniority ? SENIORITY[profile.seniority] : '', ...profile.roles.slice(0, 2)].filter(
-    Boolean,
-  );
-}
-
 export function PublicApp() {
   const [legal, setLegal] = useState<LegalInfo | null>(null);
   const [searchId, setSearchId] = useState<string | null>(resultIdFromHash);
   const [state, setState] = useState<SearchState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [page, setPage] = useState(legalPage);
+  const [page, setPage] = useState(pageFromHash);
+  const [token, setToken] = useState(loginToken);
+  const [me, setMe] = useState<Me | null | undefined>(undefined);
 
   useEffect(() => {
     publicApi.legal().then(setLegal).catch(() => setLegal(null));
+    publicApi
+      .me()
+      .then((r) => setMe(r.user))
+      .catch(() => setMe(null));
     const onHash = () => {
-      setPage(legalPage());
+      setPage(pageFromHash());
+      setToken(loginToken());
       window.scrollTo(0, 0);
     };
     window.addEventListener('hashchange', onHash);
@@ -108,16 +118,29 @@ export function PublicApp() {
   };
 
   let body;
+  const guestResult = state?.status === 'done' && state.result && 'picks' in state.result ? state.result : null;
   const backHash = searchId ? `#/wynik/${searchId}` : '#/';
-  if (page === 'privacy') body = <PrivacyView legal={legal} backHash={backHash} />;
+  const waiting = (
+    <div className="empty">
+      <span className="spinner" />
+    </div>
+  );
+  if (token) body = <VerifyView token={token} onLogin={setMe} />;
+  else if (page === 'privacy') body = <PrivacyView legal={legal} backHash={backHash} />;
   else if (page === 'terms') body = <TermsView legal={legal} backHash={backHash} />;
-  else if (!searchId) body = <UploadView notice={notice} onStarted={begin} />;
-  else if (state?.status === 'done' && state.result) body = <ResultView state={state} />;
+  else if (page === 'login' || page === 'account' || page === 'admin') {
+    if (me === undefined) body = waiting;
+    else if (me === null) body = <LoginView />;
+    else if (page === 'admin' && me.admin) body = <AdminView />;
+    else body = <AccountView me={me} onMe={setMe} />;
+  } else if (!searchId) body = <UploadView notice={notice} me={me ?? null} onStarted={begin} />;
+  else if (guestResult) body = <ResultView result={guestResult} profile={state?.profile ?? null} me={me ?? null} />;
   else if (state?.status === 'error') body = <ErrorView message={state.error} onReset={reset} />;
   else body = <ProgressView state={state} />;
 
-  const searching = !!searchId && !(state?.status === 'done' && state.result) && state?.status !== 'error';
-  const wide = !page && (!searchId || searching);
+  const inSearch = !page && !token;
+  const searching = !!searchId && !guestResult && state?.status !== 'error';
+  const wide = (inSearch && (!searchId || searching)) || (page === 'admin' && !!me?.admin);
   return (
     <div className={`pb${wide ? ' is-wide' : ''}`}>
       <header className="pb-header">
@@ -127,10 +150,28 @@ export function PublicApp() {
             traffy<span className="pb-brand-tld">.pl</span>
           </span>
         </a>
+        <nav className="pb-nav">
+          {me?.admin && (
+            <a className="btn-quiet" href={ADMIN_HASH}>
+              Panel admina
+            </a>
+          )}
+          {me ? (
+            <a className="btn btn-sm" href={ACCOUNT_HASH}>
+              Moje konto
+            </a>
+          ) : me === null && page !== 'login' ? (
+            <a className="btn-quiet" href={LOGIN_HASH}>
+              Zaloguj się
+            </a>
+          ) : null}
+        </nav>
       </header>
       <main className="pb-main">{body}</main>
       <footer className="pb-footer label">
-        {state?.status === 'done' && !page && <span>Ogłoszenie otwiera się na portalu, na którym zostało opublikowane.</span>}
+        {(guestResult || (page === 'account' && me?.pro)) && (
+          <span>Ogłoszenie otwiera się na portalu, na którym zostało opublikowane.</span>
+        )}
         <nav className="pb-footer-links">
           <a href={TERMS_HASH}>Regulamin</a>
           <a href={PRIVACY_HASH}>Polityka prywatności</a>
@@ -140,7 +181,28 @@ export function PublicApp() {
   );
 }
 
-function UploadView({ notice, onStarted }: { notice: string | null; onStarted: (id: string) => void }) {
+function Upgrade({ me, intro }: { me: Me | null; intro: string }) {
+  const tail = me?.pro
+    ? 'Pełna lista czeka w Twoim panelu.'
+    : me
+      ? 'Płatności uruchomimy wkrótce.'
+      : 'Załóż konto, żeby z niego skorzystać.';
+  return (
+    <>
+      <p className="muted pb-narrow">{me?.pro ? tail : `${intro} ${tail}`}</p>
+      {me ? (
+        <a className={`btn${me.pro ? ' btn-primary' : ''}`} href={ACCOUNT_HASH}>
+          {me.pro ? 'Otwórz pełną listę' : 'Przejdź do konta'}
+          <ArrowRight />
+        </a>
+      ) : (
+        <LoginForm cta="Załóż konto" />
+      )}
+    </>
+  );
+}
+
+function UploadView({ notice, me, onStarted }: { notice: string | null; me: Me | null; onStarted: (id: string) => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -194,11 +256,7 @@ function UploadView({ notice, onStarted }: { notice: string | null; onStarted: (
           <Lock />
         </span>
         <h1 className="title-lg">Bezpłatne wyszukiwanie zostało już wykorzystane</h1>
-        <p className="muted pb-narrow">
-          Z tego adresu wykonano już bezpłatne wyszukiwanie. Kolejne będą dostępne w płatnej wersji. Zostaw e-mail, a
-          powiadomimy Cię o starcie.
-        </p>
-        <WaitlistForm />
+        <Upgrade me={me} intro="Z tego adresu wykonano już bezpłatne wyszukiwanie. Kolejne są w planie Pro." />
       </section>
     );
   }
@@ -424,10 +482,9 @@ function OfferCard({ pick }: { pick: PublicPick }) {
   );
 }
 
-function ResultView({ state }: { state: SearchState }) {
-  const result = state.result!;
+function ResultView({ result, profile, me }: { result: GuestResult; profile: SearchProfile | null; me: Me | null }) {
   const picks = result.picks;
-  const tags = profileTags(state.profile);
+  const tags = profileTags(profile);
   const heading =
     picks.length === 0
       ? 'Tym razem nic nie trafiło w punkt'
@@ -458,13 +515,13 @@ function ResultView({ state }: { state: SearchState }) {
         {picks.map((pick) => (
           <OfferCard key={pick.link} pick={pick} />
         ))}
-        <LockedSection teasers={result.teasers} roles={state.profile?.roles ?? []} />
+        <LockedSection teasers={result.teasers} roles={profile?.roles ?? []} me={me} />
       </div>
     </>
   );
 }
 
-function LockedSection({ teasers, roles }: { teasers: number[]; roles: string[] }) {
+function LockedSection({ teasers, roles, me }: { teasers: number[]; roles: string[]; me: Me | null }) {
   return (
     <section className={`pb-locked${teasers.length ? '' : ' is-empty'}`} aria-label="Pełna lista ofert">
       {teasers.length > 0 && (
@@ -498,70 +555,12 @@ function LockedSection({ teasers, roles }: { teasers: number[]; roles: string[] 
           <Lock />
         </span>
         <h2 className="title-lg">{teasers.length ? 'Te pasują do Ciebie jeszcze lepiej' : 'Chcesz szukać dalej?'}</h2>
-        <p className="muted pb-narrow">
-          {teasers.length
-            ? 'Pełną listę otworzysz w płatnej wersji. Zostaw e-mail, damy znać, gdy ruszy.'
-            : 'Kolejne wyszukiwania i pełne listy ofert będą płatne. Zostaw e-mail, damy znać, gdy ruszy.'}
-        </p>
-        <WaitlistForm />
+        <Upgrade
+          me={me}
+          intro={teasers.length ? 'Pełną listę otworzysz w planie Pro.' : 'Kolejne wyszukiwania i pełne listy ofert są w planie Pro.'}
+        />
       </div>
     </section>
-  );
-}
-
-function WaitlistForm() {
-  const [email, setEmail] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      await publicApi.waitlist(email.trim());
-      setSaved(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (saved) {
-    return (
-      <p className="pb-saved">
-        <Check />
-        Gotowe. Powiadomimy Cię, gdy pełny dostęp ruszy.
-      </p>
-    );
-  }
-  return (
-    <>
-      <form className="pb-waitlist" onSubmit={submit}>
-        <label className="field">
-          <Mail />
-          <input
-            type="email"
-            required
-            placeholder="twoj@adres.pl"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            aria-label="Adres e-mail"
-          />
-        </label>
-        <button type="submit" className="btn btn-primary" disabled={busy || !email.trim()}>
-          Powiadom mnie o starcie
-        </button>
-      </form>
-      {error && (
-        <p className="pb-error" role="alert">
-          <TriangleAlert />
-          {error}
-        </p>
-      )}
-    </>
   );
 }
 
@@ -582,6 +581,7 @@ function ErrorView({ message, onReset }: { message: string | null; onReset: () =
 function PrivacyView({ legal, backHash }: { legal: LegalInfo | null; backHash: string }) {
   const ttl = legal?.search_ttl_hours ?? 2;
   const windowDays = legal?.free_window_days ?? 30;
+  const sessionDays = legal?.session_days ?? 30;
   return (
     <article className="pb-legal panel">
       <a className="btn-quiet pb-legal-back" href={backHash}>
@@ -614,20 +614,31 @@ function PrivacyView({ legal, backHash }: { legal: LegalInfo | null; backHash: s
           ust. 1 lit. f RODO).
         </li>
         <li>
-          Adres e-mail, jeśli sam go podasz, żeby powiadomić Cię o starcie płatnej wersji. Podstawą jest Twoja zgoda.
+          Adres e-mail, jeśli zakładasz konto. Używamy go do logowania i do obsługi konta, czyli do wykonania umowy
+          (art. 6 ust. 1 lit. b RODO).
+        </li>
+        <li>
+          W planie Pro: tekst CV, profil odczytany z CV, wyniki dopasowania oraz oferty, które zapisujesz albo
+          ukrywasz. Trzymamy je na koncie, żeby kolejne wyszukiwania nie wymagały ponownego dodawania CV (art. 6 ust. 1
+          lit. b RODO).
+        </li>
+        <li>
+          Adresy e-mail zapisane wcześniej na listę powiadomień o płatnej wersji. Podstawą jest zgoda, którą wtedy
+          wyraziłeś.
         </li>
       </ul>
 
       <h2 className="title-md">Jak długo</h2>
       <ul>
         <li>Plik CV kasujemy zaraz po wyciągnięciu z niego tekstu.</li>
-        <li>Tekst CV istnieje tylko w czasie wyszukiwania i nie zapisujemy go na dysku.</li>
         <li>
-          Wynik (znalezione oferty oraz miasto, poziom i stanowiska odczytane z CV) trzymamy w pamięci serwera przez{' '}
-          {ttl} {ttl === 1 ? 'godzinę' : 'godziny'}. Potem znika.
+          Bez konta tekst CV istnieje tylko w czasie wyszukiwania i nie zapisujemy go na dysku. Wynik (znalezione
+          oferty oraz miasto, poziom i stanowiska odczytane z CV) trzymamy w pamięci serwera przez {ttl}{' '}
+          {ttl === 1 ? 'godzinę' : 'godziny'}. Potem znika.
         </li>
+        <li>Dane konta, w tym CV i wyniki, przechowujemy do usunięcia konta. Usuniesz je sam w zakładce Moje konto.</li>
         <li>Skrót adresu IP przechowujemy przez {windowDays} dni.</li>
-        <li>Adres e-mail przechowujemy, dopóki nie wycofasz zgody.</li>
+        <li>Adres z listy powiadomień przechowujemy, dopóki nie wycofasz zgody.</li>
       </ul>
 
       <h2 className="title-md">Komu przekazujemy dane</h2>
@@ -643,6 +654,7 @@ function PrivacyView({ legal, backHash }: { legal: LegalInfo | null; backHash: s
           Komisji Europejskiej.
         </li>
         {legal?.hosting && <li>{legal.hosting}: dostawca serwera, na którym działa strona.</li>}
+        <li>Dostawca poczty, przez którego wysyłamy linki do logowania: otrzymuje Twój adres e-mail.</li>
       </ul>
       <p>Dopasowanie liczy model AI. Wynik to tylko propozycja ofert i nie wywołuje wobec Ciebie skutków prawnych.</p>
 
@@ -654,7 +666,10 @@ function PrivacyView({ legal, backHash }: { legal: LegalInfo | null; backHash: s
       </p>
 
       <h2 className="title-md">Pliki cookie</h2>
-      <p>Strona nie używa plików cookie ani narzędzi analitycznych.</p>
+      <p>
+        Po zalogowaniu strona zapisuje jeden plik cookie z identyfikatorem sesji. Jest niezbędny do logowania, ważny{' '}
+        {sessionDays} dni i znika po wylogowaniu. Nie używamy innych plików cookie ani narzędzi analitycznych.
+      </p>
 
       <h2 className="title-md">Dla kogo jest strona</h2>
       <p>Z serwisu mogą korzystać osoby, które ukończyły 16 lat.</p>
@@ -665,6 +680,7 @@ function PrivacyView({ legal, backHash }: { legal: LegalInfo | null; backHash: s
 function TermsView({ legal, backHash }: { legal: LegalInfo | null; backHash: string }) {
   const ttl = legal?.search_ttl_hours ?? 2;
   const windowDays = legal?.free_window_days ?? 30;
+  const loginMinutes = legal?.login_minutes ?? 20;
   return (
     <article className="pb-legal panel">
       <a className="btn-quiet pb-legal-back" href={backHash}>
@@ -710,7 +726,16 @@ function TermsView({ legal, backHash }: { legal: LegalInfo | null; backHash: str
           Wynik jest dostępny pod swoim linkiem przez {ttl} {ttl === 1 ? 'godzinę' : 'godziny'}.
         </li>
         <li>
-          Na listę powiadomień zapisujesz się, podając e-mail. Wypisać się możesz w każdej chwili, pisząc na adres
+          Konto zakładasz, podając e-mail. Wysyłamy na niego link do logowania, ważny {loginMinutes} minut. Umowa o
+          prowadzenie konta trwa, dopóki go nie usuniesz.
+        </li>
+        <li>
+          Plan Pro daje pełną listę ofert dopasowanych do CV zapisanego na koncie, z możliwością zapisywania
+          i ukrywania ofert. Liczba wyszukiwań w planie Pro jest ograniczona dziennie. Do czasu uruchomienia płatności
+          plan Pro przyznaje prowadzący serwis.
+        </li>
+        <li>
+          Z listy powiadomień, na którą zapisywano się wcześniej, możesz się wypisać w każdej chwili, pisząc na adres
           kontaktowy.
         </li>
       </ul>

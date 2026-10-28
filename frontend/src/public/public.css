@@ -776,24 +776,24 @@ body,
   padding: 28px 32px;
 }
 
-.pb-waitlist {
+.pb-email-form {
   display: flex;
   gap: 10px;
   width: min(480px, 100%);
   margin-top: 6px;
 }
 
-.pb-waitlist .field {
+.pb-email-form .field {
   flex: 1;
 }
 
-.pb-waitlist .field > svg {
+.pb-email-form .field > svg {
   width: 16px;
   height: 16px;
   color: var(--faint);
 }
 
-.pb-waitlist .field > input {
+.pb-email-form .field > input {
   flex: 1;
   min-width: 0;
   border: 0;
@@ -868,6 +868,235 @@ body,
 .pb-legal a:not(.btn-quiet) {
   color: var(--ink);
   text-underline-offset: 3px;
+}
+
+.pb-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pb-nav .btn-quiet {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.pb-account-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.pb-account-head .pb-heading {
+  margin-bottom: 6px;
+}
+
+.pb-delete {
+  align-self: center;
+  margin-top: 16px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.pb-cv-bar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 18px 22px;
+  border-radius: 22px;
+}
+
+.pb-cv-info {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pb-cv-info .pb-tags {
+  align-items: center;
+}
+
+.pb-cv-date,
+.pb-cv-limit {
+  font-size: 12px;
+}
+
+.pb-cv-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.pb-cv-limit {
+  grid-column: 1 / -1;
+}
+
+.pb-pro-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 22px;
+  border-radius: 22px;
+}
+
+.pb-empty {
+  border-radius: 22px;
+}
+
+.pb-tabs {
+  align-self: flex-start;
+}
+
+.pb-tabs .faint {
+  font-variant-numeric: tabular-nums;
+}
+
+.pb-tab-empty {
+  padding: 24px 0;
+  text-align: center;
+}
+
+.pb-pro-offer:active {
+  transform: none;
+}
+
+.pb-pro-offer .pb-offer-title a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.pb-pro-actions {
+  display: flex;
+  grid-column: 2 / -1;
+  gap: 4px;
+  margin: -8px 0 -6px -10px;
+}
+
+.pb-pro-actions .btn-quiet svg {
+  width: 15px;
+  height: 15px;
+}
+
+.pb-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pb-admin {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.pb-admin-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.pb-admin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 22px 24px;
+  overflow-x: auto;
+  border-radius: 22px;
+}
+
+.pb-admin-note {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.pb-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pb-checks li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.pb-checks svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  stroke-width: 2;
+}
+
+.pb-checks li.is-warn svg {
+  color: var(--warn);
+}
+
+.pb-checks div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pb-checks strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.pb-checks span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.pb-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.pb-table th {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.pb-table th,
+.pb-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pb-table th:first-child,
+.pb-table td:first-child {
+  padding-left: 0;
+}
+
+.pb-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.pb-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pb-table td.warn {
+  color: var(--warn);
 }
 
 @keyframes pb-rise {
@@ -1082,11 +1311,24 @@ body,
     line-height: 21px;
   }
 
-  .pb-waitlist {
+  .pb-cv-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .pb-admin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pb-pro-actions {
+    grid-column: 1 / -1;
+    margin-left: -10px;
+  }
+
+  .pb-email-form {
     flex-direction: column;
   }
 
-  .pb-waitlist .field {
+  .pb-email-form .field {
     flex: none;
   }
 }

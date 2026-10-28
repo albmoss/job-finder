@@ -1,3 +1,4 @@
+import json
 import os
 import shlex
 import sqlite3
@@ -10,8 +11,29 @@ from pathlib import Path
 
 import config
 from matching.quick import build_index
+from utils.data_models import ScraperStatusManager
 
 KEEP = 2
+
+
+def _write_meta(target: Path) -> None:
+    with closing(sqlite3.connect(target)) as conn, conn:
+        sources = [
+            {"source": source or "", "offers": count, "last_seen": last_seen or ""}
+            for source, count, last_seen in conn.execute(
+                "SELECT json_extract(data, '$.source') AS s, COUNT(*), "
+                "MAX(COALESCE(json_extract(data, '$.last_seen'), json_extract(data, '$.scraped_at'))) "
+                "FROM records GROUP BY s ORDER BY COUNT(*) DESC")
+        ]
+        meta = {
+            "published_at": datetime.now().isoformat(timespec="seconds"),
+            "sources": sources,
+            "scrapers": ScraperStatusManager().load_status(),
+        }
+        conn.execute("DROP TABLE IF EXISTS publish_meta")
+        conn.execute("CREATE TABLE publish_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.executemany("INSERT INTO publish_meta VALUES (?, ?)",
+                         [(k, json.dumps(v, ensure_ascii=False)) for k, v in meta.items()])
 
 
 def snapshot(target: Path) -> int:
@@ -19,7 +41,9 @@ def snapshot(target: Path) -> int:
         conn.execute("VACUUM INTO ?", (str(target),))
     with closing(sqlite3.connect(target)) as conn:
         conn.execute("PRAGMA journal_mode = DELETE")
-    return build_index(target)
+    count = build_index(target)
+    _write_meta(target)
+    return count
 
 
 def publish_local(directory: Path) -> int:

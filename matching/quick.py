@@ -185,6 +185,13 @@ class OfferIndex:
             return {k: json.loads(d).get("description") or "" for k, d in conn.execute(
                 f"SELECT key, data FROM records WHERE key IN ({marks})", keys)}
 
+    def meta(self) -> dict:
+        with closing(self._connect()) as conn:
+            try:
+                return {k: json.loads(v) for k, v in conn.execute("SELECT key, value FROM publish_meta")}
+            except sqlite3.OperationalError:
+                return {}
+
 
 def _query(profile: dict) -> tuple[dict[str, float], list[str]]:
     weights: dict[str, float] = {}
@@ -208,6 +215,17 @@ class Result:
     promising: int = 0
     stopped_early: bool = False
     errors: int = 0
+    tokens: int = 0
+
+
+@dataclass
+class TopResult:
+    picks: list[dict] = field(default_factory=list)
+    ranked: int = 0
+    scored: int = 0
+    reused: int = 0
+    errors: int = 0
+    tokens: int = 0
 
 
 def _pick(offer: _Offer, percent: int) -> dict:
@@ -232,6 +250,45 @@ def _distinct(ranked: list[tuple[int, _Offer]], limit: int) -> list[tuple[int, _
     return out
 
 
+def _score(offer: _Offer, description: str, profile: dict, cv: str, key: str,
+           session: requests.Session) -> tuple[int, int]:
+    job = copy.copy(offer.job)
+    job.description = description
+    reply = jev.ask(jev.build_state(job, profile, cv), key, session)
+    return jev.percent(reply["answers"]), int((reply.get("usage") or {}).get("input_tokens") or 0)
+
+
+def score_top(index: OfferIndex, profile: dict, cv: str, key: str, limit: int, known: dict[str, int],
+              progress=lambda **_: None) -> TopResult:
+    offers = [o for _, o in _distinct([(0, o) for o in index.ranked(profile, limit * 3 // 2)], limit)]
+    result = TopResult(ranked=len(offers))
+    progress(stage="ranking", ranked=len(offers))
+    percents = {o.job.link: known[o.job.link] for o in offers if o.job.link in known}
+    result.reused = len(percents)
+    todo = [o for o in offers if o.job.link not in percents]
+    session = requests.Session()
+    with cf.ThreadPoolExecutor(SCORE_ROUND) as pool_exec:
+        for chunk in _chunks(todo, 40):
+            texts = index.descriptions([o.key for o in chunk])
+            futures = {pool_exec.submit(_score, o, texts.get(o.key, ""), profile, cv, key, session): o
+                       for o in chunk}
+            for fut in cf.as_completed(futures):
+                try:
+                    pct, used = fut.result()
+                except Exception:
+                    result.errors += 1
+                    continue
+                percents[futures[fut].job.link] = pct
+                result.tokens += used
+                result.scored += 1
+            progress(stage="scoring", scored=result.scored + result.reused, total=len(offers))
+    if todo and not result.scored:
+        raise jev.JevError("Ocena ofert nie odpowiedziała")
+    result.picks = sorted((_pick(o, percents[o.job.link]) for o in offers if o.job.link in percents),
+                          key=lambda p: -p["percent"])
+    return result
+
+
 def find_matches(index: OfferIndex, profile: dict, cv: str, key: str,
                  progress=lambda **_: None, cancelled=lambda: False) -> Result:
     ranked = index.ranked(profile, MAX_TRIAGE)
@@ -249,7 +306,8 @@ def find_matches(index: OfferIndex, profile: dict, cv: str, key: str,
         nonlocal cursor
         batch = ranked[cursor:cursor + triage.BATCH]
         cursor += len(batch)
-        chances, _, errors, _ = triage.triage([(o.key, o.job) for o in batch], candidate, key, session)
+        chances, tokens, errors, _ = triage.triage([(o.key, o.job) for o in batch], candidate, key, session)
+        result.tokens += tokens
         result.errors += errors
         result.triaged = cursor
         if errors and not chances:
@@ -259,12 +317,6 @@ def find_matches(index: OfferIndex, profile: dict, cv: str, key: str,
             if p is not None and p >= triage.THRESHOLD:
                 heapq.heappush(heap, (-p, cursor + i, offer))
         progress(stage="triage", triaged=cursor, budget=budget, promising=len(heap))
-
-    def score(offer: _Offer, description: str) -> int:
-        job = copy.copy(offer.job)
-        job.description = description
-        reply = jev.ask(jev.build_state(job, profile, cv), key, session)
-        return jev.percent(reply["answers"])
 
     def best(min_percent: int) -> list[tuple[int, _Offer]]:
         return _distinct(sorted((s for s in scored if s[0] >= min_percent), key=lambda s: -s[0]), WANTED)
@@ -279,11 +331,14 @@ def find_matches(index: OfferIndex, profile: dict, cv: str, key: str,
             take = min(SCORE_ROUND, MAX_SCORED - len(scored), len(heap))
             round_offers = [heapq.heappop(heap)[2] for _ in range(take)]
             texts = index.descriptions([o.key for o in round_offers])
-            futures = {pool_exec.submit(score, o, texts.get(o.key, "")): o for o in round_offers}
+            futures = {pool_exec.submit(_score, o, texts.get(o.key, ""), profile, cv, key, session): o
+                       for o in round_offers}
             before = len(scored)
             for fut in cf.as_completed(futures):
                 try:
-                    scored.append((fut.result(), futures[fut]))
+                    pct, used = fut.result()
+                    scored.append((pct, futures[fut]))
+                    result.tokens += used
                 except Exception:
                     result.errors += 1
             if len(scored) == before:
